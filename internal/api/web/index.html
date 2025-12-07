@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Spectrum Scanner</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container { max-width: 1400px; margin: 0 auto; }
+        h1 { margin-bottom: 20px; color: #00d4ff; }
+        .status-card {
+            background: #16213e;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+        .status-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px 0;
+            border-bottom: 1px solid #0f3460;
+        }
+        .status-row:last-child { border-bottom: none; }
+        .label { color: #888; }
+        .value { font-weight: bold; }
+        .online { color: #00ff88; }
+        .offline { color: #ff4444; }
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+            flex-wrap: wrap;
+        }
+        button {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: bold;
+            transition: all 0.2s;
+        }
+        .btn-start { background: #00d4ff; color: #000; }
+        .btn-start:hover { background: #00a8cc; }
+        .btn-stop { background: #ff4444; color: #fff; }
+        .btn-stop:hover { background: #cc3333; }
+        .btn-export { background: #00ff88; color: #000; }
+        .btn-export:hover { background: #00cc6a; }
+        .btn-disabled { background: #444; color: #888; cursor: not-allowed; }
+        #spectrum-container {
+            background: #16213e;
+            border-radius: 8px;
+            padding: 20px;
+            margin-top: 20px;
+        }
+        .spectrum-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        .spectrum-header h3 { color: #00d4ff; }
+        #spectrum-canvas {
+            width: 100%;
+            height: 400px;
+            background: #0a0a1a;
+            border-radius: 4px;
+            cursor: grab;
+        }
+        #spectrum-canvas.dragging {
+            cursor: grabbing;
+            opacity: 0.8;
+        }
+        .drag-hint {
+            font-size: 12px;
+            color: #666;
+            margin-top: 5px;
+        }
+        .log {
+            background: #0a0a1a;
+            border-radius: 4px;
+            padding: 10px;
+            margin-top: 10px;
+            height: 120px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        .log-entry { padding: 2px 0; }
+        .log-time { color: #666; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Spectrum Scanner</h1>
+
+        <div class="status-card">
+            <div class="status-row">
+                <span class="label">Status</span>
+                <span class="value" id="status">Connecting...</span>
+            </div>
+            <div class="status-row">
+                <span class="label">Scanner</span>
+                <span class="value" id="scanning">--</span>
+            </div>
+            <div class="status-row">
+                <span class="label">Current Band</span>
+                <span class="value" id="current-band">--</span>
+            </div>
+            <div class="status-row">
+                <span class="label">Device ID</span>
+                <span class="value" id="device-id">--</span>
+            </div>
+
+            <div class="controls">
+                <button id="btn-start" class="btn-start" onclick="startScan()">Start Scan</button>
+                <button id="btn-stop" class="btn-stop btn-disabled" onclick="stopScan()" disabled>Stop Scan</button>
+                <button id="btn-export" class="btn-export" onclick="exportCSV()">Export CSV</button>
+            </div>
+        </div>
+
+        <div id="spectrum-container">
+            <div class="spectrum-header">
+                <h3>Live Spectrum</h3>
+                <span id="scan-info" style="color: #888; font-size: 13px;">--</span>
+            </div>
+            <canvas id="spectrum-canvas" draggable="true"></canvas>
+            <div class="drag-hint">Drag the chart to your desktop to save as CSV</div>
+            <div class="log" id="log"></div>
+        </div>
+    </div>
+
+    <script>
+        let ws = null;
+        let canvas, ctx;
+        let lastScan = null;
+        let scannerName = 'spectrum-scan';
+
+        function log(msg) {
+            const logEl = document.getElementById('log');
+            const time = new Date().toLocaleTimeString();
+            logEl.innerHTML += `<div class="log-entry"><span class="log-time">${time}</span> ${msg}</div>`;
+            logEl.scrollTop = logEl.scrollHeight;
+        }
+
+        async function fetchStatus() {
+            try {
+                const resp = await fetch('/api/status');
+                const data = await resp.json();
+
+                scannerName = data.name || 'spectrum-scan';
+                document.getElementById('status').innerHTML =
+                    `<span class="${data.online ? 'online' : 'offline'}">${data.online ? 'Online' : 'Offline'}</span>`;
+                document.getElementById('scanning').textContent = data.scanning ? 'Running' : 'Stopped';
+                document.getElementById('current-band').textContent = data.current_band || '--';
+                document.getElementById('device-id').textContent = data.id || '--';
+
+                document.getElementById('btn-start').disabled = data.scanning;
+                document.getElementById('btn-stop').disabled = !data.scanning;
+                document.getElementById('btn-start').className = data.scanning ? 'btn-start btn-disabled' : 'btn-start';
+                document.getElementById('btn-stop').className = data.scanning ? 'btn-stop' : 'btn-stop btn-disabled';
+            } catch (e) {
+                document.getElementById('status').innerHTML = '<span class="offline">Disconnected</span>';
+            }
+        }
+
+        async function startScan() {
+            try {
+                await fetch('/api/scan/start', { method: 'POST' });
+                log('Scan started');
+                fetchStatus();
+                connectWebSocket();
+            } catch (e) {
+                log('Error starting scan: ' + e.message);
+            }
+        }
+
+        async function stopScan() {
+            try {
+                await fetch('/api/scan/stop', { method: 'POST' });
+                log('Scan stopped');
+                fetchStatus();
+            } catch (e) {
+                log('Error stopping scan: ' + e.message);
+            }
+        }
+
+        function generateCSV(scan) {
+            if (!scan || !scan.power) return '';
+
+            let csv = 'Frequency (MHz),Power (dBm)\n';
+            const startMHz = scan.hz_lo / 1e6;
+            const stepMHz = scan.step / 1e6;
+
+            for (let i = 0; i < scan.power.length; i++) {
+                const freq = startMHz + (i * stepMHz);
+                csv += `${freq.toFixed(6)},${scan.power[i].toFixed(2)}\n`;
+            }
+            return csv;
+        }
+
+        function exportCSV() {
+            if (!lastScan) {
+                log('No scan data to export');
+                return;
+            }
+
+            const csv = generateCSV(lastScan);
+            const blob = new Blob([csv], { type: 'text/csv' });
+            const url = URL.createObjectURL(blob);
+
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+            const filename = `${scannerName.replace(/\s+/g, '-')}_${timestamp}.csv`;
+
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            a.click();
+
+            URL.revokeObjectURL(url);
+            log(`Exported: ${filename}`);
+        }
+
+        function setupDragAndDrop() {
+            canvas.addEventListener('dragstart', (e) => {
+                if (!lastScan) {
+                    e.preventDefault();
+                    return;
+                }
+
+                canvas.classList.add('dragging');
+
+                const csv = generateCSV(lastScan);
+                const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+                const filename = `${scannerName.replace(/\s+/g, '-')}_${timestamp}.csv`;
+
+                // Set drag data for file download
+                e.dataTransfer.setData('text/plain', csv);
+                e.dataTransfer.setData('DownloadURL',
+                    `text/csv:${filename}:data:text/csv;charset=utf-8,${encodeURIComponent(csv)}`);
+
+                log('Dragging scan data...');
+            });
+
+            canvas.addEventListener('dragend', (e) => {
+                canvas.classList.remove('dragging');
+            });
+        }
+
+        function connectWebSocket() {
+            if (ws && ws.readyState === WebSocket.OPEN) return;
+
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            ws = new WebSocket(`${protocol}//${window.location.host}/ws/stream`);
+
+            ws.onopen = () => {
+                log('WebSocket connected');
+            };
+
+            ws.onmessage = (event) => {
+                const scan = JSON.parse(event.data);
+                lastScan = scan;
+                drawSpectrum(scan);
+
+                const points = scan.power ? scan.power.length : 0;
+                const minP = scan.power ? Math.min(...scan.power).toFixed(1) : '--';
+                const maxP = scan.power ? Math.max(...scan.power).toFixed(1) : '--';
+                document.getElementById('scan-info').textContent =
+                    `${points} pts | ${minP} to ${maxP} dBm`;
+            };
+
+            ws.onclose = () => {
+                log('WebSocket disconnected');
+                setTimeout(connectWebSocket, 2000);
+            };
+
+            ws.onerror = (e) => {
+                log('WebSocket error');
+            };
+        }
+
+        function drawSpectrum(scan) {
+            if (!ctx || !canvas) return;
+
+            const rect = canvas.getBoundingClientRect();
+            const width = rect.width;
+            const height = rect.height;
+            const padding = { top: 25, right: 60, bottom: 35, left: 60 };
+            const plotWidth = width - padding.left - padding.right;
+            const plotHeight = height - padding.top - padding.bottom;
+
+            // Clear canvas
+            ctx.fillStyle = '#0a0a1a';
+            ctx.fillRect(0, 0, width, height);
+
+            // dB scale for spectrum analyzers
+            const minDb = -110;
+            const maxDb = -20;
+
+            // Draw grid
+            ctx.strokeStyle = '#1a1a3e';
+            ctx.lineWidth = 1;
+
+            // Horizontal grid lines (dB)
+            const dbStep = 10;
+            ctx.fillStyle = '#666';
+            ctx.font = '11px sans-serif';
+            ctx.textAlign = 'right';
+            for (let db = minDb; db <= maxDb; db += dbStep) {
+                const y = padding.top + plotHeight - ((db - minDb) / (maxDb - minDb)) * plotHeight;
+                ctx.beginPath();
+                ctx.moveTo(padding.left, y);
+                ctx.lineTo(width - padding.right, y);
+                ctx.stroke();
+                ctx.fillText(`${db}`, padding.left - 5, y + 4);
+            }
+
+            // Draw spectrum
+            if (scan.power && scan.power.length > 0) {
+                const startMHz = scan.hz_lo / 1e6;
+                const stopMHz = scan.hz_hi / 1e6;
+                const spanMHz = stopMHz - startMHz;
+
+                // Vertical grid lines (frequency)
+                const freqStep = spanMHz > 100 ? 20 : spanMHz > 50 ? 10 : 5;
+                ctx.textAlign = 'center';
+                for (let f = Math.ceil(startMHz / freqStep) * freqStep; f <= stopMHz; f += freqStep) {
+                    const x = padding.left + ((f - startMHz) / spanMHz) * plotWidth;
+                    ctx.beginPath();
+                    ctx.moveTo(x, padding.top);
+                    ctx.lineTo(x, height - padding.bottom);
+                    ctx.stroke();
+                    ctx.fillText(`${f}`, x, height - padding.bottom + 15);
+                }
+
+                // Draw spectrum line
+                ctx.strokeStyle = '#00d4ff';
+                ctx.lineWidth = 1;
+                ctx.beginPath();
+
+                const step = Math.max(1, Math.floor(scan.power.length / plotWidth));
+
+                for (let i = 0; i < scan.power.length; i += step) {
+                    const x = padding.left + (i / scan.power.length) * plotWidth;
+                    const db = Math.max(minDb, Math.min(maxDb, scan.power[i]));
+                    const y = padding.top + plotHeight - ((db - minDb) / (maxDb - minDb)) * plotHeight;
+
+                    if (i === 0) {
+                        ctx.moveTo(x, y);
+                    } else {
+                        ctx.lineTo(x, y);
+                    }
+                }
+                ctx.stroke();
+
+                // Axis labels
+                ctx.fillStyle = '#888';
+                ctx.font = '12px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.fillText('Frequency (MHz)', width / 2, height - 5);
+
+                ctx.save();
+                ctx.translate(15, height / 2);
+                ctx.rotate(-Math.PI / 2);
+                ctx.fillText('Power (dBm)', 0, 0);
+                ctx.restore();
+            }
+        }
+
+        function initCanvas() {
+            canvas = document.getElementById('spectrum-canvas');
+            ctx = canvas.getContext('2d');
+
+            const rect = canvas.getBoundingClientRect();
+            const dpr = window.devicePixelRatio || 1;
+            canvas.width = rect.width * dpr;
+            canvas.height = rect.height * dpr;
+            ctx.scale(dpr, dpr);
+
+            setupDragAndDrop();
+            drawSpectrum({ power: [] });
+        }
+
+        // Initialize
+        window.onload = () => {
+            initCanvas();
+            fetchStatus();
+            setInterval(fetchStatus, 5000);
+
+            fetch('/api/status')
+                .then(r => r.json())
+                .then(data => {
+                    if (data.scanning) {
+                        connectWebSocket();
+                    }
+                });
+        };
+
+        window.onresize = initCanvas;
+    </script>
+</body>
+</html>
