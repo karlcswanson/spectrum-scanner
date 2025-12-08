@@ -6,7 +6,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"spectrum-scanner/internal/models"
+	"spectrum-pluto/internal/models"
 )
 
 // DefaultConfig returns sensible defaults for live production RF scanning

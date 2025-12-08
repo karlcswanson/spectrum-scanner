@@ -5,7 +5,7 @@ import (
 	"log"
 	"net/http"
 
-	"spectrum-scanner/internal/models"
+	"spectrum-pluto/internal/models"
 )
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {

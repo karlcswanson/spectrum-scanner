@@ -6,11 +6,11 @@ import (
 	"os"
 	"runtime"
 
-	"spectrum-scanner/internal/api"
-	"spectrum-scanner/internal/config"
-	"spectrum-scanner/internal/maia"
-	"spectrum-scanner/internal/models"
-	"spectrum-scanner/internal/sweep"
+	"spectrum-pluto/internal/api"
+	"spectrum-pluto/internal/config"
+	"spectrum-pluto/internal/maia"
+	"spectrum-pluto/internal/models"
+	"spectrum-pluto/internal/sweep"
 )
 
 func main() {

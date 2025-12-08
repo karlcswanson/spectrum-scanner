@@ -6,8 +6,8 @@ import (
 	"log"
 	"net/http"
 
-	"spectrum-scanner/internal/models"
-	"spectrum-scanner/internal/sweep"
+	"spectrum-pluto/internal/models"
+	"spectrum-pluto/internal/sweep"
 )
 
 //go:embed web

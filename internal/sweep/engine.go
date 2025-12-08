@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"spectrum-scanner/internal/maia"
-	"spectrum-scanner/internal/models"
+	"spectrum-pluto/internal/maia"
+	"spectrum-pluto/internal/models"
 )
 
 const (
