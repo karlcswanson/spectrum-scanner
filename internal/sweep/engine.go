@@ -195,10 +195,18 @@ func calculateSegments(band models.Band) []int64 {
 	// Effective hop size accounts for overlap (50% overlap = hop by half segment)
 	hopSize := int64(float64(SegmentBandwidth) * (1 - SegmentOverlap))
 
-	// Start at half-segment offset from band start
-	freq := band.StartHz + SegmentBandwidth/2
+	// Crop amount per edge (25% for 50% overlap)
+	cropHz := int64(float64(SegmentBandwidth) * SegmentOverlap / 2)
 
-	for freq < band.StopHz+SegmentBandwidth/2 {
+	// Start segment center so that after cropping, usable data begins at band.StartHz
+	// First segment center = band.StartHz + halfSegment - cropHz
+	// This way: segment spans (center - halfSeg) to (center + halfSeg)
+	//           after crop: (center - halfSeg + cropHz) = band.StartHz
+	freq := band.StartHz + SegmentBandwidth/2 - cropHz
+
+	// Continue until usable portion covers band.StopHz
+	// Last usable bin at: center + halfSegment - cropHz >= band.StopHz
+	for freq-SegmentBandwidth/2+cropHz < band.StopHz {
 		centers = append(centers, freq)
 		freq += hopSize
 	}
