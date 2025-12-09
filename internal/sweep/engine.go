@@ -108,6 +108,26 @@ func (e *Engine) GetRFInfo() (*RFInfo, error) {
 	spec, err := e.maia.GetSpectrometer()
 	if err != nil {
 		return nil, err
+	}
+	ad9361, err := e.maia.GetAd9361()
+	if err != nil {
+		return nil, err
+	}
+
+	sampleRate := spec.InputSamplingFrequency
+	binSize := sampleRate / float64(maia.FFTSize)
+	usableBW := sampleRate * (1 - SegmentOverlap) // 50% usable after cropping
+
+	return &RFInfo{
+		SampleRateMHz:      sampleRate / 1e6,
+		BinSizeHz:          binSize,
+		UsableBandwidthMHz: usableBW / 1e6,
+		RxGainDB:           ad9361.RxGain,
+		RxGainMode:         ad9361.RxGainMode,
+		RxFreqMHz:          float64(ad9361.RxLoFrequency) / 1e6,
+		FFTSize:            maia.FFTSize,
+	}, nil
+}
 
 // Start begins the sweep loop
 func (e *Engine) Start() error {
@@ -204,51 +224,56 @@ func (e *Engine) runLoop(ctx context.Context) {
 }
 
 // calculateSegments returns the center frequencies for each segment with overlap
-func calculateSegments(band models.Band) []int64 {
+// segmentBandwidth is the actual sample rate (FFT coverage) in Hz
+func calculateSegments(band models.Band, segmentBandwidth int64) []int64 {
 	var centers []int64
 
 	// Effective hop size accounts for overlap (50% overlap = hop by half segment)
-	hopSize := int64(float64(SegmentBandwidth) * (1 - SegmentOverlap))
+	hopSize := int64(float64(segmentBandwidth) * (1 - SegmentOverlap))
 
 	// Crop amount per edge (25% for 50% overlap)
-	cropHz := int64(float64(SegmentBandwidth) * SegmentOverlap / 2)
+	cropHz := int64(float64(segmentBandwidth) * SegmentOverlap / 2)
 
 	// Start segment center so that after cropping, usable data begins at band.StartHz
 	// First segment center = band.StartHz + halfSegment - cropHz
 	// This way: segment spans (center - halfSeg) to (center + halfSeg)
 	//           after crop: (center - halfSeg + cropHz) = band.StartHz
-	freq := band.StartHz + SegmentBandwidth/2 - cropHz
+	freq := band.StartHz + segmentBandwidth/2 - cropHz
 
 	// Continue until usable portion covers band.StopHz
 	// Last usable bin at: center + halfSegment - cropHz >= band.StopHz
-	for freq-SegmentBandwidth/2+cropHz < band.StopHz {
+	for freq-segmentBandwidth/2+cropHz < band.StopHz {
 		centers = append(centers, freq)
 		freq += hopSize
-// segmentBandwidth is the actual sample rate (FFT coverage) in Hz
-func calculateSegments(band models.Band, segmentBandwidth int64) []int64 {
+	}
 
 	// Handle bands smaller than one segment
 	if len(centers) == 0 {
-	hopSize := int64(float64(segmentBandwidth) * (1 - SegmentOverlap))
+		centers = append(centers, (band.StartHz+band.StopHz)/2)
 	}
 
-	cropHz := int64(float64(segmentBandwidth) * SegmentOverlap / 2)
+	return centers
 }
 
 func (e *Engine) sweepBand(ctx context.Context, band models.Band) (models.ScanLine, error) {
-	segments := calculateSegments(band)
-
-	freq := band.StartHz + segmentBandwidth/2 - cropHz
+	// Get current settings first - we need sample rate for segment calculation
 	spec, err := e.maia.GetSpectrometer()
 	if err != nil {
 		return models.ScanLine{}, err
-	for freq-segmentBandwidth/2+cropHz < band.StopHz {
+	}
 	ad9361, err := e.maia.GetAd9361()
 	if err != nil {
 		return models.ScanLine{}, err
 	}
 
+	// Use actual sample rate from spectrometer
+	segmentBandwidth := int64(spec.InputSamplingFrequency)
 	binHz := spec.InputSamplingFrequency / float64(maia.FFTSize)
+
+	log.Printf("Segment bandwidth: %.2f MHz, binHz: %.2f kHz",
+		float64(segmentBandwidth)/1e6, binHz/1e3)
+
+	segments := calculateSegments(band, segmentBandwidth)
 
 	// Calculate crop amount (25% from each edge for 50% overlap)
 	cropBins := int(float64(maia.FFTSize) * SegmentOverlap / 2)
@@ -256,7 +281,9 @@ func (e *Engine) sweepBand(ctx context.Context, band models.Band) (models.ScanLi
 
 	// Pre-allocate result array based on frequency range
 	totalBins := int(float64(band.StopHz-band.StartHz) / binHz)
-	// Get current settings first - we need sample rate for segment calculation
+	allPowers := make([]float64, totalBins)
+	for i := range allPowers {
+		allPowers[i] = -140 // Initialize to noise floor
 	}
 
 	for segIdx, centerFreq := range segments {
@@ -266,14 +293,6 @@ func (e *Engine) sweepBand(ctx context.Context, band models.Band) (models.ScanLi
 		default:
 		}
 
-tf("Segment bandwidth: %.2f MHz, binHz: %.2f kHz",
-		float64(segmentBandwidth)/1e6, binHz/1e3)
-
-	segmen
-s := calculateSegments(band, segmentBandwidth)
-
-	// Calculate crop amount (25% from each edge for 50% overlap)
-	cropBins := int(float64(maia.
 		// Tune to segment center frequency
 		if err := e.maia.SetFrequency(uint64(centerFreq)); err != nil {
 			return models.ScanLine{}, err
@@ -297,13 +316,16 @@ s := calculateSegments(band, segmentBandwidth)
 			powers[i] = p + calibrationOffset
 		}
 
-		// Calculate where this segment starts in the output array
-		segStartHz := centerFreq - SegmentBandwidth/2
-		startBin := int(float64(segStartHz-band.StartHz) / binHz)
+		// Calculate where this segment's usable data starts in the output array
+		// The usable portion starts at centerFreq - segmentBandwidth/2 + cropHz
+		// where cropHz = cropBins * binHz
+		cropHz := float64(cropBins) * binHz
+		usableStartHz := float64(centerFreq) - float64(segmentBandwidth)/2 + cropHz
+		startBin := int((usableStartHz - float64(band.StartHz)) / binHz)
 
 		// Copy only the center portion (cropped) to avoid edge artifacts
 		for i := cropBins; i < maia.FFTSize-cropBins; i++ {
-			outIdx := startBin + i
+			outIdx := startBin + (i - cropBins)
 			if outIdx >= 0 && outIdx < len(allPowers) {
 				// Take maximum (peak hold) when segments overlap
 				if powers[i] > allPowers[outIdx] {
@@ -316,16 +338,13 @@ s := calculateSegments(band, segmentBandwidth)
 			segIdx+1, len(segments), float64(centerFreq)/1e6, startBin, startBin+usableBins)
 	}
 
-		// Calculate where this segment's usable data starts in the output array
-		// The usable portion starts at centerFreq - segmentBandwidth/2 + cropHz
-		// where cropHz = cropBins * binHz
-		cropHz := float64(cropBins) * binHz
-		usableStartHz := float64(centerFreq) - float64(segmentBandwidth)/2 + cropHz
-		startBin := int((usableStartHz - float64(band.StartHz)) / binHz)
+	return models.ScanLine{
+		ID:        e.config.DeviceID,
+		Timestamp: time.Now().UTC(),
 		HzLo:      float64(band.StartHz),
 		HzHi:      float64(band.StopHz),
 		Step:      binHz,
-			outIdx := startBin + (i - cropBins)
+		Samples:   float64(len(allPowers)),
 		Power:     allPowers,
 	}, nil
 }
