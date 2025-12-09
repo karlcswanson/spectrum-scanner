@@ -44,6 +44,9 @@ func (s *Server) setupRoutes() {
 	// WebSocket for live scan data
 	s.mux.HandleFunc("GET /ws/stream", s.handleWebSocket)
 
+	// RF info from maia/SDR
+	s.mux.HandleFunc("GET /api/radio", s.handleGetRadio)
+
 	// Health check
 	s.mux.HandleFunc("GET /health", s.handleHealth)
 

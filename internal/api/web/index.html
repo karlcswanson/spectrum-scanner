@@ -293,10 +293,26 @@
             }
         }
 
+        async function fetchRadioInfo() {
+            try {
+                const resp = await fetch('/api/radio');
+                if (!resp.ok) {
+                    log('Radio: not connected');
+                    return;
+                }
+                const info = await resp.json();
+                log(`Radio: ${info.sample_rate_mhz.toFixed(2)} MHz sample rate, ${(info.bin_size_hz/1000).toFixed(2)} kHz/bin, ${info.usable_bandwidth_mhz.toFixed(2)} MHz usable BW`);
+                log(`Radio: RX gain ${info.rx_gain_db.toFixed(1)} dB (${info.rx_gain_mode}), FFT ${info.fft_size} bins`);
+            } catch (e) {
+                log('Radio: error fetching info');
+            }
+        }
+
         async function startScan() {
             try {
                 await fetch('/api/scan/start', { method: 'POST' });
                 log('Scan started');
+                fetchRadioInfo();
                 fetchStatus();
                 connectWebSocket();
             } catch (e) {
@@ -507,6 +523,7 @@
         window.onload = () => {
             fetchStatus();
             fetchBands();
+            fetchRadioInfo();
             setInterval(fetchStatus, 5000);
 
             fetch('/api/status')

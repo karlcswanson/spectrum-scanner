@@ -13,6 +13,17 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
+func (s *Server) handleGetRadio(w http.ResponseWriter, r *http.Request) {
+	info, err := s.engine.GetRFInfo()
+	if err != nil {
+		http.Error(w, "Cannot connect to radio: "+err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(info)
+}
+
 func (s *Server) handleGetStatus(w http.ResponseWriter, r *http.Request) {
 	var currentBand *string
 	if band := s.engine.CurrentBand(); band != "" {

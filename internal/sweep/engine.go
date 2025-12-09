@@ -11,8 +11,6 @@ import (
 )
 
 const (
-	// SegmentBandwidth is the width of each sweep segment (20 MHz)
-	SegmentBandwidth int64 = 20_000_000
 	// SegmentOverlap is the fraction of overlap between segments (50%)
 	SegmentOverlap = 0.5
 	// SettleTime is the wait time after tuning for PLL to settle
@@ -93,6 +91,23 @@ func (e *Engine) CurrentBand() string {
 	defer e.mu.RUnlock()
 	return e.currentBand
 }
+
+// RFInfo contains radio/SDR information from maia
+type RFInfo struct {
+	SampleRateMHz      float64 `json:"sample_rate_mhz"`
+	BinSizeHz          float64 `json:"bin_size_hz"`
+	UsableBandwidthMHz float64 `json:"usable_bandwidth_mhz"`
+	RxGainDB           float64 `json:"rx_gain_db"`
+	RxGainMode         string  `json:"rx_gain_mode"`
+	RxFreqMHz          float64 `json:"rx_freq_mhz"`
+	FFTSize            int     `json:"fft_size"`
+}
+
+// GetRFInfo fetches current radio settings from maia
+func (e *Engine) GetRFInfo() (*RFInfo, error) {
+	spec, err := e.maia.GetSpectrometer()
+	if err != nil {
+		return nil, err
 
 // Start begins the sweep loop
 func (e *Engine) Start() error {
@@ -209,24 +224,25 @@ func calculateSegments(band models.Band) []int64 {
 	for freq-SegmentBandwidth/2+cropHz < band.StopHz {
 		centers = append(centers, freq)
 		freq += hopSize
-	}
+// segmentBandwidth is the actual sample rate (FFT coverage) in Hz
+func calculateSegments(band models.Band, segmentBandwidth int64) []int64 {
 
 	// Handle bands smaller than one segment
 	if len(centers) == 0 {
-		centers = append(centers, (band.StartHz+band.StopHz)/2)
+	hopSize := int64(float64(segmentBandwidth) * (1 - SegmentOverlap))
 	}
 
-	return centers
+	cropHz := int64(float64(segmentBandwidth) * SegmentOverlap / 2)
 }
 
 func (e *Engine) sweepBand(ctx context.Context, band models.Band) (models.ScanLine, error) {
 	segments := calculateSegments(band)
 
-	// Get current settings for calibration
+	freq := band.StartHz + segmentBandwidth/2 - cropHz
 	spec, err := e.maia.GetSpectrometer()
 	if err != nil {
 		return models.ScanLine{}, err
-	}
+	for freq-segmentBandwidth/2+cropHz < band.StopHz {
 	ad9361, err := e.maia.GetAd9361()
 	if err != nil {
 		return models.ScanLine{}, err
@@ -240,9 +256,7 @@ func (e *Engine) sweepBand(ctx context.Context, band models.Band) (models.ScanLi
 
 	// Pre-allocate result array based on frequency range
 	totalBins := int(float64(band.StopHz-band.StartHz) / binHz)
-	allPowers := make([]float64, totalBins)
-	for i := range allPowers {
-		allPowers[i] = -140 // Initialize to noise floor
+	// Get current settings first - we need sample rate for segment calculation
 	}
 
 	for segIdx, centerFreq := range segments {
@@ -252,6 +266,14 @@ func (e *Engine) sweepBand(ctx context.Context, band models.Band) (models.ScanLi
 		default:
 		}
 
+tf("Segment bandwidth: %.2f MHz, binHz: %.2f kHz",
+		float64(segmentBandwidth)/1e6, binHz/1e3)
+
+	segmen
+s := calculateSegments(band, segmentBandwidth)
+
+	// Calculate crop amount (25% from each edge for 50% overlap)
+	cropBins := int(float64(maia.
 		// Tune to segment center frequency
 		if err := e.maia.SetFrequency(uint64(centerFreq)); err != nil {
 			return models.ScanLine{}, err
@@ -294,13 +316,16 @@ func (e *Engine) sweepBand(ctx context.Context, band models.Band) (models.ScanLi
 			segIdx+1, len(segments), float64(centerFreq)/1e6, startBin, startBin+usableBins)
 	}
 
-	return models.ScanLine{
-		ID:        e.config.DeviceID,
-		Timestamp: time.Now().UTC(),
+		// Calculate where this segment's usable data starts in the output array
+		// The usable portion starts at centerFreq - segmentBandwidth/2 + cropHz
+		// where cropHz = cropBins * binHz
+		cropHz := float64(cropBins) * binHz
+		usableStartHz := float64(centerFreq) - float64(segmentBandwidth)/2 + cropHz
+		startBin := int((usableStartHz - float64(band.StartHz)) / binHz)
 		HzLo:      float64(band.StartHz),
 		HzHi:      float64(band.StopHz),
 		Step:      binHz,
-		Samples:   float64(len(allPowers)),
+			outIdx := startBin + (i - cropBins)
 		Power:     allPowers,
 	}, nil
 }
