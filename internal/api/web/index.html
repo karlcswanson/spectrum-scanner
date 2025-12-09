@@ -20,6 +20,7 @@
             border-radius: 8px;
             padding: 20px;
             margin-bottom: 20px;
+            margin-top: 20px;
         }
         .status-row {
             display: flex;
@@ -202,7 +203,7 @@
                 const startMHz = (band.start_hz / 1e6).toFixed(0);
                 const stopMHz = (band.stop_hz / 1e6).toFixed(0);
                 return `
-                    <label class="band-item ${band.enabled ? 'enabled' : ''}" onclick="toggleBand(${idx})">
+                    <label class="band-item ${band.enabled ? 'enabled' : ''}">
                         <input type="checkbox" ${band.enabled ? 'checked' : ''} onchange="toggleBand(${idx})">
                         <span class="band-name">${band.name}</span>
                         <span class="band-range">${startMHz}-${stopMHz} MHz</span>
