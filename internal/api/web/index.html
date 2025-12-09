@@ -54,11 +54,16 @@
         .btn-export { background: #00ff88; color: #000; }
         .btn-export:hover { background: #00cc6a; }
         .btn-disabled { background: #444; color: #888; cursor: not-allowed; }
-        #spectrum-container {
+        #spectrum-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(500px, 1fr));
+            gap: 20px;
+            margin-top: 20px;
+        }
+        .spectrum-panel {
             background: #16213e;
             border-radius: 8px;
-            padding: 20px;
-            margin-top: 20px;
+            padding: 15px;
         }
         .spectrum-header {
             display: flex;
@@ -66,22 +71,21 @@
             align-items: center;
             margin-bottom: 10px;
         }
-        .spectrum-header h3 { color: #00d4ff; }
-        #spectrum-canvas {
+        .spectrum-header h3 { color: #00d4ff; font-size: 16px; }
+        .spectrum-header .scan-info { color: #888; font-size: 12px; }
+        .spectrum-canvas {
             width: 100%;
-            height: 400px;
+            height: 300px;
             background: #0a0a1a;
             border-radius: 4px;
-            cursor: grab;
         }
-        #spectrum-canvas.dragging {
-            cursor: grabbing;
-            opacity: 0.8;
-        }
-        .drag-hint {
-            font-size: 12px;
-            color: #666;
-            margin-top: 5px;
+        .no-bands-msg {
+            background: #16213e;
+            border-radius: 8px;
+            padding: 40px;
+            text-align: center;
+            color: #888;
+            margin-top: 20px;
         }
         .log {
             background: #0a0a1a;
@@ -95,6 +99,31 @@
         }
         .log-entry { padding: 2px 0; }
         .log-time { color: #666; }
+        .band-list {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+        }
+        .band-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 15px;
+            background: #0f3460;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .band-item:hover { background: #1a4a7a; }
+        .band-item.enabled { background: #0a4a3a; border: 1px solid #00ff88; }
+        .band-item input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+            cursor: pointer;
+            accent-color: #00ff88;
+        }
+        .band-name { font-weight: bold; color: #eee; }
+        .band-range { font-size: 12px; color: #888; margin-left: 5px; }
     </style>
 </head>
 <body>
@@ -126,28 +155,121 @@
             </div>
         </div>
 
-        <div id="spectrum-container">
-            <div class="spectrum-header">
-                <h3>Live Spectrum</h3>
-                <span id="scan-info" style="color: #888; font-size: 13px;">--</span>
+        <div class="status-card">
+            <h3 style="color: #00d4ff; margin-bottom: 15px;">Bands</h3>
+            <div id="band-checkboxes" class="band-list">
+                <!-- Populated by JavaScript -->
             </div>
-            <canvas id="spectrum-canvas" draggable="true"></canvas>
-            <div class="drag-hint">Drag the chart to your desktop to save as CSV</div>
+        </div>
+
+        <div id="spectrum-grid">
+            <!-- Dynamically populated with one panel per enabled band -->
+        </div>
+
+        <div class="status-card">
             <div class="log" id="log"></div>
         </div>
     </div>
 
     <script>
         let ws = null;
-        let canvas, ctx;
-        let lastScan = null;
         let scannerName = 'spectrum-scan';
+        let bands = [];
+        let bandScans = {};  // { bandName: lastScanData }
+        let bandCanvases = {};  // { bandName: { canvas, ctx } }
 
         function log(msg) {
             const logEl = document.getElementById('log');
             const time = new Date().toLocaleTimeString();
             logEl.innerHTML += `<div class="log-entry"><span class="log-time">${time}</span> ${msg}</div>`;
             logEl.scrollTop = logEl.scrollHeight;
+        }
+
+        async function fetchBands() {
+            try {
+                const resp = await fetch('/api/bands');
+                bands = await resp.json();
+                renderBandCheckboxes();
+                renderSpectrumGrid();
+            } catch (e) {
+                log('Error fetching bands: ' + e.message);
+            }
+        }
+
+        function renderBandCheckboxes() {
+            const container = document.getElementById('band-checkboxes');
+            container.innerHTML = bands.map((band, idx) => {
+                const startMHz = (band.start_hz / 1e6).toFixed(0);
+                const stopMHz = (band.stop_hz / 1e6).toFixed(0);
+                return `
+                    <label class="band-item ${band.enabled ? 'enabled' : ''}" onclick="toggleBand(${idx})">
+                        <input type="checkbox" ${band.enabled ? 'checked' : ''} onchange="toggleBand(${idx})">
+                        <span class="band-name">${band.name}</span>
+                        <span class="band-range">${startMHz}-${stopMHz} MHz</span>
+                    </label>
+                `;
+            }).join('');
+        }
+
+        async function toggleBand(idx) {
+            bands[idx].enabled = !bands[idx].enabled;
+            renderBandCheckboxes();
+            renderSpectrumGrid();
+
+            try {
+                await fetch('/api/bands', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(bands)
+                });
+                const enabledBands = bands.filter(b => b.enabled).map(b => b.name).join(', ');
+                log('Bands updated: ' + (enabledBands || 'none'));
+            } catch (e) {
+                log('Error updating bands: ' + e.message);
+            }
+        }
+
+        function renderSpectrumGrid() {
+            const grid = document.getElementById('spectrum-grid');
+            const enabledBands = bands.filter(b => b.enabled);
+
+            if (enabledBands.length === 0) {
+                grid.innerHTML = '<div class="no-bands-msg">No bands enabled. Select bands above to start scanning.</div>';
+                bandCanvases = {};
+                return;
+            }
+
+            grid.innerHTML = enabledBands.map(band => {
+                const startMHz = (band.start_hz / 1e6).toFixed(0);
+                const stopMHz = (band.stop_hz / 1e6).toFixed(0);
+                const canvasId = `canvas-${band.name.replace(/\s+/g, '-')}`;
+                return `
+                    <div class="spectrum-panel" data-band="${band.name}">
+                        <div class="spectrum-header">
+                            <h3>${band.name} <span style="font-weight: normal; color: #888;">(${startMHz}-${stopMHz} MHz)</span></h3>
+                            <span class="scan-info" id="info-${band.name.replace(/\s+/g, '-')}">--</span>
+                        </div>
+                        <canvas class="spectrum-canvas" id="${canvasId}"></canvas>
+                    </div>
+                `;
+            }).join('');
+
+            // Initialize canvases
+            bandCanvases = {};
+            enabledBands.forEach(band => {
+                const canvasId = `canvas-${band.name.replace(/\s+/g, '-')}`;
+                const canvas = document.getElementById(canvasId);
+                if (canvas) {
+                    const ctx = canvas.getContext('2d');
+                    const rect = canvas.getBoundingClientRect();
+                    const dpr = window.devicePixelRatio || 1;
+                    canvas.width = rect.width * dpr;
+                    canvas.height = rect.height * dpr;
+                    ctx.scale(dpr, dpr);
+                    bandCanvases[band.name] = { canvas, ctx, band };
+                    drawSpectrumOnCanvas(ctx, canvas, { power: [] }, band);
+                }
+            });
         }
 
         async function fetchStatus() {
@@ -207,51 +329,42 @@
         }
 
         function exportCSV() {
-            if (!lastScan) {
+            const scansToExport = Object.entries(bandScans);
+            if (scansToExport.length === 0) {
                 log('No scan data to export');
                 return;
             }
 
-            const csv = generateCSV(lastScan);
-            const blob = new Blob([csv], { type: 'text/csv' });
-            const url = URL.createObjectURL(blob);
-
+            // Export each band as a separate file
             const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-            const filename = `${scannerName.replace(/\s+/g, '-')}_${timestamp}.csv`;
 
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = filename;
-            a.click();
+            scansToExport.forEach(([bandName, scan]) => {
+                const csv = generateCSV(scan);
+                const blob = new Blob([csv], { type: 'text/csv' });
+                const url = URL.createObjectURL(blob);
 
-            URL.revokeObjectURL(url);
-            log(`Exported: ${filename}`);
+                const filename = `${scannerName.replace(/\s+/g, '-')}_${bandName.replace(/\s+/g, '-')}_${timestamp}.csv`;
+
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                a.click();
+
+                URL.revokeObjectURL(url);
+                log(`Exported: ${filename}`);
+            });
         }
 
-        function setupDragAndDrop() {
-            canvas.addEventListener('dragstart', (e) => {
-                if (!lastScan) {
-                    e.preventDefault();
-                    return;
+        function findBandForScan(scan) {
+            // Match scan to band by frequency range
+            for (const band of bands) {
+                if (band.enabled &&
+                    Math.abs(scan.hz_lo - band.start_hz) < 1e6 &&
+                    Math.abs(scan.hz_hi - band.stop_hz) < 1e6) {
+                    return band.name;
                 }
-
-                canvas.classList.add('dragging');
-
-                const csv = generateCSV(lastScan);
-                const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-                const filename = `${scannerName.replace(/\s+/g, '-')}_${timestamp}.csv`;
-
-                // Set drag data for file download
-                e.dataTransfer.setData('text/plain', csv);
-                e.dataTransfer.setData('DownloadURL',
-                    `text/csv:${filename}:data:text/csv;charset=utf-8,${encodeURIComponent(csv)}`);
-
-                log('Dragging scan data...');
-            });
-
-            canvas.addEventListener('dragend', (e) => {
-                canvas.classList.remove('dragging');
-            });
+            }
+            return null;
         }
 
         function connectWebSocket() {
@@ -266,14 +379,24 @@
 
             ws.onmessage = (event) => {
                 const scan = JSON.parse(event.data);
-                lastScan = scan;
-                drawSpectrum(scan);
 
-                const points = scan.power ? scan.power.length : 0;
-                const minP = scan.power ? Math.min(...scan.power).toFixed(1) : '--';
-                const maxP = scan.power ? Math.max(...scan.power).toFixed(1) : '--';
-                document.getElementById('scan-info').textContent =
-                    `${points} pts | ${minP} to ${maxP} dBm`;
+                // Find which band this scan belongs to based on frequency range
+                const bandName = findBandForScan(scan);
+                if (bandName && bandCanvases[bandName]) {
+                    bandScans[bandName] = scan;
+                    const { ctx, canvas, band } = bandCanvases[bandName];
+                    drawSpectrumOnCanvas(ctx, canvas, scan, band);
+
+                    // Update info display
+                    const infoId = `info-${bandName.replace(/\s+/g, '-')}`;
+                    const infoEl = document.getElementById(infoId);
+                    if (infoEl) {
+                        const points = scan.power ? scan.power.length : 0;
+                        const minP = scan.power ? Math.min(...scan.power).toFixed(1) : '--';
+                        const maxP = scan.power ? Math.max(...scan.power).toFixed(1) : '--';
+                        infoEl.textContent = `${points} pts | ${minP} to ${maxP} dBm`;
+                    }
+                }
             };
 
             ws.onclose = () => {
@@ -286,13 +409,13 @@
             };
         }
 
-        function drawSpectrum(scan) {
+        function drawSpectrumOnCanvas(ctx, canvas, scan, band) {
             if (!ctx || !canvas) return;
 
             const rect = canvas.getBoundingClientRect();
             const width = rect.width;
             const height = rect.height;
-            const padding = { top: 25, right: 60, bottom: 35, left: 60 };
+            const padding = { top: 20, right: 50, bottom: 30, left: 50 };
             const plotWidth = width - padding.left - padding.right;
             const plotHeight = height - padding.top - padding.bottom;
 
@@ -309,9 +432,9 @@
             ctx.lineWidth = 1;
 
             // Horizontal grid lines (dB)
-            const dbStep = 10;
+            const dbStep = 20;
             ctx.fillStyle = '#666';
-            ctx.font = '11px sans-serif';
+            ctx.font = '10px sans-serif';
             ctx.textAlign = 'right';
             for (let db = minDb; db <= maxDb; db += dbStep) {
                 const y = padding.top + plotHeight - ((db - minDb) / (maxDb - minDb)) * plotHeight;
@@ -319,28 +442,28 @@
                 ctx.moveTo(padding.left, y);
                 ctx.lineTo(width - padding.right, y);
                 ctx.stroke();
-                ctx.fillText(`${db}`, padding.left - 5, y + 4);
+                ctx.fillText(`${db}`, padding.left - 5, y + 3);
             }
 
-            // Draw spectrum
+            // Use band frequency range for axis, or scan data if available
+            const startMHz = (scan.power && scan.power.length > 0) ? scan.hz_lo / 1e6 : band.start_hz / 1e6;
+            const stopMHz = (scan.power && scan.power.length > 0) ? scan.hz_hi / 1e6 : band.stop_hz / 1e6;
+            const spanMHz = stopMHz - startMHz;
+
+            // Vertical grid lines (frequency)
+            const freqStep = spanMHz > 100 ? 20 : spanMHz > 50 ? 10 : spanMHz > 20 ? 5 : 2;
+            ctx.textAlign = 'center';
+            for (let f = Math.ceil(startMHz / freqStep) * freqStep; f <= stopMHz; f += freqStep) {
+                const x = padding.left + ((f - startMHz) / spanMHz) * plotWidth;
+                ctx.beginPath();
+                ctx.moveTo(x, padding.top);
+                ctx.lineTo(x, height - padding.bottom);
+                ctx.stroke();
+                ctx.fillText(`${f}`, x, height - padding.bottom + 12);
+            }
+
+            // Draw spectrum line if we have data
             if (scan.power && scan.power.length > 0) {
-                const startMHz = scan.hz_lo / 1e6;
-                const stopMHz = scan.hz_hi / 1e6;
-                const spanMHz = stopMHz - startMHz;
-
-                // Vertical grid lines (frequency)
-                const freqStep = spanMHz > 100 ? 20 : spanMHz > 50 ? 10 : 5;
-                ctx.textAlign = 'center';
-                for (let f = Math.ceil(startMHz / freqStep) * freqStep; f <= stopMHz; f += freqStep) {
-                    const x = padding.left + ((f - startMHz) / spanMHz) * plotWidth;
-                    ctx.beginPath();
-                    ctx.moveTo(x, padding.top);
-                    ctx.lineTo(x, height - padding.bottom);
-                    ctx.stroke();
-                    ctx.fillText(`${f}`, x, height - padding.bottom + 15);
-                }
-
-                // Draw spectrum line
                 ctx.strokeStyle = '#00d4ff';
                 ctx.lineWidth = 1;
                 ctx.beginPath();
@@ -359,39 +482,31 @@
                     }
                 }
                 ctx.stroke();
-
-                // Axis labels
-                ctx.fillStyle = '#888';
-                ctx.font = '12px sans-serif';
-                ctx.textAlign = 'center';
-                ctx.fillText('Frequency (MHz)', width / 2, height - 5);
-
-                ctx.save();
-                ctx.translate(15, height / 2);
-                ctx.rotate(-Math.PI / 2);
-                ctx.fillText('Power (dBm)', 0, 0);
-                ctx.restore();
             }
         }
 
-        function initCanvas() {
-            canvas = document.getElementById('spectrum-canvas');
-            ctx = canvas.getContext('2d');
+        function reinitCanvases() {
+            // Re-initialize all band canvases on resize
+            for (const bandName in bandCanvases) {
+                const { canvas, band } = bandCanvases[bandName];
+                const ctx = canvas.getContext('2d');
+                const rect = canvas.getBoundingClientRect();
+                const dpr = window.devicePixelRatio || 1;
+                canvas.width = rect.width * dpr;
+                canvas.height = rect.height * dpr;
+                ctx.scale(dpr, dpr);
+                bandCanvases[bandName].ctx = ctx;
 
-            const rect = canvas.getBoundingClientRect();
-            const dpr = window.devicePixelRatio || 1;
-            canvas.width = rect.width * dpr;
-            canvas.height = rect.height * dpr;
-            ctx.scale(dpr, dpr);
-
-            setupDragAndDrop();
-            drawSpectrum({ power: [] });
+                // Redraw with last scan data if available
+                const scan = bandScans[bandName] || { power: [] };
+                drawSpectrumOnCanvas(ctx, canvas, scan, band);
+            }
         }
 
         // Initialize
         window.onload = () => {
-            initCanvas();
             fetchStatus();
+            fetchBands();
             setInterval(fetchStatus, 5000);
 
             fetch('/api/status')
@@ -403,7 +518,7 @@
                 });
         };
 
-        window.onresize = initCanvas;
+        window.onresize = reinitCanvases;
     </script>
 </body>
 </html>

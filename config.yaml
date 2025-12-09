@@ -1,0 +1,38 @@
+# Spectrum Scanner Configuration
+
+# Scanner identity
+name: Spectrum Scanner
+description: ADALM-Pluto Scanner
+
+# Scan settings
+dwell_time_ms: 50
+mode: Average  # Average or PeakDetect
+
+# Frequency bands to scan
+# Each band can be enabled/disabled independently
+bands:
+  - name: Business Radio
+    start_mhz: 450
+    stop_mhz: 470
+    enabled: false
+
+  - name: UHF
+    start_mhz: 470
+    stop_mhz: 608
+    enabled: true
+
+  - name: DECT
+    start_mhz: 1920
+    stop_mhz: 1930
+    enabled: false
+
+  - name: WiFi 2.4
+    start_mhz: 2400
+    stop_mhz: 2500
+    enabled: false
+
+# Add custom bands as needed:
+#  - name: ISM 900
+#    start_mhz: 902
+#    stop_mhz: 928
+#    enabled: false
