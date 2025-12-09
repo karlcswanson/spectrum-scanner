@@ -538,13 +538,28 @@
             };
         }
 
+        // ATSC TV channels: channel 14 starts at 470 MHz, each channel is 6 MHz wide
+        function getATSCChannels(startMHz, stopMHz) {
+            const channels = [];
+            // Channel 14 starts at 470 MHz, channels 14-36 are 470-608 MHz
+            for (let ch = 14; ch <= 36; ch++) {
+                const chStartMHz = 470 + (ch - 14) * 6;
+                const chEndMHz = chStartMHz + 6;
+                const chCenterMHz = chStartMHz + 3;
+                if (chEndMHz > startMHz && chStartMHz < stopMHz) {
+                    channels.push({ num: ch, start: chStartMHz, end: chEndMHz, center: chCenterMHz });
+                }
+            }
+            return channels;
+        }
+
         function drawSpectrumOnCanvas(ctx, canvas, scan, band) {
             if (!ctx || !canvas) return;
 
             const rect = canvas.getBoundingClientRect();
             const width = rect.width;
             const height = rect.height;
-            const padding = { top: 20, right: 50, bottom: 30, left: 50 };
+            const padding = { top: 20, right: 50, bottom: 45, left: 50 };
             const plotWidth = width - padding.left - padding.right;
             const plotHeight = height - padding.top - padding.bottom;
 
@@ -556,11 +571,76 @@
             const minDb = -110;
             const maxDb = -20;
 
-            // Draw grid
+            // Use band frequency range for axis, or scan data if available
+            const startMHz = (scan.power && scan.power.length > 0) ? scan.hz_lo / 1e6 : band.start_hz / 1e6;
+            const stopMHz = (scan.power && scan.power.length > 0) ? scan.hz_hi / 1e6 : band.stop_hz / 1e6;
+            const spanMHz = stopMHz - startMHz;
+
+            // Detect if UHF band
+            const isUHF = startMHz >= 470 && stopMHz <= 700;
+
+            if (isUHF) {
+                // UHF: Draw vertical lines at 6 MHz channel boundaries
+                const channels = getATSCChannels(startMHz, stopMHz);
+
+                ctx.strokeStyle = '#1a1a3e';
+                ctx.fillStyle = '#666';
+                ctx.font = '10px sans-serif';
+                ctx.textAlign = 'center';
+
+                // Draw channel boundary lines and frequency labels
+                channels.forEach((ch, idx) => {
+                    // Draw start boundary line
+                    if (ch.start >= startMHz) {
+                        const xStart = padding.left + ((ch.start - startMHz) / spanMHz) * plotWidth;
+                        ctx.beginPath();
+                        ctx.moveTo(xStart, padding.top);
+                        ctx.lineTo(xStart, height - padding.bottom);
+                        ctx.stroke();
+                        ctx.fillText(`${ch.start}`, xStart, height - padding.bottom + 12);
+                    }
+
+                    // Draw end boundary for last channel
+                    if (idx === channels.length - 1 && ch.end <= stopMHz) {
+                        const xEnd = padding.left + ((ch.end - startMHz) / spanMHz) * plotWidth;
+                        ctx.beginPath();
+                        ctx.moveTo(xEnd, padding.top);
+                        ctx.lineTo(xEnd, height - padding.bottom);
+                        ctx.stroke();
+                        ctx.fillText(`${ch.end}`, xEnd, height - padding.bottom + 12);
+                    }
+                });
+
+                // Draw channel numbers between boundaries
+                ctx.fillStyle = '#00d4ff';
+                ctx.font = '9px sans-serif';
+                channels.forEach(ch => {
+                    const xCenter = padding.left + ((ch.center - startMHz) / spanMHz) * plotWidth;
+                    if (xCenter > padding.left + 10 && xCenter < width - padding.right - 10) {
+                        ctx.fillText(`${ch.num}`, xCenter, height - padding.bottom + 24);
+                    }
+                });
+            } else {
+                // Default frequency grid for other bands
+                ctx.strokeStyle = '#1a1a3e';
+                ctx.fillStyle = '#666';
+                ctx.font = '10px sans-serif';
+                ctx.textAlign = 'center';
+
+                const freqStep = spanMHz > 100 ? 20 : spanMHz > 50 ? 10 : spanMHz > 20 ? 5 : 2;
+                for (let f = Math.ceil(startMHz / freqStep) * freqStep; f <= stopMHz; f += freqStep) {
+                    const x = padding.left + ((f - startMHz) / spanMHz) * plotWidth;
+                    ctx.beginPath();
+                    ctx.moveTo(x, padding.top);
+                    ctx.lineTo(x, height - padding.bottom);
+                    ctx.stroke();
+                    ctx.fillText(`${f}`, x, height - padding.bottom + 12);
+                }
+            }
+
+            // Draw horizontal grid lines (dB)
             ctx.strokeStyle = '#1a1a3e';
             ctx.lineWidth = 1;
-
-            // Horizontal grid lines (dB)
             const dbStep = 20;
             ctx.fillStyle = '#666';
             ctx.font = '10px sans-serif';
@@ -572,23 +652,6 @@
                 ctx.lineTo(width - padding.right, y);
                 ctx.stroke();
                 ctx.fillText(`${db}`, padding.left - 5, y + 3);
-            }
-
-            // Use band frequency range for axis, or scan data if available
-            const startMHz = (scan.power && scan.power.length > 0) ? scan.hz_lo / 1e6 : band.start_hz / 1e6;
-            const stopMHz = (scan.power && scan.power.length > 0) ? scan.hz_hi / 1e6 : band.stop_hz / 1e6;
-            const spanMHz = stopMHz - startMHz;
-
-            // Vertical grid lines (frequency)
-            const freqStep = spanMHz > 100 ? 20 : spanMHz > 50 ? 10 : spanMHz > 20 ? 5 : 2;
-            ctx.textAlign = 'center';
-            for (let f = Math.ceil(startMHz / freqStep) * freqStep; f <= stopMHz; f += freqStep) {
-                const x = padding.left + ((f - startMHz) / spanMHz) * plotWidth;
-                ctx.beginPath();
-                ctx.moveTo(x, padding.top);
-                ctx.lineTo(x, height - padding.bottom);
-                ctx.stroke();
-                ctx.fillText(`${f}`, x, height - padding.bottom + 12);
             }
 
             // Draw spectrum line if we have data
