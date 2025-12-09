@@ -125,6 +125,40 @@
         }
         .band-name { font-weight: bold; color: #eee; }
         .band-range { font-size: 12px; color: #888; margin-left: 5px; }
+        .gain-controls { display: flex; flex-direction: column; gap: 15px; }
+        .gain-row { display: flex; align-items: center; gap: 15px; }
+        .gain-label { min-width: 120px; color: #888; }
+        .gain-row input[type="range"] {
+            flex: 1;
+            max-width: 300px;
+            accent-color: #00d4ff;
+        }
+        .gain-row input[type="number"] {
+            width: 70px;
+            padding: 8px;
+            border: 1px solid #0f3460;
+            border-radius: 4px;
+            background: #0a0a1a;
+            color: #eee;
+            text-align: center;
+        }
+        .gain-row select {
+            flex: 1;
+            max-width: 300px;
+            padding: 8px 12px;
+            border: 1px solid #0f3460;
+            border-radius: 4px;
+            background: #0a0a1a;
+            color: #eee;
+            cursor: pointer;
+        }
+        .btn-apply {
+            background: #00d4ff;
+            color: #000;
+            padding: 10px 20px;
+            align-self: flex-start;
+        }
+        .btn-apply:hover { background: #00a8cc; }
     </style>
 </head>
 <body>
@@ -163,6 +197,27 @@
             </div>
         </div>
 
+        <div class="status-card">
+            <h3 style="color: #00d4ff; margin-bottom: 15px;">Gain Settings</h3>
+            <div class="gain-controls">
+                <div class="gain-row">
+                    <label class="gain-label">RX Gain (dB)</label>
+                    <input type="range" id="rx-gain-slider" min="0" max="73" value="40" oninput="updateGainDisplay()">
+                    <input type="number" id="rx-gain-value" min="0" max="73" value="40" onchange="updateGainSlider()">
+                </div>
+                <div class="gain-row">
+                    <label class="gain-label">Gain Mode</label>
+                    <select id="rx-gain-mode" onchange="updateGain()">
+                        <option value="manual">Manual (recommended for sweeps)</option>
+                        <option value="slow_attack">Slow Attack (AGC)</option>
+                        <option value="fast_attack">Fast Attack (AGC)</option>
+                        <option value="hybrid">Hybrid</option>
+                    </select>
+                </div>
+                <button class="btn-apply" onclick="updateGain()">Apply Gain</button>
+            </div>
+        </div>
+
         <div id="spectrum-grid">
             <!-- Dynamically populated with one panel per enabled band -->
         </div>
@@ -184,6 +239,63 @@
             const time = new Date().toLocaleTimeString();
             logEl.innerHTML += `<div class="log-entry"><span class="log-time">${time}</span> ${msg}</div>`;
             logEl.scrollTop = logEl.scrollHeight;
+        }
+
+        function normalizeGainMode(mode) {
+            // Convert maia API format to lowercase for dropdown
+            const modeMap = {
+                'Manual': 'manual',
+                'SlowAttack': 'slow_attack',
+                'FastAttack': 'fast_attack',
+                'Hybrid': 'hybrid'
+            };
+            return modeMap[mode] || mode || 'manual';
+        }
+
+        async function fetchGain() {
+            try {
+                const resp = await fetch('/api/gain');
+                const data = await resp.json();
+                document.getElementById('rx-gain-slider').value = data.rx_gain;
+                document.getElementById('rx-gain-value').value = data.rx_gain;
+                document.getElementById('rx-gain-mode').value = normalizeGainMode(data.rx_gain_mode);
+            } catch (e) {
+                log('Error fetching gain: ' + e.message);
+            }
+        }
+
+        function updateGainDisplay() {
+            const slider = document.getElementById('rx-gain-slider');
+            document.getElementById('rx-gain-value').value = slider.value;
+        }
+
+        function updateGainSlider() {
+            const input = document.getElementById('rx-gain-value');
+            let val = parseFloat(input.value) || 0;
+            val = Math.max(0, Math.min(73, val));
+            input.value = val;
+            document.getElementById('rx-gain-slider').value = val;
+        }
+
+        async function updateGain() {
+            const gain = parseFloat(document.getElementById('rx-gain-value').value) || 40;
+            const mode = document.getElementById('rx-gain-mode').value;
+
+            try {
+                const resp = await fetch('/api/gain', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ rx_gain: gain, rx_gain_mode: mode })
+                });
+                if (resp.ok) {
+                    log(`Gain set: ${gain} dB, mode: ${mode}`);
+                } else {
+                    const err = await resp.text();
+                    log('Error setting gain: ' + err);
+                }
+            } catch (e) {
+                log('Error setting gain: ' + e.message);
+            }
         }
 
         async function fetchBands() {
@@ -302,7 +414,7 @@
                     return;
                 }
                 const info = await resp.json();
-                log(`Radio: ${info.sample_rate_mhz.toFixed(2)} MHz sample rate, ${(info.bin_size_hz/1000).toFixed(2)} kHz/bin, ${info.usable_bandwidth_mhz.toFixed(2)} MHz usable BW`);
+                log(`Radio: ${info.sample_rate_mhz.toFixed(2)} MHz sample rate, ${info.rx_bandwidth_mhz.toFixed(2)} MHz RF BW, ${(info.bin_size_hz/1000).toFixed(2)} kHz/bin`);
                 log(`Radio: RX gain ${info.rx_gain_db.toFixed(1)} dB (${info.rx_gain_mode}), FFT ${info.fft_size} bins`);
             } catch (e) {
                 log('Radio: error fetching info');
@@ -524,6 +636,7 @@
         window.onload = () => {
             fetchStatus();
             fetchBands();
+            fetchGain();
             fetchRadioInfo();
             setInterval(fetchStatus, 5000);
 

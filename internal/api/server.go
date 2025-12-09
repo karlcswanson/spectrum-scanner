@@ -40,6 +40,9 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("POST /api/scan/stop", s.handleStopScan)
 	s.mux.HandleFunc("GET /api/bands", s.handleGetBands)
 	s.mux.HandleFunc("PUT /api/bands", s.handlePutBands)
+	s.mux.HandleFunc("GET /api/gain", s.handleGetGain)
+	s.mux.HandleFunc("PUT /api/gain", s.handlePutGain)
+	s.mux.HandleFunc("PUT /api/bandwidth", s.handlePutBandwidth)
 
 	// WebSocket for live scan data
 	s.mux.HandleFunc("GET /ws/stream", s.handleWebSocket)

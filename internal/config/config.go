@@ -20,6 +20,8 @@ func DefaultConfig() *models.Config {
 		Description: "ADALM-Pluto Scanner",
 		DwellTimeMs: 50,
 		Mode:        "Average",
+		RxGain:      40,       // 40 dB is a good starting point
+		RxGainMode:  "manual", // manual gain for consistent sweeps
 		Bands: []models.Band{
 			{
 				Name:    "Business Radio",

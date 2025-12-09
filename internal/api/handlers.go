@@ -106,6 +106,95 @@ func (s *Server) handlePutBands(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(bands)
 }
 
+// GainSettings represents the gain configuration for the API
+type GainSettings struct {
+	RxGain     float64 `json:"rx_gain"`
+	RxGainMode string  `json:"rx_gain_mode"`
+}
+
+// BandwidthSettings represents the RF bandwidth configuration
+type BandwidthSettings struct {
+	RxBandwidthMHz float64 `json:"rx_bandwidth_mhz"`
+}
+
+func (s *Server) handleGetGain(w http.ResponseWriter, r *http.Request) {
+	settings := GainSettings{
+		RxGain:     s.config.RxGain,
+		RxGainMode: s.config.RxGainMode,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(settings)
+}
+
+func (s *Server) handlePutGain(w http.ResponseWriter, r *http.Request) {
+	var settings GainSettings
+	if err := json.NewDecoder(r.Body).Decode(&settings); err != nil {
+		http.Error(w, "Invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Validate gain value (AD9361 supports 0-73 dB)
+	if settings.RxGain < 0 || settings.RxGain > 73 {
+		http.Error(w, "rx_gain must be between 0 and 73 dB", http.StatusBadRequest)
+		return
+	}
+
+	// Validate gain mode (lowercase accepted, normalized to maia format in maia client)
+	validModes := map[string]bool{"manual": true, "slow_attack": true, "fast_attack": true, "hybrid": true}
+	if settings.RxGainMode != "" && !validModes[settings.RxGainMode] {
+		http.Error(w, "rx_gain_mode must be 'manual', 'slow_attack', 'fast_attack', or 'hybrid'", http.StatusBadRequest)
+		return
+	}
+
+	// Update config
+	s.config.RxGain = settings.RxGain
+	if settings.RxGainMode != "" {
+		s.config.RxGainMode = settings.RxGainMode
+	}
+	s.engine.UpdateConfig(s.config)
+
+	// Apply gain to radio immediately
+	if err := s.engine.ApplyGain(s.config.RxGain, s.config.RxGainMode); err != nil {
+		log.Printf("Warning: failed to apply gain to radio: %v", err)
+		// Continue anyway - config is updated, gain will be applied on next scan start
+	}
+
+	log.Printf("Gain updated: %.1f dB, mode: %s", s.config.RxGain, s.config.RxGainMode)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(GainSettings{
+		RxGain:     s.config.RxGain,
+		RxGainMode: s.config.RxGainMode,
+	})
+}
+
+func (s *Server) handlePutBandwidth(w http.ResponseWriter, r *http.Request) {
+	var settings BandwidthSettings
+	if err := json.NewDecoder(r.Body).Decode(&settings); err != nil {
+		http.Error(w, "Invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// AD9361 supports 200 kHz to 56 MHz RF bandwidth
+	if settings.RxBandwidthMHz < 0.2 || settings.RxBandwidthMHz > 56 {
+		http.Error(w, "rx_bandwidth_mhz must be between 0.2 and 56 MHz", http.StatusBadRequest)
+		return
+	}
+
+	// Convert to Hz and apply
+	bwHz := uint32(settings.RxBandwidthMHz * 1e6)
+	if err := s.engine.SetRxBandwidth(bwHz); err != nil {
+		http.Error(w, "Failed to set bandwidth: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("RF bandwidth updated: %.2f MHz", settings.RxBandwidthMHz)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(settings)
+}
+
 func (s *Server) handleStartScan(w http.ResponseWriter, r *http.Request) {
 	if s.engine.IsRunning() {
 		w.Header().Set("Content-Type", "application/json")

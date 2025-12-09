@@ -14,7 +14,7 @@ const (
 	// SegmentOverlap is the fraction of overlap between segments (50%)
 	SegmentOverlap = 0.5
 	// SettleTime is the wait time after tuning for PLL to settle
-	SettleTime = 5 * time.Millisecond
+	SettleTime = 20 * time.Millisecond
 )
 
 // Engine orchestrates frequency sweeping across bands
@@ -95,6 +95,7 @@ func (e *Engine) CurrentBand() string {
 // RFInfo contains radio/SDR information from maia
 type RFInfo struct {
 	SampleRateMHz      float64 `json:"sample_rate_mhz"`
+	RxBandwidthMHz     float64 `json:"rx_bandwidth_mhz"`
 	BinSizeHz          float64 `json:"bin_size_hz"`
 	UsableBandwidthMHz float64 `json:"usable_bandwidth_mhz"`
 	RxGainDB           float64 `json:"rx_gain_db"`
@@ -120,6 +121,7 @@ func (e *Engine) GetRFInfo() (*RFInfo, error) {
 
 	return &RFInfo{
 		SampleRateMHz:      sampleRate / 1e6,
+		RxBandwidthMHz:     float64(ad9361.RxRfBandwidth) / 1e6,
 		BinSizeHz:          binSize,
 		UsableBandwidthMHz: usableBW / 1e6,
 		RxGainDB:           ad9361.RxGain,
@@ -129,6 +131,12 @@ func (e *Engine) GetRFInfo() (*RFInfo, error) {
 	}, nil
 }
 
+// SetRxBandwidth sets the RF bandwidth on the radio
+func (e *Engine) SetRxBandwidth(hz uint32) error {
+	log.Printf("Setting RX bandwidth: %.2f MHz", float64(hz)/1e6)
+	return e.maia.SetRxBandwidth(hz)
+}
+
 // Start begins the sweep loop
 func (e *Engine) Start() error {
 	e.mu.Lock()
@@ -136,8 +144,27 @@ func (e *Engine) Start() error {
 		e.mu.Unlock()
 		return nil
 	}
-	e.running = true
 
+	// Apply gain settings before starting sweep
+	gainMode := e.config.RxGainMode
+	rxGain := e.config.RxGain
+	e.mu.Unlock()
+
+	if gainMode == "" {
+		gainMode = "manual"
+	}
+	if rxGain == 0 {
+		rxGain = 40 // default gain
+	}
+
+	log.Printf("Setting RX gain: %.1f dB, mode: %s", rxGain, gainMode)
+	if err := e.maia.SetGainAndMode(rxGain, gainMode); err != nil {
+		log.Printf("Warning: failed to set gain: %v", err)
+		// Continue anyway - gain might already be set correctly
+	}
+
+	e.mu.Lock()
+	e.running = true
 	ctx, cancel := context.WithCancel(context.Background())
 	e.cancel = cancel
 	e.mu.Unlock()
@@ -167,6 +194,15 @@ func (e *Engine) UpdateConfig(config *models.Config) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.config = config
+}
+
+// ApplyGain sets the gain on the radio immediately
+func (e *Engine) ApplyGain(gain float64, mode string) error {
+	if mode == "" {
+		mode = "manual"
+	}
+	log.Printf("Applying RX gain: %.1f dB, mode: %s", gain, mode)
+	return e.maia.SetGainAndMode(gain, mode)
 }
 
 func (e *Engine) runLoop(ctx context.Context) {
@@ -270,14 +306,13 @@ func (e *Engine) sweepBand(ctx context.Context, band models.Band) (models.ScanLi
 	segmentBandwidth := int64(spec.InputSamplingFrequency)
 	binHz := spec.InputSamplingFrequency / float64(maia.FFTSize)
 
-	log.Printf("Segment bandwidth: %.2f MHz, binHz: %.2f kHz",
-		float64(segmentBandwidth)/1e6, binHz/1e3)
-
 	segments := calculateSegments(band, segmentBandwidth)
+
+	log.Printf("  %d segments, %.2f MHz each, %.2f kHz bins",
+		len(segments), float64(segmentBandwidth)/1e6, binHz/1e3)
 
 	// Calculate crop amount (25% from each edge for 50% overlap)
 	cropBins := int(float64(maia.FFTSize) * SegmentOverlap / 2)
-	usableBins := maia.FFTSize - 2*cropBins
 
 	// Pre-allocate result array based on frequency range
 	totalBins := int(float64(band.StopHz-band.StartHz) / binHz)
@@ -286,7 +321,7 @@ func (e *Engine) sweepBand(ctx context.Context, band models.Band) (models.ScanLi
 		allPowers[i] = -140 // Initialize to noise floor
 	}
 
-	for segIdx, centerFreq := range segments {
+	for _, centerFreq := range segments {
 		select {
 		case <-ctx.Done():
 			return models.ScanLine{}, ctx.Err()
@@ -296,6 +331,21 @@ func (e *Engine) sweepBand(ctx context.Context, band models.Band) (models.ScanLi
 		// Tune to segment center frequency
 		if err := e.maia.SetFrequency(uint64(centerFreq)); err != nil {
 			return models.ScanLine{}, err
+		}
+
+		// Re-apply gain settings after frequency change (maia may reset to AGC)
+		e.mu.RLock()
+		rxGain := e.config.RxGain
+		gainMode := e.config.RxGainMode
+		e.mu.RUnlock()
+		if gainMode == "" {
+			gainMode = "manual"
+		}
+		if rxGain == 0 {
+			rxGain = 40
+		}
+		if err := e.maia.SetGainAndMode(rxGain, gainMode); err != nil {
+			log.Printf("Warning: failed to set gain for segment: %v", err)
 		}
 
 		// Wait for PLL to settle
@@ -334,8 +384,6 @@ func (e *Engine) sweepBand(ctx context.Context, band models.Band) (models.ScanLi
 			}
 		}
 
-		log.Printf("Segment %d/%d: %.1f MHz (bins %d-%d)",
-			segIdx+1, len(segments), float64(centerFreq)/1e6, startBin, startBin+usableBins)
 	}
 
 	return models.ScanLine{
@@ -362,13 +410,13 @@ func (e *Engine) collectSegment(ctx context.Context) ([]float64, error) {
 
 	if dwellMs <= 0 {
 		dwellMs = 50 // default 50ms
-		log.Printf("Using default dwell time: %d ms", dwellMs)
 	}
 
 	dwellDuration := time.Duration(dwellMs) * time.Millisecond
 	deadline := time.Now().Add(dwellDuration)
 
 	var frames [][]float64
+	frameCount := 0
 
 	for time.Now().Before(deadline) {
 		select {
@@ -385,6 +433,13 @@ func (e *Engine) collectSegment(ctx context.Context) ([]float64, error) {
 			// Timeout is expected, just stop collecting
 			break
 		}
+		frameCount++
+
+		// Discard first frame after tuning - may contain stale data
+		if frameCount == 1 {
+			continue
+		}
+
 		frames = append(frames, powers)
 	}
 
@@ -403,6 +458,5 @@ func (e *Engine) collectSegment(ctx context.Context) ([]float64, error) {
 		averaged[i] = sum / float64(len(frames))
 	}
 
-	log.Printf("Collected %d frames for segment (dwell: %d ms)", len(frames), dwellMs)
 	return averaged, nil
 }

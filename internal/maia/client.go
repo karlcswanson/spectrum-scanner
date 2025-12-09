@@ -114,6 +114,42 @@ func (c *Client) SetGain(db float64) error {
 	return c.patch("/api/ad9361", patch)
 }
 
+// normalizeGainMode converts lowercase gain modes to maia API format
+func normalizeGainMode(mode string) string {
+	switch mode {
+	case "manual", "Manual":
+		return "Manual"
+	case "slow_attack", "SlowAttack":
+		return "SlowAttack"
+	case "fast_attack", "FastAttack":
+		return "FastAttack"
+	case "hybrid", "Hybrid":
+		return "Hybrid"
+	default:
+		return "Manual"
+	}
+}
+
+// SetGainMode sets the AD9361 RX gain mode ("manual", "slow_attack", "fast_attack", "hybrid")
+func (c *Client) SetGainMode(mode string) error {
+	normalized := normalizeGainMode(mode)
+	patch := PatchAd9361{RxGainMode: &normalized}
+	return c.patch("/api/ad9361", patch)
+}
+
+// SetGainAndMode sets both RX gain and gain mode atomically
+func (c *Client) SetGainAndMode(db float64, mode string) error {
+	normalized := normalizeGainMode(mode)
+	patch := PatchAd9361{RxGain: &db, RxGainMode: &normalized}
+	return c.patch("/api/ad9361", patch)
+}
+
+// SetRxBandwidth sets the AD9361 RX RF bandwidth in Hz
+func (c *Client) SetRxBandwidth(hz uint32) error {
+	patch := PatchAd9361{RxRfBandwidth: &hz}
+	return c.patch("/api/ad9361", patch)
+}
+
 // SetSampleRate sets the AD9361 sampling frequency in Hz
 func (c *Client) SetSampleRate(hz uint32) error {
 	patch := PatchAd9361{SamplingFrequency: &hz}

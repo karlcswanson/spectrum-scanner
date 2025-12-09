@@ -45,12 +45,14 @@ type ScannerStatus struct {
 
 // Config holds scanner configuration
 type Config struct {
-	DeviceID    string `json:"device_id" yaml:"device_id"`
-	Name        string `json:"name" yaml:"name"`
-	Description string `json:"description" yaml:"description"`
-	Bands       []Band `json:"bands" yaml:"bands"`
-	DwellTimeMs int    `json:"dwell_time_ms" yaml:"dwell_time_ms"`
-	Mode        string `json:"mode" yaml:"mode"` // "Average" or "PeakDetect"
+	DeviceID    string  `json:"device_id" yaml:"device_id"`
+	Name        string  `json:"name" yaml:"name"`
+	Description string  `json:"description" yaml:"description"`
+	Bands       []Band  `json:"bands" yaml:"bands"`
+	DwellTimeMs int     `json:"dwell_time_ms" yaml:"dwell_time_ms"`
+	Mode        string  `json:"mode" yaml:"mode"`                 // "Average" or "PeakDetect"
+	RxGain      float64 `json:"rx_gain" yaml:"rx_gain"`           // RX gain in dB (0-73)
+	RxGainMode  string  `json:"rx_gain_mode" yaml:"rx_gain_mode"` // "manual", "slow_attack", "fast_attack"
 }
 
 // NormalizeBands converts MHz to Hz for all bands
