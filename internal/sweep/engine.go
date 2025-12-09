@@ -362,6 +362,7 @@ func (e *Engine) collectSegment(ctx context.Context) ([]float64, error) {
 
 	if dwellMs <= 0 {
 		dwellMs = 50 // default 50ms
+		log.Printf("Using default dwell time: %d ms", dwellMs)
 	}
 
 	dwellDuration := time.Duration(dwellMs) * time.Millisecond
@@ -402,6 +403,6 @@ func (e *Engine) collectSegment(ctx context.Context) ([]float64, error) {
 		averaged[i] = sum / float64(len(frames))
 	}
 
-	log.Printf("Collected %d frames for segment", len(frames))
+	log.Printf("Collected %d frames for segment (dwell: %d ms)", len(frames), dwellMs)
 	return averaged, nil
 }

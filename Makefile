@@ -16,13 +16,15 @@ build-arm:
 dev:
 	go run ./cmd/scanner \
 		-listen :8080 \
-		-maia https://192.168.2.1
+		-maia https://192.168.2.1 \
+		-config config.yaml
 
 # Run with auto-start (for testing)
 dev-auto:
 	go run ./cmd/scanner \
 		-listen :8080 \
 		-maia https://192.168.2.1 \
+		-config config.yaml \
 		-auto-start
 
 # Run locally built binary

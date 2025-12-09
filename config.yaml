@@ -5,7 +5,7 @@ name: Spectrum Scanner
 description: ADALM-Pluto Scanner
 
 # Scan settings
-dwell_time_ms: 50
+dwell_time_ms: 200
 mode: Average  # Average or PeakDetect
 
 # Frequency bands to scan

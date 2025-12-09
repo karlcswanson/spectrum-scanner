@@ -16,7 +16,7 @@ import (
 func main() {
 	// Detect environment and set appropriate defaults
 	defaultMaia := "https://192.168.2.1" // Dev: remote Pluto via USB (HTTPS)
-	defaultListen := ":8080"              // Dev: unprivileged port
+	defaultListen := ":8080"             // Dev: unprivileged port
 
 	if runtime.GOARCH == "arm" {
 		// Running on the Pluto itself
@@ -68,6 +68,7 @@ func main() {
 
 	log.Printf("Spectrum Scanner: %s (%s)", cfg.Name, cfg.DeviceID)
 	log.Printf("  Description: %s", cfg.Description)
+	log.Printf("  Dwell time: %d ms", cfg.DwellTimeMs)
 	log.Printf("  Bands configured: %d", len(cfg.Bands))
 	for _, band := range cfg.Bands {
 		status := "disabled"
