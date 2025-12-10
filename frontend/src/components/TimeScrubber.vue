@@ -34,6 +34,11 @@ const container = ref(null)
 const svgRef = ref(null)
 const selectedTime = ref(null)
 const isLive = ref(true)
+const isDragging = ref(false)
+
+// Store xScale for drag operations
+let currentXScale = null
+let currentMarkers = []
 
 // Filter timeline by band if specified
 const filteredTimeline = computed(() => {
@@ -65,6 +70,22 @@ function goLive() {
   selectTime(null)
 }
 
+// Find closest scan to a given time
+function findClosestScan(time) {
+  if (currentMarkers.length === 0) return null
+
+  let closest = null
+  let closestDiff = Infinity
+  for (const marker of currentMarkers) {
+    const diff = Math.abs(marker.date - time)
+    if (diff < closestDiff) {
+      closestDiff = diff
+      closest = marker
+    }
+  }
+  return closest
+}
+
 function draw() {
   if (!svgRef.value || !container.value) return
 
@@ -92,18 +113,14 @@ function draw() {
     .domain([timeRange.value.start, timeRange.value.end])
     .range([0, plotWidth])
 
+  // Store for drag operations
+  currentXScale = xScale
+
   // Draw time axis
   const tickCount = Math.min(12, Math.floor(plotWidth / 80))
   const xAxis = d3.axisBottom(xScale)
     .ticks(tickCount)
-    .tickFormat(d => {
-      const hours = d.getHours()
-      const minutes = d.getMinutes()
-      if (minutes === 0) {
-        return d3.timeFormat('%H:%M')(d)
-      }
-      return d3.timeFormat('%H:%M')(d)
-    })
+    .tickFormat(d => d3.timeFormat('%H:%M')(d))
 
   chart.append('g')
     .attr('transform', `translate(0,${plotHeight})`)
@@ -123,7 +140,10 @@ function draw() {
     }))
     .filter(t => t.date >= timeRange.value.start && t.date <= timeRange.value.end)
 
-  // Group nearby markers to avoid overlap
+  // Store for drag operations
+  currentMarkers = markers
+
+  // Draw markers
   const markerRadius = 3
   chart.selectAll('.scan-marker')
     .data(markers)
@@ -138,28 +158,11 @@ function draw() {
       }
       return '#4a5568'
     })
-    .attr('cursor', 'pointer')
-    .on('click', (event, d) => {
-      selectTime(d.date)
-    })
-
-  // Draw selected time indicator
-  if (selectedTime.value) {
-    const x = xScale(selectedTime.value)
-    if (x >= 0 && x <= plotWidth) {
-      chart.append('line')
-        .attr('x1', x)
-        .attr('y1', 0)
-        .attr('x2', x)
-        .attr('y2', plotHeight)
-        .attr('stroke', '#00d4ff')
-        .attr('stroke-width', 2)
-    }
-  }
 
   // Draw "now" indicator
   const nowX = xScale(new Date())
   chart.append('line')
+    .attr('class', 'now-line')
     .attr('x1', nowX)
     .attr('y1', 0)
     .attr('x2', nowX)
@@ -168,8 +171,80 @@ function draw() {
     .attr('stroke-width', 1)
     .attr('stroke-dasharray', '4,2')
 
-  // Click anywhere on timeline to seek
-  chart.append('rect')
+  // Create scrubber handle group
+  const scrubberX = selectedTime.value ? xScale(selectedTime.value) : nowX
+  const scrubber = chart.append('g')
+    .attr('class', 'scrubber')
+    .attr('transform', `translate(${Math.max(0, Math.min(plotWidth, scrubberX))}, 0)`)
+    .style('cursor', 'ew-resize')
+
+  // Scrubber line
+  scrubber.append('line')
+    .attr('x1', 0)
+    .attr('y1', 0)
+    .attr('x2', 0)
+    .attr('y2', plotHeight)
+    .attr('stroke', isLive.value ? '#22c55e' : '#00d4ff')
+    .attr('stroke-width', 2)
+
+  // Scrubber handle (triangle/arrow at top)
+  scrubber.append('path')
+    .attr('d', 'M-6,0 L6,0 L0,8 Z')
+    .attr('fill', isLive.value ? '#22c55e' : '#00d4ff')
+
+  // Scrubber handle (triangle at bottom)
+  scrubber.append('path')
+    .attr('d', `M-6,${plotHeight} L6,${plotHeight} L0,${plotHeight - 8} Z`)
+    .attr('fill', isLive.value ? '#22c55e' : '#00d4ff')
+
+  // Invisible wider rect for easier dragging
+  scrubber.append('rect')
+    .attr('x', -10)
+    .attr('y', 0)
+    .attr('width', 20)
+    .attr('height', plotHeight)
+    .attr('fill', 'transparent')
+
+  // Track last emitted scan to avoid duplicate fetches
+  let lastEmittedScanId = null
+
+  // Drag behavior
+  const drag = d3.drag()
+    .on('start', () => {
+      isDragging.value = true
+      lastEmittedScanId = null
+    })
+    .on('drag', (event) => {
+      const x = Math.max(0, Math.min(plotWidth, event.x))
+      scrubber.attr('transform', `translate(${x}, 0)`)
+
+      // Update line color while dragging
+      scrubber.select('line').attr('stroke', '#00d4ff')
+      scrubber.selectAll('path').attr('fill', '#00d4ff')
+
+      // Find and show closest scan as we drag
+      const time = xScale.invert(x)
+      const closest = findClosestScan(time)
+      if (closest && closest.id !== lastEmittedScanId) {
+        lastEmittedScanId = closest.id
+        selectTime(closest.date)
+      }
+    })
+    .on('end', () => {
+      isDragging.value = false
+      // Snap to the currently selected scan position
+      if (selectedTime.value) {
+        const snapX = xScale(selectedTime.value)
+        scrubber.attr('transform', `translate(${Math.max(0, Math.min(plotWidth, snapX))}, 0)`)
+      }
+      // Trigger redraw to update marker highlights
+      draw()
+    })
+
+  scrubber.call(drag)
+
+  // Click anywhere on timeline to seek (behind scrubber)
+  chart.insert('rect', ':first-child')
     .attr('width', plotWidth)
     .attr('height', plotHeight)
     .attr('fill', 'transparent')
@@ -177,18 +252,7 @@ function draw() {
     .on('click', (event) => {
       const [x] = d3.pointer(event)
       const time = xScale.invert(x)
-
-      // Find closest scan to clicked time
-      let closest = null
-      let closestDiff = Infinity
-      for (const marker of markers) {
-        const diff = Math.abs(marker.date - time)
-        if (diff < closestDiff) {
-          closestDiff = diff
-          closest = marker
-        }
-      }
-
+      const closest = findClosestScan(time)
       if (closest) {
         selectTime(closest.date)
       }
@@ -206,7 +270,12 @@ onMounted(() => {
   draw()
 })
 
-watch(() => [props.timeline, selectedTime.value, isLive.value], draw, { deep: true })
+// Don't redraw while dragging - it disrupts the drag interaction
+watch(() => [props.timeline, selectedTime.value, isLive.value], () => {
+  if (!isDragging.value) {
+    draw()
+  }
+}, { deep: true })
 
 // Format selected time for display
 const selectedTimeDisplay = computed(() => {
