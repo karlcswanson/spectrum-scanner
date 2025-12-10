@@ -8,6 +8,7 @@ import (
 
 	"spectrum-pluto/internal/maia"
 	"spectrum-pluto/internal/models"
+	"spectrum-pluto/internal/mqtt"
 )
 
 const (
@@ -21,6 +22,7 @@ const (
 type Engine struct {
 	maia   *maia.Client
 	config *models.Config
+	mqtt   *mqtt.Client
 
 	mu          sync.RWMutex
 	running     bool
@@ -33,10 +35,11 @@ type Engine struct {
 }
 
 // NewEngine creates a new sweep engine
-func NewEngine(maiaClient *maia.Client, config *models.Config) *Engine {
+func NewEngine(maiaClient *maia.Client, config *models.Config, mqttClient *mqtt.Client) *Engine {
 	return &Engine{
 		maia:        maiaClient,
 		config:      config,
+		mqtt:        mqttClient,
 		subscribers: make([]chan models.ScanLine, 0),
 	}
 }
@@ -64,16 +67,24 @@ func (e *Engine) Unsubscribe(ch chan models.ScanLine) {
 	}
 }
 
-// broadcast sends a scan result to all subscribers
-func (e *Engine) broadcast(scan models.ScanLine) {
+// broadcast sends a scan result to all subscribers and MQTT
+func (e *Engine) broadcast(scan models.ScanLine, bandName string) {
 	e.subscribersMu.RLock()
 	defer e.subscribersMu.RUnlock()
 
+	// Send to local WebSocket subscribers
 	for _, ch := range e.subscribers {
 		select {
 		case ch <- scan:
 		default:
 			// Drop if subscriber is slow (non-blocking)
+		}
+	}
+
+	// Publish to MQTT if configured
+	if e.mqtt != nil && e.mqtt.IsConnected() {
+		if err := e.mqtt.PublishScan(scan, bandName); err != nil {
+			log.Printf("MQTT publish error: %v", err)
 		}
 	}
 }
@@ -254,7 +265,7 @@ func (e *Engine) runLoop(ctx context.Context) {
 				continue
 			}
 
-			e.broadcast(scan)
+			e.broadcast(scan, band.Name)
 		}
 	}
 }

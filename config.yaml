@@ -1,9 +1,5 @@
 # Spectrum Scanner Configuration
 
-# Scanner identity
-name: Spectrum Scanner
-description: ADALM-Pluto Scanner
-
 # Scan settings
 dwell_time_ms: 200
 mode: Average  # Average or PeakDetect
@@ -36,8 +32,26 @@ bands:
     stop_mhz: 2500
     enabled: false
 
+  - name: WiFi 5
+    start_mhz: 5150
+    stop_mhz: 5850
+    enabled: false
+
 # Add custom bands as needed:
 #  - name: ISM 900
 #    start_mhz: 902
 #    stop_mhz: 928
 #    enabled: false
+
+# MQTT publishing (optional)
+# Uncomment to enable publishing scan data to a central server
+mqtt:
+  enabled: true
+  broker: "tcp://localhost:1883"
+  # Scanner identity (used in MQTT topics and messages)
+  # id: ""              # Unique scanner ID (auto-generated UUID if empty)
+  # name: ""            # Human-readable name (e.g., "Studio A Scanner")
+  # location: ""        # Physical location (e.g., "Studio A", "Main Stage")
+  # username: ""
+  # password: ""
+  # topic_prefix: "spectrum"

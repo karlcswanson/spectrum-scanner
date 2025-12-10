@@ -43,16 +43,29 @@ type ScannerStatus struct {
 	CurrentBand *string `json:"current_band,omitempty"`
 }
 
+// MQTTConfig holds optional MQTT publishing settings
+type MQTTConfig struct {
+	Enabled     bool   `json:"enabled" yaml:"enabled"`
+	Broker      string `json:"broker" yaml:"broker"`     // e.g., "tcp://localhost:1883"
+	ID          string `json:"id" yaml:"id"`             // Unique scanner ID (auto-generated UUID if empty)
+	Name        string `json:"name" yaml:"name"`         // Human-readable name
+	Location    string `json:"location" yaml:"location"` // Physical location
+	Username    string `json:"username" yaml:"username"`
+	Password    string `json:"password" yaml:"password"`
+	TopicPrefix string `json:"topic_prefix" yaml:"topic_prefix"` // defaults to "spectrum"
+}
+
 // Config holds scanner configuration
 type Config struct {
-	DeviceID    string  `json:"device_id" yaml:"device_id"`
-	Name        string  `json:"name" yaml:"name"`
-	Description string  `json:"description" yaml:"description"`
-	Bands       []Band  `json:"bands" yaml:"bands"`
-	DwellTimeMs int     `json:"dwell_time_ms" yaml:"dwell_time_ms"`
-	Mode        string  `json:"mode" yaml:"mode"`                 // "Average" or "PeakDetect"
-	RxGain      float64 `json:"rx_gain" yaml:"rx_gain"`           // RX gain in dB (0-73)
-	RxGainMode  string  `json:"rx_gain_mode" yaml:"rx_gain_mode"` // "manual", "slow_attack", "fast_attack"
+	DeviceID    string      `json:"device_id" yaml:"device_id"`
+	Name        string      `json:"name" yaml:"name"`
+	Description string      `json:"description" yaml:"description"`
+	Bands       []Band      `json:"bands" yaml:"bands"`
+	DwellTimeMs int         `json:"dwell_time_ms" yaml:"dwell_time_ms"`
+	Mode        string      `json:"mode" yaml:"mode"`                     // "Average" or "PeakDetect"
+	RxGain      float64     `json:"rx_gain" yaml:"rx_gain"`               // RX gain in dB (0-73)
+	RxGainMode  string      `json:"rx_gain_mode" yaml:"rx_gain_mode"`     // "manual", "slow_attack", "fast_attack"
+	MQTT        *MQTTConfig `json:"mqtt,omitempty" yaml:"mqtt,omitempty"` // Optional MQTT publishing
 }
 
 // NormalizeBands converts MHz to Hz for all bands

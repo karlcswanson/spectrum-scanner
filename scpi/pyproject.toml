@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "spectrum-scpi"
+version = "0.1.0"
+description = "SCPI spectrum analyzer CLI for Spectrum Server"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "click>=8.0",
+    "paho-mqtt>=2.0",
+    "pyvisa>=1.13",
+    "pyvisa-py>=0.7",  # Pure Python VISA backend
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "black>=23.0",
+]
+
+[project.scripts]
+spectrum-scpi = "spectrum_scpi.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]

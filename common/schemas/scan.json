@@ -1,0 +1,97 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://spectrum.example.com/schemas/scan.json",
+  "title": "Spectrum Scan",
+  "description": "A spectrum scan message from any source (Pluto, SCPI analyzer, etc.)",
+  "type": "object",
+  "required": ["source", "scan"],
+  "properties": {
+    "source": {
+      "type": "object",
+      "description": "Information about the scanner that produced this scan",
+      "required": ["id", "type"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier for this scanner"
+        },
+        "name": {
+          "type": "string",
+          "description": "Human-readable name"
+        },
+        "type": {
+          "type": "string",
+          "enum": ["pluto", "scpi-tti", "scpi-owon", "scpi-generic", "import"],
+          "description": "Scanner type"
+        },
+        "location": {
+          "type": "string",
+          "description": "Physical location (e.g., 'Studio A', 'Main Stage')"
+        }
+      }
+    },
+    "scan": {
+      "type": "object",
+      "description": "The actual scan data",
+      "required": ["timestamp", "hz_lo", "hz_hi", "step", "power"],
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time",
+          "description": "ISO 8601 timestamp of scan completion"
+        },
+        "band": {
+          "type": "string",
+          "description": "Name of the band scanned (e.g., 'UHF', 'WiFi 2.4')"
+        },
+        "hz_lo": {
+          "type": "number",
+          "description": "Start frequency in Hz"
+        },
+        "hz_hi": {
+          "type": "number",
+          "description": "Stop frequency in Hz"
+        },
+        "step": {
+          "type": "number",
+          "description": "Frequency step/bin size in Hz"
+        },
+        "power": {
+          "type": "array",
+          "items": {"type": "number"},
+          "description": "Power readings in dBm, one per frequency bin"
+        }
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "description": "Optional scan metadata",
+      "properties": {
+        "gain_db": {
+          "type": "number",
+          "description": "RX gain in dB"
+        },
+        "gain_mode": {
+          "type": "string",
+          "description": "Gain mode (manual, slow_attack, etc.)"
+        },
+        "dwell_ms": {
+          "type": "integer",
+          "description": "Dwell time per segment in milliseconds"
+        },
+        "antenna": {
+          "type": "string",
+          "description": "Antenna port used (A, B)"
+        },
+        "rbw_hz": {
+          "type": "number",
+          "description": "Resolution bandwidth in Hz"
+        },
+        "averaging": {
+          "type": "integer",
+          "description": "Number of sweeps averaged"
+        }
+      }
+    }
+  }
+}

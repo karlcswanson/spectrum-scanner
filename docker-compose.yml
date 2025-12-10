@@ -1,0 +1,83 @@
+version: '3.8'
+
+services:
+  # MQTT Broker
+  mosquitto:
+    image: eclipse-mosquitto:2
+    ports:
+      - "1883:1883"
+      - "9001:9001"
+    volumes:
+      - ./docker/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf
+      - mosquitto_data:/mosquitto/data
+      - mosquitto_log:/mosquitto/log
+
+  # Redis (for Django Channels)
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  # Django Backend
+  server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - DEBUG=true
+      - DJANGO_SECRET_KEY=dev-secret-change-me
+      - REDIS_HOST=redis
+      - MQTT_BROKER_HOST=mosquitto
+      - DB_ENGINE=django.db.backends.sqlite3
+      - DB_NAME=/app/data/db.sqlite3
+    volumes:
+      - ./server:/app
+      - server_data:/app/data
+    depends_on:
+      - redis
+      - mosquitto
+    command: >
+      sh -c "python manage.py migrate &&
+             python manage.py runserver 0.0.0.0:8000"
+
+  # MQTT Bridge (separate process)
+  mqtt-bridge:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    environment:
+      - REDIS_HOST=redis
+      - MQTT_BROKER_HOST=mosquitto
+      - DB_ENGINE=django.db.backends.sqlite3
+      - DB_NAME=/app/data/db.sqlite3
+    volumes:
+      - ./server:/app
+      - server_data:/app/data
+    depends_on:
+      - redis
+      - mosquitto
+      - server
+    command: python manage.py mqtt_bridge
+
+  # Vue Frontend (dev server)
+  frontend:
+    image: node:20-alpine
+    working_dir: /app
+    ports:
+      - "5173:5173"
+    environment:
+      - DOCKER_ENV=true
+    volumes:
+      - ./frontend:/app
+      - frontend_modules:/app/node_modules
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    depends_on:
+      - server
+
+volumes:
+  mosquitto_data:
+  mosquitto_log:
+  server_data:
+  frontend_modules:

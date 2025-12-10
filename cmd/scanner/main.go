@@ -10,6 +10,7 @@ import (
 	"spectrum-pluto/internal/config"
 	"spectrum-pluto/internal/maia"
 	"spectrum-pluto/internal/models"
+	"spectrum-pluto/internal/mqtt"
 	"spectrum-pluto/internal/sweep"
 )
 
@@ -98,8 +99,24 @@ func main() {
 		log.Printf("  RX Gain: %.1f dB (%s)", ad9361.RxGain, ad9361.RxGainMode)
 	}
 
+	// Create MQTT client if configured
+	var mqttClient *mqtt.Client
+	if cfg.MQTT != nil && cfg.MQTT.Enabled {
+		log.Printf("MQTT enabled, connecting to %s...", cfg.MQTT.Broker)
+		mqttClient, err = mqtt.NewClient(cfg.MQTT, cfg)
+		if err != nil {
+			log.Printf("Warning: Failed to create MQTT client: %v", err)
+		} else if mqttClient != nil {
+			if err := mqttClient.Connect(); err != nil {
+				log.Printf("Warning: Failed to connect to MQTT broker: %v", err)
+			} else {
+				defer mqttClient.Disconnect()
+			}
+		}
+	}
+
 	// Create sweep engine
-	engine := sweep.NewEngine(maiaClient, cfg)
+	engine := sweep.NewEngine(maiaClient, cfg, mqttClient)
 
 	// Auto-start scanning if requested
 	if *autoStart {

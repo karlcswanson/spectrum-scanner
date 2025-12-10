@@ -12,7 +12,7 @@ build-arm:
 	GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 \
 		go build -ldflags="-s -w" -o bin/scanner-arm ./cmd/scanner
 
-# Development: run on Mac, talk to Pluto over USB
+# Development: run on Mac, talk to Plany uto over USB
 dev:
 	go run ./cmd/scanner \
 		-listen :8080 \
