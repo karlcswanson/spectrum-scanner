@@ -65,6 +65,7 @@ type Config struct {
 	Mode        string      `json:"mode" yaml:"mode"`                     // "Average" or "PeakDetect"
 	RxGain      float64     `json:"rx_gain" yaml:"rx_gain"`               // RX gain in dB (0-73)
 	RxGainMode  string      `json:"rx_gain_mode" yaml:"rx_gain_mode"`     // "manual", "slow_attack", "fast_attack"
+	AutoStart   bool        `json:"auto_start" yaml:"auto_start"`         // Start scanning automatically on boot
 	MQTT        *MQTTConfig `json:"mqtt,omitempty" yaml:"mqtt,omitempty"` // Optional MQTT publishing
 }
 

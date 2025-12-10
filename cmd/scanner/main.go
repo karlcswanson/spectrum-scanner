@@ -118,8 +118,8 @@ func main() {
 	// Create sweep engine
 	engine := sweep.NewEngine(maiaClient, cfg, mqttClient)
 
-	// Auto-start scanning if requested
-	if *autoStart {
+	// Auto-start scanning if requested (via flag or config)
+	if *autoStart || cfg.AutoStart {
 		log.Println("Auto-starting scanner...")
 		if err := engine.Start(); err != nil {
 			log.Printf("Warning: Failed to auto-start scanner: %v", err)
