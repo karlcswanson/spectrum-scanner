@@ -158,7 +158,10 @@ function draw() {
   const startMHz = startHz / 1e6
   const stopMHz = stopHz / 1e6
   const spanMHz = stopMHz - startMHz
-  const isUHF = startMHz >= 450 && stopMHz <= 700
+
+  // Only use ATSC channel grid if we're in the actual TV band (470-608 MHz)
+  const channels = getATSCChannels(startMHz, stopMHz)
+  const isUHF = channels.length > 0
 
   // Select and clear SVG
   const svg = d3.select(svgRef.value)
@@ -189,9 +192,7 @@ function draw() {
 
   // Vertical grid lines
   if (isUHF) {
-    // UHF: 6 MHz channel boundaries
-    const channels = getATSCChannels(startMHz, stopMHz)
-
+    // UHF: 6 MHz channel boundaries (channels already computed above)
     channels.forEach((ch, idx) => {
       if (ch.start >= startMHz) {
         const x = xScale(ch.start * 1e6)
@@ -239,8 +240,7 @@ function draw() {
     .attr('transform', `translate(0,${plotHeight})`)
 
   if (isUHF) {
-    // Show frequency at channel boundaries
-    const channels = getATSCChannels(startMHz, stopMHz)
+    // Show frequency at channel boundaries (channels already computed above)
     const tickValues = []
     channels.forEach((ch, idx) => {
       if (ch.start >= startMHz) tickValues.push(ch.start * 1e6)
