@@ -59,11 +59,29 @@ const isLive = ref(true)
 const timeline = ref([])
 const historicalScan = ref(null)
 
-// Active scan - either live or historical
+// Are we actually showing live data right now?
+const showingLive = computed(() => {
+  return props.scan && props.scan.power && props.scan.power.length > 0
+})
+
+// Current time being displayed (for scrubber positioning)
+const currentDisplayTime = computed(() => {
+  if (showingLive.value) {
+    return null // Live mode - scrubber at "now"
+  }
+  if (historicalScan.value?.timestamp) {
+    return new Date(historicalScan.value.timestamp)
+  }
+  return null
+})
+
+// Active scan - prefer live, fall back to historical
 const activeScan = computed(() => {
-  if (isLive.value) {
+  // If we have live scan data, use it
+  if (props.scan && props.scan.power && props.scan.power.length > 0) {
     return props.scan
   }
+  // Otherwise use historical scan if available
   return historicalScan.value
 })
 
@@ -147,14 +165,36 @@ function handleLive() {
   historicalScan.value = null
 }
 
-// Load timeline on mount if enabled
-onMounted(() => {
-  loadTimeline()
+// Check if we have valid live scan data
+function hasLiveScan() {
+  return props.scan && props.scan.power && props.scan.power.length > 0
+}
+
+// Load the most recent historical scan
+async function loadLatestHistorical() {
+  if (timeline.value.length > 0) {
+    const latestTime = new Date(timeline.value[timeline.value.length - 1].timestamp)
+    await handleTimeSelect(latestTime)
+  }
+}
+
+// Load timeline on mount if enabled, and fetch latest scan if no live data
+onMounted(async () => {
+  await loadTimeline()
+
+  // If no live scan and we have timeline data, load the most recent scan
+  if (!hasLiveScan()) {
+    await loadLatestHistorical()
+  }
 })
 
 // Reload timeline when band changes
-watch(() => props.band.name, () => {
-  loadTimeline()
+watch(() => props.band.name, async () => {
+  await loadTimeline()
+  // Load latest historical if no live scan
+  if (!hasLiveScan()) {
+    await loadLatestHistorical()
+  }
 })
 
 // Periodically refresh timeline
@@ -175,7 +215,7 @@ onMounted(() => {
           <span class="text-gray-500 font-normal text-sm ml-2">
             ({{ freqRange }})
           </span>
-          <span v-if="!isLive" class="text-yellow-400 text-xs ml-2">
+          <span v-if="!showingLive && activeScan" class="text-yellow-400 text-xs ml-2">
             Historical
           </span>
         </h2>
@@ -240,6 +280,8 @@ onMounted(() => {
       :timeline="timeline"
       :max-hours="timelineHours"
       :height="50"
+      :showing-live="showingLive"
+      :current-time="currentDisplayTime"
       class="mt-3"
       @select="handleTimeSelect"
       @live="handleLive"

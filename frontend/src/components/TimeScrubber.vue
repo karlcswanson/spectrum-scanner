@@ -26,15 +26,35 @@ const props = defineProps({
     type: Number,
     default: 60,
   },
+  // External control: are we actually showing live data?
+  showingLive: {
+    type: Boolean,
+    default: true,
+  },
+  // Currently selected/displayed time (for positioning scrubber)
+  currentTime: {
+    type: Date,
+    default: null,
+  },
 })
 
 const emit = defineEmits(['select', 'live'])
 
 const container = ref(null)
 const svgRef = ref(null)
-const selectedTime = ref(null)
-const isLive = ref(true)
 const isDragging = ref(false)
+
+// Local state for drag operations - tracks where scrubber should be
+const dragTime = ref(null)
+
+// Effective selected time: use drag time during interaction, otherwise use prop
+const selectedTime = computed(() => {
+  if (dragTime.value) return dragTime.value
+  return props.currentTime
+})
+
+// Is the display in live mode?
+const isLive = computed(() => props.showingLive && !dragTime.value)
 
 // Store xScale for drag operations
 let currentXScale = null
@@ -56,12 +76,10 @@ const timeRange = computed(() => {
 function selectTime(time) {
   if (time === null) {
     // Go live
-    isLive.value = true
-    selectedTime.value = null
+    dragTime.value = null
     emit('live')
   } else {
-    isLive.value = false
-    selectedTime.value = time
+    dragTime.value = time
     emit('select', time)
   }
 }
@@ -268,6 +286,21 @@ onMounted(() => {
     resizeObserver.observe(container.value)
   }
   draw()
+})
+
+// Sync dragTime with props.currentTime when it updates from parent
+// (e.g., when parent loads historical scan on mount)
+watch(() => props.currentTime, (newTime) => {
+  if (newTime && !isDragging.value) {
+    dragTime.value = newTime
+  }
+})
+
+// Clear dragTime when going live
+watch(() => props.showingLive, (live) => {
+  if (live) {
+    dragTime.value = null
+  }
 })
 
 // Don't redraw while dragging - it disrupts the drag interaction

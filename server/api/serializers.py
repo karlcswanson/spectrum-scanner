@@ -10,18 +10,20 @@ class BandSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Band
-        fields = ['id', 'name', 'start_hz', 'stop_hz', 'start_mhz', 'stop_mhz', 'description', 'color']
+        fields = ['id', 'name', 'start_hz', 'stop_hz', 'start_mhz', 'stop_mhz', 'enabled', 'description', 'color']
 
 
 class ScannerSerializer(serializers.ModelSerializer):
+    bands = BandSerializer(many=True, read_only=True)
+
     class Meta:
         model = Scanner
         fields = [
             'id', 'name', 'scanner_type', 'location', 'description',
             'online', 'scanning', 'current_band', 'last_seen', 'config',
-            'created_at', 'updated_at'
+            'bands', 'created_at', 'updated_at'
         ]
-        read_only_fields = ['online', 'scanning', 'current_band', 'last_seen', 'created_at', 'updated_at']
+        read_only_fields = ['online', 'scanning', 'current_band', 'last_seen', 'bands', 'created_at', 'updated_at']
 
 
 class ScanSerializer(serializers.ModelSerializer):
