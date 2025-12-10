@@ -416,7 +416,7 @@ func (e *Engine) collectSegment(ctx context.Context) ([]float64, error) {
 	deadline := time.Now().Add(dwellDuration)
 
 	var frames [][]float64
-	frameCount := 0
+	firstRead := true
 
 	for time.Now().Before(deadline) {
 		select {
@@ -425,27 +425,38 @@ func (e *Engine) collectSegment(ctx context.Context) ([]float64, error) {
 		default:
 		}
 
-		// Set read deadline to avoid blocking forever
-		conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+		// Set read deadline - longer for first read to allow maia to start streaming
+		readTimeout := 100 * time.Millisecond
+		if firstRead {
+			readTimeout = 500 * time.Millisecond
+		}
+		conn.SetReadDeadline(time.Now().Add(readTimeout))
 
 		powers, err := maia.ReadFFTFrame(conn)
 		if err != nil {
-			// Timeout is expected, just stop collecting
+			if firstRead {
+				// First read failed - maia may not be ready, log and continue
+				log.Printf("Warning: first FFT read timed out, retrying...")
+				firstRead = false
+				continue
+			}
+			// Subsequent timeout is expected, just stop collecting
 			break
 		}
-		frameCount++
-
-		// Discard first frame after tuning - may contain stale data
-		if frameCount == 1 {
-			continue
-		}
+		firstRead = false
 
 		frames = append(frames, powers)
 	}
 
 	if len(frames) == 0 {
-		// Return empty spectrum if no frames collected
+		log.Printf("Warning: no FFT frames collected")
 		return make([]float64, maia.FFTSize), nil
+	}
+
+	// If we got multiple frames, skip the first one (may contain stale data)
+	// But if we only got one frame, use it
+	if len(frames) > 1 {
+		frames = frames[1:]
 	}
 
 	// Average all collected frames
