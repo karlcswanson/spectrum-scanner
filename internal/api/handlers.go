@@ -100,6 +100,11 @@ func (s *Server) handlePutBands(w http.ResponseWriter, r *http.Request) {
 	s.config.Bands = bands
 	s.engine.UpdateConfig(s.config)
 
+	// Republish config to MQTT so central server sees the change
+	if s.mqtt != nil && s.mqtt.IsConnected() {
+		s.mqtt.PublishConfig()
+	}
+
 	log.Printf("Bands updated: %d bands configured", len(bands))
 
 	w.Header().Set("Content-Type", "application/json")

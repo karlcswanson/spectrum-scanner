@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"spectrum-pluto/internal/models"
+	"spectrum-pluto/internal/mqtt"
 	"spectrum-pluto/internal/sweep"
 )
 
@@ -17,14 +18,16 @@ var webFS embed.FS
 type Server struct {
 	engine *sweep.Engine
 	config *models.Config
+	mqtt   *mqtt.Client
 	mux    *http.ServeMux
 }
 
 // NewServer creates a new HTTP server
-func NewServer(engine *sweep.Engine, config *models.Config) *Server {
+func NewServer(engine *sweep.Engine, config *models.Config, mqttClient *mqtt.Client) *Server {
 	s := &Server{
 		engine: engine,
 		config: config,
+		mqtt:   mqttClient,
 		mux:    http.NewServeMux(),
 	}
 	s.setupRoutes()

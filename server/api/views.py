@@ -167,8 +167,20 @@ class ScanViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        from dateutil.parser import parse as parse_datetime
-        target_time = parse_datetime(timestamp_str)
+        from datetime import datetime, timezone as dt_timezone
+
+        # Parse ISO timestamp - handle 'Z' suffix for UTC
+        timestamp_str = timestamp_str.replace('Z', '+00:00')
+        try:
+            target_time = datetime.fromisoformat(timestamp_str)
+        except ValueError:
+            # Fallback for other formats
+            from dateutil.parser import parse as parse_datetime
+            target_time = parse_datetime(timestamp_str)
+
+        # Ensure timezone-aware for comparison with Django timestamps
+        if target_time.tzinfo is None:
+            target_time = target_time.replace(tzinfo=dt_timezone.utc)
 
         # Find the closest scan to the target time
         queryset = Scan.objects.filter(scanner_id=scanner_id)

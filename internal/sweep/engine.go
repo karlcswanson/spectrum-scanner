@@ -180,6 +180,11 @@ func (e *Engine) Start() error {
 	e.cancel = cancel
 	e.mu.Unlock()
 
+	// Publish scanning status
+	if e.mqtt != nil && e.mqtt.IsConnected() {
+		e.mqtt.PublishStatus(true, true, "")
+	}
+
 	go e.runLoop(ctx)
 	return nil
 }
@@ -197,6 +202,11 @@ func (e *Engine) Stop() {
 	if e.cancel != nil {
 		e.cancel()
 		e.cancel = nil
+	}
+
+	// Publish stopped status
+	if e.mqtt != nil && e.mqtt.IsConnected() {
+		e.mqtt.PublishStatus(true, false, "")
 	}
 }
 
@@ -250,6 +260,11 @@ func (e *Engine) runLoop(ctx context.Context) {
 			e.mu.Lock()
 			e.currentBand = band.Name
 			e.mu.Unlock()
+
+			// Publish current band to MQTT
+			if e.mqtt != nil && e.mqtt.IsConnected() {
+				e.mqtt.PublishStatus(true, true, band.Name)
+			}
 
 			log.Printf("Sweeping band: %s (%.1f - %.1f MHz)",
 				band.Name,

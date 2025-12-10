@@ -1,4 +1,7 @@
 .idea/
 CLAUDE.md
+claude_notes.md
 reference/
 bin/
+frontend/node_modules/*
+frontend/dist/*

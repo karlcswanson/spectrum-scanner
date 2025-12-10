@@ -39,6 +39,11 @@ const props = defineProps({
     type: Boolean,
     default: false,
   },
+  // Timeline lookback in hours (default 24, use 0.167 for 10 min)
+  timelineHours: {
+    type: Number,
+    default: 24,
+  },
 })
 
 const store = useScannersStore()
@@ -117,7 +122,9 @@ function resetPeakHold() {
 // Timeline handlers
 async function loadTimeline() {
   if (props.showTimeline) {
-    timeline.value = await store.fetchTimeline(props.scannerId, props.band.name)
+    // Convert hours to integer for API (minimum 1 hour for API, but we filter client-side)
+    const apiHours = Math.max(1, Math.ceil(props.timelineHours))
+    timeline.value = await store.fetchTimeline(props.scannerId, props.band.name, apiHours)
   }
 }
 
@@ -231,7 +238,7 @@ onMounted(() => {
       :scanner-id="scannerId"
       :band-name="band.name"
       :timeline="timeline"
-      :max-hours="24"
+      :max-hours="timelineHours"
       :height="50"
       class="mt-3"
       @select="handleTimeSelect"

@@ -127,7 +127,7 @@ func main() {
 	}
 
 	// Create and start HTTP server
-	server := api.NewServer(engine, cfg)
+	server := api.NewServer(engine, cfg, mqttClient)
 	log.Printf("Starting HTTP server on %s", *listenAddr)
 	log.Printf("API endpoints:")
 	log.Printf("  GET  /api/status     - Scanner status")
