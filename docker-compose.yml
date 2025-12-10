@@ -12,13 +12,7 @@ services:
       - mosquitto_data:/mosquitto/data
       - mosquitto_log:/mosquitto/log
 
-  # Redis (for Django Channels)
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
-
-  # Django Backend
+  # Django Backend (REST API for historical data)
   server:
     build:
       context: ./server
@@ -28,7 +22,6 @@ services:
     environment:
       - DEBUG=true
       - DJANGO_SECRET_KEY=dev-secret-change-me
-      - REDIS_HOST=redis
       - MQTT_BROKER_HOST=mosquitto
       - DB_ENGINE=django.db.backends.sqlite3
       - DB_NAME=/app/data/db.sqlite3
@@ -36,19 +29,17 @@ services:
       - ./server:/app
       - server_data:/app/data
     depends_on:
-      - redis
       - mosquitto
     command: >
       sh -c "python manage.py migrate &&
              python manage.py runserver 0.0.0.0:8000"
 
-  # MQTT Bridge (separate process)
+  # MQTT Bridge (stores scans to database)
   mqtt-bridge:
     build:
       context: ./server
       dockerfile: Dockerfile
     environment:
-      - REDIS_HOST=redis
       - MQTT_BROKER_HOST=mosquitto
       - DB_ENGINE=django.db.backends.sqlite3
       - DB_NAME=/app/data/db.sqlite3
@@ -56,7 +47,6 @@ services:
       - ./server:/app
       - server_data:/app/data
     depends_on:
-      - redis
       - mosquitto
       - server
     command: python manage.py mqtt_bridge

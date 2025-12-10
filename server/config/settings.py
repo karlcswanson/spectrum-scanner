@@ -19,7 +19,6 @@ ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1,server').split('
 
 # Application definition
 INSTALLED_APPS = [
-    'daphne',  # ASGI server, must be first
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -29,7 +28,6 @@ INSTALLED_APPS = [
     # Third party
     'rest_framework',
     'corsheaders',
-    'channels',
     # Local apps
     'core',
     'api',
@@ -66,7 +64,6 @@ TEMPLATES = [
 ]
 
 WSGI_APPLICATION = 'config.wsgi.application'
-ASGI_APPLICATION = 'config.asgi.application'
 
 # Database
 DATABASES = {
@@ -117,18 +114,6 @@ CORS_ALLOWED_ORIGINS = os.getenv(
     'http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173'
 ).split(',')
 CORS_ALLOW_ALL_ORIGINS = DEBUG  # Allow all in dev
-
-# Channels (WebSocket)
-CHANNEL_LAYERS = {
-    'default': {
-        'BACKEND': 'channels_redis.core.RedisChannelLayer',
-        'CONFIG': {
-            'hosts': [(os.getenv('REDIS_HOST', 'localhost'), int(os.getenv('REDIS_PORT', 6379)))],
-        },
-    } if os.getenv('REDIS_HOST') else {
-        'BACKEND': 'channels.layers.InMemoryChannelLayer',
-    }
-}
 
 # MQTT settings
 MQTT_BROKER_HOST = os.getenv('MQTT_BROKER_HOST', 'localhost')

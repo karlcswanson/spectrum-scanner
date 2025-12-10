@@ -3,11 +3,6 @@ Django>=5.0,<6.0
 djangorestframework>=3.14
 django-cors-headers>=4.3
 
-# Async & WebSocket support
-channels>=4.0
-channels-redis>=4.2
-daphne>=4.0
-
 # MQTT
 paho-mqtt>=2.0
 
@@ -16,3 +11,4 @@ psycopg2-binary>=2.9  # PostgreSQL (optional, SQLite works for dev)
 
 # Utilities
 python-dotenv>=1.0
+gunicorn>=21.0  # WSGI server for production

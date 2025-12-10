@@ -1,9 +1,10 @@
-"""WebSocket URL routing."""
+"""
+DEPRECATED: WebSocket routing is no longer used.
 
-from django.urls import re_path
-from . import consumers
+Frontend now connects directly to MQTT broker over WebSocket (port 9001)
+for real-time scan data. This eliminates the need for Django Channels.
 
-websocket_urlpatterns = [
-    re_path(r'ws/scans/$', consumers.ScanConsumer.as_asgi()),
-    re_path(r'ws/scans/(?P<scanner_id>\w+)/$', consumers.ScanConsumer.as_asgi()),
-]
+This file is kept for reference only and can be safely deleted.
+"""
+
+websocket_urlpatterns = []

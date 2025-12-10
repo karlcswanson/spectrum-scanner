@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
+import mqtt from 'mqtt'
 
 export const useScannersStore = defineStore('scanners', () => {
   const scanners = ref({})
@@ -7,187 +8,175 @@ export const useScannersStore = defineStore('scanners', () => {
   const bandScans = ref({})         // { scannerId: { bandName: lastScan } }
   const connected = ref(false)
   const subscriptions = ref(new Set()) // Track subscribed scanner IDs
-  let ws = null
+  let client = null
   let reconnectTimeout = null
 
   const scannerList = computed(() => Object.values(scanners.value))
 
+  // MQTT topic prefix
+  const TOPIC_PREFIX = 'spectrum'
+
+  function getMqttUrl() {
+    // In Docker, connect to mosquitto service on port 9001
+    // In dev, connect to localhost:9001
+    const host = window.location.hostname
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    // Use port 9001 for MQTT over WebSocket
+    return `${protocol}//${host}:9001`
+  }
+
   function connect() {
     // Prevent multiple connections
-    if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+    if (client && client.connected) {
       return
     }
 
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const wsUrl = `${protocol}//${window.location.host}/ws/scans/`
-    console.log('Connecting to WebSocket:', wsUrl)
+    const mqttUrl = getMqttUrl()
+    console.log('Connecting to MQTT:', mqttUrl)
 
-    ws = new WebSocket(wsUrl)
+    client = mqtt.connect(mqttUrl, {
+      clientId: `spectrum-frontend-${Math.random().toString(16).substring(2, 10)}`,
+      clean: true,
+      reconnectPeriod: 2000,
+      connectTimeout: 10000,
+    })
 
-    ws.onopen = () => {
-      console.log('WebSocket connected')
+    client.on('connect', () => {
+      console.log('MQTT connected')
       connected.value = true
 
-      // Re-subscribe to any scanners we were tracking
-      subscriptions.value.forEach(scannerId => {
-        sendSubscribe(scannerId)
-      })
-    }
+      // Subscribe to all scanner topics (config, status, scan)
+      // Using wildcard to get all scanners
+      client.subscribe(`${TOPIC_PREFIX}/scanners/+/config`, { qos: 1 })
+      client.subscribe(`${TOPIC_PREFIX}/scanners/+/status`, { qos: 1 })
+      client.subscribe(`${TOPIC_PREFIX}/scanners/+/scan`, { qos: 0 })
 
-    ws.onmessage = (event) => {
-      const message = JSON.parse(event.data)
+      console.log('Subscribed to scanner topics')
+    })
 
-      if (message.type === 'connected') {
-        console.log('WS confirmed:', message)
-      } else if (message.type === 'scan') {
-        handleScan(message.data)
-      } else if (message.type === 'status') {
-        handleStatus(message.data)
-      } else if (message.type === 'config') {
-        handleConfig(message.data)
-      } else if (message.type === 'subscribed') {
-        console.log('Subscribed to scanner:', message.scanner_id)
-      } else if (message.type === 'unsubscribed') {
-        console.log('Unsubscribed from scanner:', message.scanner_id)
+    client.on('message', (topic, payload) => {
+      try {
+        const message = JSON.parse(payload.toString())
+        const parts = topic.split('/')
+        // Topic format: spectrum/scanners/{scanner_id}/{type}
+        if (parts.length >= 4 && parts[0] === TOPIC_PREFIX && parts[1] === 'scanners') {
+          const scannerId = parts[2]
+          const messageType = parts[3]
+
+          if (messageType === 'scan') {
+            handleScan(scannerId, message)
+          } else if (messageType === 'status') {
+            handleStatus(scannerId, message)
+          } else if (messageType === 'config') {
+            handleConfig(scannerId, message)
+          }
+        }
+      } catch (error) {
+        console.error('Failed to parse MQTT message:', error)
       }
-    }
+    })
 
-    ws.onclose = () => {
-      console.log('WebSocket disconnected')
+    client.on('close', () => {
+      console.log('MQTT disconnected')
       connected.value = false
-      ws = null
+    })
 
-      // Reconnect after 2 seconds
-      if (reconnectTimeout) clearTimeout(reconnectTimeout)
-      reconnectTimeout = setTimeout(connect, 2000)
-    }
+    client.on('error', (error) => {
+      console.error('MQTT error:', error)
+    })
 
-    ws.onerror = (error) => {
-      console.error('WebSocket error:', error)
-    }
+    client.on('reconnect', () => {
+      console.log('MQTT reconnecting...')
+    })
   }
 
   function disconnect() {
-    if (reconnectTimeout) {
-      clearTimeout(reconnectTimeout)
-      reconnectTimeout = null
-    }
-    if (ws) {
-      ws.close()
-      ws = null
+    if (client) {
+      client.end()
+      client = null
     }
     connected.value = false
   }
 
-  function sendSubscribe(scannerId) {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'subscribe', scanner_id: scannerId }))
-    }
-  }
-
-  function sendUnsubscribe(scannerId) {
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'unsubscribe', scanner_id: scannerId }))
-    }
-  }
-
-  // Subscribe to a specific scanner's data
+  // Subscribe/unsubscribe are now no-ops since we use wildcard subscription
+  // Keep the API for compatibility with existing components
   function subscribe(scannerId) {
     if (!scannerId) return
-
     subscriptions.value.add(scannerId)
-    sendSubscribe(scannerId)
-    console.log('Subscribe requested:', scannerId)
+    console.log('Tracking scanner:', scannerId)
   }
 
-  // Unsubscribe from a specific scanner's data
   function unsubscribe(scannerId) {
     if (!scannerId) return
-
     subscriptions.value.delete(scannerId)
-    sendUnsubscribe(scannerId)
-    console.log('Unsubscribe requested:', scannerId)
+    console.log('Untracking scanner:', scannerId)
   }
 
-  function handleScan(data) {
-    const scannerId = data.scanner_id
-
-    if (scannerId) {
-      // Create scanner entry if it doesn't exist
-      if (!scanners.value[scannerId]) {
-        scanners.value[scannerId] = {
-          id: scannerId,
-          name: scannerId,
-          type: 'unknown',
-          location: '',
-          online: true,
-        }
-      }
-      scanners.value[scannerId].online = true
-      scanners.value[scannerId].lastSeen = new Date()
-
-      // Store latest scan (without scanner_id in the scan data)
-      const { scanner_id, ...scanData } = data
-      latestScans.value[scannerId] = scanData
-
-      // Also store by band name if available
-      if (data.band) {
-        console.log('handleScan: storing band scan for', scannerId, data.band)
-        if (!bandScans.value[scannerId]) {
-          bandScans.value[scannerId] = {}
-        }
-        bandScans.value[scannerId][data.band] = scanData
-
-        // Auto-populate bands from scan data if not already present
-        if (!scanners.value[scannerId].bands) {
-          scanners.value[scannerId].bands = []
-        }
-        const existingBand = scanners.value[scannerId].bands.find(b => b.name === data.band)
-        if (!existingBand) {
-          scanners.value[scannerId].bands.push({
-            name: data.band,
-            start_hz: data.hz_lo,
-            stop_hz: data.hz_hi,
-            enabled: true,
-          })
-          console.log('Auto-added band:', data.band)
-        }
-      } else {
-        console.log('handleScan: no band name in scan data', data)
-      }
-    }
-  }
-
-  function handleStatus(data) {
-    const scannerId = data.scanner_id
-
-    if (scannerId) {
-      if (!scanners.value[scannerId]) {
-        scanners.value[scannerId] = { id: scannerId, name: scannerId }
-      }
+  function handleScan(scannerId, data) {
+    // Create scanner entry if it doesn't exist
+    if (!scanners.value[scannerId]) {
       scanners.value[scannerId] = {
-        ...scanners.value[scannerId],
-        ...data,
-      }
-    }
-  }
-
-  function handleConfig(data) {
-    const scannerId = data.scanner_id || data.id
-
-    if (scannerId) {
-      console.log('handleConfig:', scannerId, 'bands:', data.bands)
-      scanners.value[scannerId] = {
-        ...scanners.value[scannerId],
         id: scannerId,
-        name: data.name || scannerId,
-        type: data.type || 'unknown',
-        location: data.location || '',
-        description: data.description || '',
-        bands: data.bands || [],
-        settings: data.settings || {},
+        name: scannerId,
+        type: 'unknown',
+        location: '',
         online: true,
       }
+    }
+    scanners.value[scannerId].online = true
+    scanners.value[scannerId].lastSeen = new Date()
+
+    // Store latest scan
+    latestScans.value[scannerId] = data
+
+    // Also store by band name if available
+    if (data.band) {
+      if (!bandScans.value[scannerId]) {
+        bandScans.value[scannerId] = {}
+      }
+      bandScans.value[scannerId][data.band] = data
+
+      // Auto-populate bands from scan data if not already present
+      if (!scanners.value[scannerId].bands) {
+        scanners.value[scannerId].bands = []
+      }
+      const existingBand = scanners.value[scannerId].bands.find(b => b.name === data.band)
+      if (!existingBand) {
+        scanners.value[scannerId].bands.push({
+          name: data.band,
+          start_hz: data.hz_lo,
+          stop_hz: data.hz_hi,
+          enabled: true,
+        })
+      }
+    }
+  }
+
+  function handleStatus(scannerId, data) {
+    if (!scanners.value[scannerId]) {
+      scanners.value[scannerId] = { id: scannerId, name: scannerId }
+    }
+    scanners.value[scannerId] = {
+      ...scanners.value[scannerId],
+      id: scannerId,
+      online: data.online,
+      scanning: data.scanning,
+      current_band: data.current_band,
+    }
+  }
+
+  function handleConfig(scannerId, data) {
+    console.log('handleConfig:', scannerId, 'bands:', data.bands)
+    scanners.value[scannerId] = {
+      ...scanners.value[scannerId],
+      id: scannerId,
+      name: data.name || scannerId,
+      scanner_type: data.type || 'unknown',
+      location: data.location || '',
+      description: data.description || '',
+      bands: data.bands || [],
+      settings: data.settings || {},
+      online: true,
     }
   }
 
@@ -196,7 +185,10 @@ export const useScannersStore = defineStore('scanners', () => {
       const response = await fetch('/api/scanners/')
       const data = await response.json()
       data.forEach(scanner => {
-        scanners.value[scanner.id] = scanner
+        scanners.value[scanner.id] = {
+          ...scanners.value[scanner.id],
+          ...scanner,
+        }
       })
     } catch (error) {
       console.error('Failed to fetch scanners:', error)

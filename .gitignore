@@ -5,3 +5,14 @@ reference/
 bin/
 frontend/node_modules/*
 frontend/dist/*
+
+# Go binary
+scanner
+
+# Python cache
+__pycache__/
+*.pyc
+
+# SQLite database
+*.sqlite3
+server/data/*.sqlite3

@@ -1,7 +1,9 @@
-"""MQTT to Django Channels bridge.
+"""MQTT bridge for storing scan data to database.
 
-This module connects to the MQTT broker and forwards scan data
-to Django Channels for WebSocket distribution.
+This module connects to the MQTT broker and stores scan data
+to the Django database for historical retrieval.
+
+The frontend connects directly to MQTT for real-time data.
 
 Run as a Django management command:
     python manage.py mqtt_bridge
@@ -9,11 +11,9 @@ Run as a Django management command:
 
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import paho.mqtt.client as mqtt
-from asgiref.sync import async_to_sync
-from channels.layers import get_channel_layer
 from django.conf import settings
 from django.utils import timezone
 
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 class MQTTBridge:
-    """Bridges MQTT messages to Django Channels."""
+    """Bridges MQTT messages to Django database."""
 
     # Store scans every N seconds (60 = 1 minute)
     STORE_INTERVAL_SECONDS = 60
@@ -35,7 +35,6 @@ class MQTTBridge:
         self.client.on_message = self.on_message
         self.client.on_disconnect = self.on_disconnect
 
-        self.channel_layer = get_channel_layer()
         self.topic_prefix = settings.MQTT_TOPIC_PREFIX
 
         # Track last store time per scanner/band
@@ -101,7 +100,7 @@ class MQTTBridge:
             logger.error(f"Error processing MQTT message: {e}")
 
     def handle_scan(self, scanner_id: str, payload: dict):
-        """Process incoming scan data."""
+        """Process incoming scan data - store to database (rate limited)."""
         logger.debug(f"Received scan from {scanner_id}")
 
         # Check if we should store this scan (rate limited to every minute)
@@ -124,51 +123,8 @@ class MQTTBridge:
             self.last_store_times[store_key] = now
             logger.info(f"Stored scan for {scanner_id}/{band_name}")
 
-        # Include scanner_id in the forwarded data
-        ws_data = {
-            'scanner_id': scanner_id,
-            **payload,
-        }
-
-        # Forward to WebSocket clients via Channels (always, for real-time display)
-        async_to_sync(self.channel_layer.group_send)(
-            'scans_all',
-            {
-                'type': 'scan_data',
-                'data': ws_data,
-            }
-        )
-
-        # Also send to scanner-specific group
-        async_to_sync(self.channel_layer.group_send)(
-            f'scans_{scanner_id}',
-            {
-                'type': 'scan_data',
-                'data': ws_data,
-            }
-        )
-
     def handle_config(self, scanner_id: str, payload: dict):
-        """Process scanner config update.
-
-        Payload format:
-        {
-            "id": "scanner-id",
-            "name": "Studio A Scanner",
-            "type": "pluto",
-            "location": "Studio A",
-            "description": "ADALM-Pluto Scanner",
-            "bands": [
-                {"name": "UHF", "start_hz": 470000000, "stop_hz": 608000000, "enabled": true}
-            ],
-            "settings": {
-                "dwell_time_ms": 200,
-                "rx_gain": 40,
-                "rx_gain_mode": "manual",
-                "mode": "Average"
-            }
-        }
-        """
+        """Process scanner config update - sync to database."""
         from core.models import Scanner, Band
 
         try:
@@ -203,53 +159,16 @@ class MQTTBridge:
                     }
                 )
 
-            # Forward config to WebSocket clients
-            async_to_sync(self.channel_layer.group_send)(
-                'scans_all',
-                {
-                    'type': 'scanner_config',
-                    'data': {
-                        'scanner_id': scanner_id,
-                        **payload,
-                    },
-                }
-            )
-
         except Exception as e:
             logger.error(f"Error handling scanner config: {e}")
 
     def handle_status(self, scanner_id: str, payload: dict):
-        """Process scanner status update."""
+        """Process scanner status update - update database."""
         logger.debug(f"Received status from {scanner_id}: {payload}")
-
-        # Update scanner in database
         self.update_scanner_status(scanner_id, payload)
 
-        # Forward to WebSocket clients
-        async_to_sync(self.channel_layer.group_send)(
-            'scans_all',
-            {
-                'type': 'scanner_status',
-                'data': {
-                    'scanner_id': scanner_id,
-                    **payload,
-                },
-            }
-        )
-
     def store_scan(self, scanner_id: str, payload: dict):
-        """Store scan in database.
-
-        Payload format (minimal):
-        {
-            "timestamp": "2025-12-09T19:30:00Z",
-            "band": "UHF",
-            "hz_lo": 470000000,
-            "hz_hi": 608000000,
-            "step": 12207.03125,
-            "power": [-85.2, -82.1, ...]
-        }
-        """
+        """Store scan in database."""
         from core.models import Scanner, Band, Scan
 
         try:
