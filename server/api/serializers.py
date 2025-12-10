@@ -37,6 +37,16 @@ class ScanSerializer(serializers.ModelSerializer):
         ]
 
 
+class ScanTimelineSerializer(serializers.ModelSerializer):
+    """Lightweight serializer for timeline display (no power data)."""
+
+    band_name = serializers.CharField(source='band.name', read_only=True, allow_null=True)
+
+    class Meta:
+        model = Scan
+        fields = ['id', 'timestamp', 'band_name']
+
+
 class ScanCreateSerializer(serializers.Serializer):
     """Serializer for incoming scan data (from MQTT or direct POST)."""
 

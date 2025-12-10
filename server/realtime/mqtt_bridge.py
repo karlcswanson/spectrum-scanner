@@ -9,7 +9,7 @@ Run as a Django management command:
 
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import paho.mqtt.client as mqtt
 from asgiref.sync import async_to_sync
@@ -23,6 +23,9 @@ logger = logging.getLogger(__name__)
 class MQTTBridge:
     """Bridges MQTT messages to Django Channels."""
 
+    # Store scans every N seconds (60 = 1 minute)
+    STORE_INTERVAL_SECONDS = 60
+
     def __init__(self):
         self.client = mqtt.Client(
             client_id=settings.MQTT_CLIENT_ID,
@@ -34,6 +37,10 @@ class MQTTBridge:
 
         self.channel_layer = get_channel_layer()
         self.topic_prefix = settings.MQTT_TOPIC_PREFIX
+
+        # Track last store time per scanner/band
+        # Key: (scanner_id, band_name), Value: last_store_time
+        self.last_store_times = {}
 
     def connect(self):
         """Connect to MQTT broker."""
@@ -97,8 +104,25 @@ class MQTTBridge:
         """Process incoming scan data."""
         logger.debug(f"Received scan from {scanner_id}")
 
-        # Store in database (optional, can be disabled for high-frequency scans)
-        self.store_scan(scanner_id, payload)
+        # Check if we should store this scan (rate limited to every minute)
+        band_name = payload.get('band', 'default')
+        store_key = (scanner_id, band_name)
+        now = timezone.now()
+
+        should_store = False
+        if store_key not in self.last_store_times:
+            # First scan for this scanner/band - store it
+            should_store = True
+        else:
+            # Check if enough time has passed since last store
+            elapsed = (now - self.last_store_times[store_key]).total_seconds()
+            if elapsed >= self.STORE_INTERVAL_SECONDS:
+                should_store = True
+
+        if should_store:
+            self.store_scan(scanner_id, payload)
+            self.last_store_times[store_key] = now
+            logger.info(f"Stored scan for {scanner_id}/{band_name}")
 
         # Include scanner_id in the forwarded data
         ws_data = {
@@ -106,7 +130,7 @@ class MQTTBridge:
             **payload,
         }
 
-        # Forward to WebSocket clients via Channels
+        # Forward to WebSocket clients via Channels (always, for real-time display)
         async_to_sync(self.channel_layer.group_send)(
             'scans_all',
             {

@@ -243,6 +243,54 @@ export const useScannersStore = defineStore('scanners', () => {
     console.log('Exported:', filename)
   }
 
+  // Fetch timeline data for time scrubber
+  async function fetchTimeline(scannerId, bandName = null, hours = 24) {
+    try {
+      let url = `/api/scanners/${scannerId}/timeline/?hours=${hours}`
+      if (bandName) {
+        url += `&band=${encodeURIComponent(bandName)}`
+      }
+      const response = await fetch(url)
+      if (!response.ok) throw new Error('Failed to fetch timeline')
+      return await response.json()
+    } catch (error) {
+      console.error('Failed to fetch timeline:', error)
+      return []
+    }
+  }
+
+  // Fetch historical scan data
+  async function fetchHistory(scannerId, bandName = null, hours = 24, limit = 1000) {
+    try {
+      let url = `/api/scanners/${scannerId}/history/?hours=${hours}&limit=${limit}`
+      if (bandName) {
+        url += `&band=${encodeURIComponent(bandName)}`
+      }
+      const response = await fetch(url)
+      if (!response.ok) throw new Error('Failed to fetch history')
+      return await response.json()
+    } catch (error) {
+      console.error('Failed to fetch history:', error)
+      return []
+    }
+  }
+
+  // Fetch scan closest to a specific time
+  async function fetchScanAtTime(scannerId, time, bandName = null) {
+    try {
+      let url = `/api/scans/at_time/?scanner=${scannerId}&time=${time.toISOString()}`
+      if (bandName) {
+        url += `&band=${encodeURIComponent(bandName)}`
+      }
+      const response = await fetch(url)
+      if (!response.ok) throw new Error('Failed to fetch scan')
+      return await response.json()
+    } catch (error) {
+      console.error('Failed to fetch scan at time:', error)
+      return null
+    }
+  }
+
   return {
     scanners,
     scannerList,
@@ -255,5 +303,8 @@ export const useScannersStore = defineStore('scanners', () => {
     unsubscribe,
     fetchScanners,
     exportScanCSV,
+    fetchTimeline,
+    fetchHistory,
+    fetchScanAtTime,
   }
 })

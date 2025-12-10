@@ -67,6 +67,7 @@ onBeforeUnmount(() => {
           :band="band"
           :scan="getScanForBand(band.name)"
           :show-scanner="false"
+          :show-timeline="true"
         />
       </div>
 
