@@ -11,10 +11,12 @@ const scannerId = computed(() => route.params.id)
 const scanner = computed(() => store.scanners[scannerId.value])
 const scannerBandScans = computed(() => store.bandScans[scannerId.value] || {})
 
-// Get enabled bands from scanner config
+// Get enabled bands from scanner config, sorted by frequency
 const enabledBands = computed(() => {
   const bands = scanner.value?.bands || []
-  return bands.filter(b => b.enabled)
+  return bands
+    .filter(b => b.enabled)
+    .sort((a, b) => (Number(a.start_hz) || 0) - (Number(b.start_hz) || 0))
 })
 
 function getScanForBand(bandName) {

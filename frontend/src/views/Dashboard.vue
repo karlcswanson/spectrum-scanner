@@ -6,7 +6,7 @@ import BandChart from '../components/BandChart.vue'
 
 const store = useScannersStore()
 
-// Get all bands across all scanners for display
+// Get all bands across all scanners for display, sorted by frequency
 const allBands = computed(() => {
   const bands = []
   for (const scanner of store.scannerList) {
@@ -22,7 +22,8 @@ const allBands = computed(() => {
       }
     }
   }
-  return bands
+  // Sort by start frequency (lowest first)
+  return bands.sort((a, b) => (Number(a.band.start_hz) || 0) - (Number(b.band.start_hz) || 0))
 })
 </script>
 
