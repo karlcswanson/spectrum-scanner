@@ -132,7 +132,32 @@ const traces = computed(() => {
 })
 
 function exportCSV() {
-  store.exportScanCSV(props.scannerId, props.band.name)
+  const scan = activeScan.value
+  if (!scan) return
+
+  // Generate CSV from the currently displayed scan
+  let csv = 'Frequency (MHz),Power (dBm)\n'
+  const startMHz = scan.hz_lo / 1e6
+  const stepMHz = scan.step / 1e6
+
+  for (let i = 0; i < scan.power.length; i++) {
+    const freq = startMHz + (i * stepMHz)
+    csv += `${freq.toFixed(6)},${scan.power[i].toFixed(2)}\n`
+  }
+
+  const blob = new Blob([csv], { type: 'text/csv' })
+  const url = URL.createObjectURL(blob)
+
+  const scannerName = props.scannerName || props.scannerId
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+  const filename = `${scannerName.replace(/\s+/g, '-')}_${props.band.name.replace(/\s+/g, '-')}_${timestamp}.csv`
+
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+
+  URL.revokeObjectURL(url)
 }
 
 function resetPeakHold() {
