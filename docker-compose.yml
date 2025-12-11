@@ -1,18 +1,21 @@
 version: '3.8'
 
 services:
-  # MQTT Broker
+  # MQTT Broker with Django auth
   mosquitto:
-    image: eclipse-mosquitto:2
+    image: iegomez/mosquitto-go-auth:latest
     ports:
       - "1883:1883"
       - "9001:9001"
     volumes:
-      - ./docker/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf
+      - ./docker/mosquitto/mosquitto.conf:/etc/mosquitto/mosquitto.conf
       - mosquitto_data:/mosquitto/data
       - mosquitto_log:/mosquitto/log
+    depends_on:
+      server:
+        condition: service_started
 
-  # Django Backend (REST API for historical data)
+  # Django Backend (REST API for historical data + MQTT auth)
   server:
     build:
       context: ./server
@@ -25,11 +28,11 @@ services:
       - MQTT_BROKER_HOST=mosquitto
       - DB_ENGINE=django.db.backends.sqlite3
       - DB_NAME=/app/data/db.sqlite3
+      - MQTT_BRIDGE_USERNAME=spectrum-bridge
+      - MQTT_BRIDGE_PASSWORD=bridge-secret-token-change-me
     volumes:
       - ./server:/app
       - server_data:/app/data
-    depends_on:
-      - mosquitto
     command: >
       sh -c "python manage.py migrate &&
              python manage.py runserver 0.0.0.0:8000"
@@ -43,6 +46,8 @@ services:
       - MQTT_BROKER_HOST=mosquitto
       - DB_ENGINE=django.db.backends.sqlite3
       - DB_NAME=/app/data/db.sqlite3
+      - MQTT_BRIDGE_USERNAME=spectrum-bridge
+      - MQTT_BRIDGE_PASSWORD=bridge-secret-token-change-me
     volumes:
       - ./server:/app
       - server_data:/app/data

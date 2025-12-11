@@ -35,6 +35,13 @@ class MQTTBridge:
         self.client.on_message = self.on_message
         self.client.on_disconnect = self.on_disconnect
 
+        # Set credentials for MQTT auth
+        mqtt_username = getattr(settings, 'MQTT_BRIDGE_USERNAME', None)
+        mqtt_password = getattr(settings, 'MQTT_BRIDGE_PASSWORD', None)
+        if mqtt_username and mqtt_password:
+            self.client.username_pw_set(mqtt_username, mqtt_password)
+            logger.info(f"MQTT bridge using credentials for {mqtt_username[:8]}...")
+
         self.topic_prefix = settings.MQTT_TOPIC_PREFIX
 
         # Track last store time per scanner/band
@@ -124,27 +131,32 @@ class MQTTBridge:
             logger.info(f"Stored scan for {scanner_id}/{band_name}")
 
     def handle_config(self, scanner_id: str, payload: dict):
-        """Process scanner config update - sync to database."""
+        """Process scanner config update - sync to database.
+
+        Scanner must already exist in DB (created via Django admin).
+        This updates the scanner's bands and status from the config message.
+        """
         from core.models import Scanner, Band
 
         try:
-            logger.info(f"Received config from {scanner_id}: {payload.get('name')}")
+            logger.info(f"Received config from {scanner_id[:8]}...: {payload.get('name')}")
 
-            # Update or create scanner
-            scanner, created = Scanner.objects.update_or_create(
-                id=scanner_id,
-                defaults={
-                    'name': payload.get('name', scanner_id),
-                    'scanner_type': payload.get('type', 'pluto'),
-                    'location': payload.get('location', ''),
-                    'description': payload.get('description', ''),
-                    'online': True,
-                    'last_seen': timezone.now(),
-                }
-            )
+            # Scanner must already exist (created in Django admin)
+            try:
+                scanner = Scanner.objects.get(id=scanner_id)
+            except Scanner.DoesNotExist:
+                logger.warning(f"Received config from unknown scanner {scanner_id[:8]}... - ignoring")
+                return
 
-            if created:
-                logger.info(f"Created new scanner: {scanner_id}")
+            # Update scanner status
+            scanner.online = True
+            scanner.last_seen = timezone.now()
+            # Optionally update name/location from config if empty in DB
+            if not scanner.name:
+                scanner.name = payload.get('name', scanner_id[:8])
+            if not scanner.location:
+                scanner.location = payload.get('location', '')
+            scanner.save()
 
             # Sync bands from config
             config_bands = payload.get('bands', [])
@@ -168,18 +180,19 @@ class MQTTBridge:
         self.update_scanner_status(scanner_id, payload)
 
     def store_scan(self, scanner_id: str, payload: dict):
-        """Store scan in database."""
+        """Store scan in database.
+
+        Scanner must already exist in DB (created via Django admin).
+        """
         from core.models import Scanner, Band, Scan
 
         try:
-            # Get or create scanner
-            scanner, created = Scanner.objects.get_or_create(
-                id=scanner_id,
-                defaults={
-                    'name': scanner_id,
-                    'scanner_type': 'pluto',
-                }
-            )
+            # Scanner must already exist (created in Django admin)
+            try:
+                scanner = Scanner.objects.get(id=scanner_id)
+            except Scanner.DoesNotExist:
+                logger.debug(f"Ignoring scan from unknown scanner {scanner_id[:8]}...")
+                return
 
             # Update last seen
             scanner.online = True

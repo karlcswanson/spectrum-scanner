@@ -27,7 +27,7 @@ class ScannerSerializer(serializers.ModelSerializer):
 
 
 class ScanSerializer(serializers.ModelSerializer):
-    scanner_id = serializers.CharField(source='scanner.id', read_only=True)
+    scanner_id = serializers.UUIDField(source='scanner.id', read_only=True)
     scanner_name = serializers.CharField(source='scanner.name', read_only=True)
     band_name = serializers.CharField(source='band.name', read_only=True, allow_null=True)
 

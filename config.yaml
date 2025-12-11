@@ -1,5 +1,8 @@
 # Spectrum Scanner Configuration
 
+# Auto-start scanning when the scanner boots
+auto_start: true
+
 # Scan settings
 dwell_time_ms: 200
 mode: Average  # Average or PeakDetect
@@ -15,7 +18,7 @@ bands:
   - name: Business Radio
     start_mhz: 450
     stop_mhz: 470
-    enabled: false
+    enabled: true
 
   - name: UHF
     start_mhz: 470
@@ -25,12 +28,12 @@ bands:
   - name: DECT
     start_mhz: 1920
     stop_mhz: 1930
-    enabled: false
+    enabled: true
 
   - name: WiFi 2.4
     start_mhz: 2400
     stop_mhz: 2500
-    enabled: false
+    enabled: true
 
   - name: WiFi 5
     start_mhz: 5150
@@ -48,10 +51,11 @@ bands:
 mqtt:
   enabled: true
   broker: "tcp://localhost:1883"
-  # Scanner identity (used in MQTT topics and messages)
-  # id: ""              # Unique scanner ID (auto-generated UUID if empty)
-  # name: ""            # Human-readable name (e.g., "Studio A Scanner")
-  # location: ""        # Physical location (e.g., "Studio A", "Main Stage")
-  # username: ""
-  # password: ""
-  # topic_prefix: "spectrum"
+  # Scanner credentials (get these from Django admin after creating the scanner)
+
+  id: "d2572519-4dc7-4dfe-8780-da83bfb8c4cd"
+  token: "fQWii2C4jvhN_w0R4owQACmL1vO54Wll0PJE7LTanfM"
+  # Display info
+  name: "Dev Scanner"      # Human-readable name (e.g., "Studio A Scanner")
+  location: "Lititz PA"    # Physical location (e.g., "Studio A", "Main Stage")
+  # topic_prefix: "spectrum"  # Default: "spectrum"

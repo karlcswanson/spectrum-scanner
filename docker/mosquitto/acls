@@ -1,0 +1,10 @@
+# ACL file for mosquitto-go-auth
+# Anonymous users (no username) can subscribe to everything
+# but cannot publish
+
+# Anonymous users - read only access to all topics
+user
+topic read spectrum/#
+
+# Authenticated scanners get full access via HTTP backend
+# (ACL checked by Django /api/auth/mqtt/acl/)

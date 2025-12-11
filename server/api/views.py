@@ -1,16 +1,24 @@
 """API views for Spectrum Server."""
 
+import logging
 from datetime import timedelta
 from django.utils import timezone
+from django.views.decorators.csrf import csrf_exempt
+from django.http import HttpResponse
 from rest_framework import viewsets, status
-from rest_framework.decorators import action
+from rest_framework.decorators import action, api_view, permission_classes
+from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 
-from core.models import Scanner, Band, Scan
+from django.contrib.auth import authenticate, login, logout
+
+from core.models import Scanner, Band, Scan, UserMQTTCredentials
 from .serializers import (
     ScannerSerializer, BandSerializer, ScanSerializer, ScanCreateSerializer,
     ScanTimelineSerializer
 )
+
+logger = logging.getLogger(__name__)
 
 
 class ScannerViewSet(viewsets.ModelViewSet):
@@ -203,3 +211,245 @@ class ScanViewSet(viewsets.ModelViewSet):
         if scan:
             return Response(ScanSerializer(scan).data)
         return Response({'detail': 'No scans found'}, status=status.HTTP_404_NOT_FOUND)
+
+
+@csrf_exempt
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def mqtt_auth(request):
+    """Authenticate MQTT client connections.
+
+    Called by mosquitto-go-auth plugin to validate credentials.
+    Supports both scanners (publish) and frontend clients (subscribe-only).
+
+    Expected POST data (form-encoded):
+    - username: UUID (scanner or frontend client)
+    - password: Auth token
+
+    Returns:
+    - 200 OK: Authentication successful
+    - 403 Forbidden: Authentication failed
+    """
+    username = request.data.get('username', '')
+    password = request.data.get('password', '')
+
+    if not username or not password:
+        logger.debug("MQTT auth: missing credentials, rejected")
+        return HttpResponse(status=403)
+
+    # Try bridge service account first (internal service for storing scans)
+    from django.conf import settings
+    bridge_username = getattr(settings, 'MQTT_BRIDGE_USERNAME', '')
+    bridge_password = getattr(settings, 'MQTT_BRIDGE_PASSWORD', '')
+    if bridge_username and username == bridge_username and password == bridge_password:
+        logger.info(f"MQTT auth: bridge service authenticated")
+        return HttpResponse(status=200)
+
+    # Try scanner
+    try:
+        scanner = Scanner.objects.get(id=username)
+        if scanner.enabled and scanner.auth_token == password:
+            logger.info(f"MQTT auth: scanner {scanner.name} ({username[:8]}...) authenticated")
+            return HttpResponse(status=200)
+        else:
+            reason = "disabled" if not scanner.enabled else "invalid token"
+            logger.warning(f"MQTT auth: scanner {username[:8]}... rejected ({reason})")
+            return HttpResponse(status=403)
+    except Scanner.DoesNotExist:
+        pass
+
+    # Try user MQTT credentials
+    try:
+        creds = UserMQTTCredentials.objects.select_related('user').get(mqtt_id=username)
+        if creds.user.is_active and creds.auth_token == password:
+            logger.info(f"MQTT auth: user {creds.user.username} ({username[:8]}...) authenticated")
+            return HttpResponse(status=200)
+        else:
+            reason = "user inactive" if not creds.user.is_active else "invalid token"
+            logger.warning(f"MQTT auth: user {username[:8]}... rejected ({reason})")
+            return HttpResponse(status=403)
+    except UserMQTTCredentials.DoesNotExist:
+        pass
+
+    logger.warning(f"MQTT auth: unknown client {username[:8] if len(username) >= 8 else username}...")
+    return HttpResponse(status=403)
+
+
+@csrf_exempt
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def mqtt_acl(request):
+    """Check MQTT topic ACLs.
+
+    Called by mosquitto-go-auth plugin to validate publish/subscribe permissions.
+
+    Expected POST data (form-encoded):
+    - username: UUID (scanner or frontend client)
+    - topic: MQTT topic being accessed
+    - acc: Access type (1=subscribe, 2=publish)
+
+    Returns:
+    - 200 OK: Access allowed
+    - 403 Forbidden: Access denied
+    """
+    username = request.data.get('username', '')
+    topic = request.data.get('topic', '')
+    acc = request.data.get('acc', '1')  # 1=sub, 2=pub
+
+    print(f"MQTT ACL check: user={username}, topic={topic}, acc={acc} (type={type(acc).__name__})")
+
+    topic_prefix = 'spectrum'
+
+    # mosquitto-go-auth access types:
+    # 1 = read, 2 = write, 3 = readwrite, 4 = subscribe, 5 = unsubscribe
+    # acc can come as string or int depending on how it's sent
+    acc_str = str(acc)
+    is_subscribe = acc_str in ('1', '4')  # read or subscribe
+    is_publish = acc_str == '2'
+
+    # Check if this is the bridge service (subscribe-only to scanner topics)
+    from django.conf import settings
+    bridge_username = getattr(settings, 'MQTT_BRIDGE_USERNAME', '')
+    if bridge_username and username == bridge_username:
+        if is_subscribe and topic.startswith(f"{topic_prefix}/scanners/"):
+            logger.debug(f"MQTT ACL: bridge service subscribe to {topic} allowed")
+            return HttpResponse(status=200)
+        logger.warning(f"MQTT ACL: bridge service access to {topic} (acc={acc}) denied")
+        return HttpResponse(status=403)
+
+    # Check if this is a user (subscribe-only to all topics)
+    try:
+        from uuid import UUID
+        mqtt_uuid = UUID(username)
+        is_user = UserMQTTCredentials.objects.filter(mqtt_id=mqtt_uuid).exists()
+        print(f"MQTT ACL: UUID lookup for {username}: is_user={is_user}")
+        if is_user:
+            if is_subscribe:  # Subscribe/read only
+                print(f"MQTT ACL: user {username[:8]}... subscribe to {topic} ALLOWED")
+                return HttpResponse(status=200)
+            print(f"MQTT ACL: user {username[:8]}... publish to {topic} DENIED")
+            return HttpResponse(status=403)
+    except (ValueError, TypeError) as e:
+        print(f"MQTT ACL: UUID parse error for {username}: {e}")
+
+    # Check if this is a scanner
+    try:
+        is_scanner = Scanner.objects.filter(id=username).exists()
+    except Exception:
+        is_scanner = False
+
+    if is_scanner:
+        # Scanners can:
+        # - Publish to their own topics: spectrum/scanners/{their-uuid}/#
+        # - Subscribe to command topics: spectrum/commands/{their-uuid}/#
+        scanner_topic_prefix = f"{topic_prefix}/scanners/{username}/"
+        command_topic_prefix = f"{topic_prefix}/commands/{username}/"
+
+        if is_publish:
+            if topic.startswith(scanner_topic_prefix):
+                logger.debug(f"MQTT ACL: scanner {username[:8]}... publish to {topic} allowed")
+                return HttpResponse(status=200)
+        elif is_subscribe:
+            if topic.startswith(command_topic_prefix) or topic.startswith(scanner_topic_prefix):
+                logger.debug(f"MQTT ACL: scanner {username[:8]}... subscribe to {topic} allowed")
+                return HttpResponse(status=200)
+
+    logger.warning(f"MQTT ACL: {username[:8]}... access to {topic} (acc={acc}) denied")
+    return HttpResponse(status=403)
+
+
+@csrf_exempt
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def mqtt_superuser(request):
+    """Check if user is MQTT superuser.
+
+    Called by mosquitto-go-auth plugin. We don't use superusers.
+
+    Returns:
+    - 403 Forbidden: No superusers
+    """
+    return HttpResponse(status=403)
+
+
+@api_view(['GET'])
+def mqtt_credentials(request):
+    """Get MQTT credentials for the current user.
+
+    Returns the user's MQTT credentials, creating them if they don't exist.
+    User must be authenticated.
+    """
+    if not request.user.is_authenticated:
+        return Response({'error': 'Authentication required'}, status=status.HTTP_401_UNAUTHORIZED)
+
+    # Get or create MQTT credentials for this user
+    creds, created = UserMQTTCredentials.objects.get_or_create(user=request.user)
+    if created:
+        logger.info(f"Created MQTT credentials for user {request.user.username}")
+
+    return Response({
+        'username': str(creds.mqtt_id),
+        'password': creds.auth_token,
+    })
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def auth_user(request):
+    """Get current authenticated user info.
+
+    Also ensures CSRF cookie is set for subsequent requests.
+    """
+    from django.middleware.csrf import get_token
+    # Ensure CSRF cookie is set
+    get_token(request)
+
+    if request.user.is_authenticated:
+        return Response({
+            'id': request.user.id,
+            'username': request.user.username,
+            'email': request.user.email,
+            'is_staff': request.user.is_staff,
+        })
+    return Response({'user': None}, status=status.HTTP_200_OK)
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def auth_login(request):
+    """Login with username and password."""
+    username = request.data.get('username')
+    password = request.data.get('password')
+
+    if not username or not password:
+        return Response(
+            {'error': 'Username and password required'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    user = authenticate(request, username=username, password=password)
+    if user is not None:
+        login(request, user)
+        logger.info(f"User {username} logged in")
+        return Response({
+            'id': user.id,
+            'username': user.username,
+            'email': user.email,
+            'is_staff': user.is_staff,
+        })
+    else:
+        logger.warning(f"Failed login attempt for {username}")
+        return Response(
+            {'error': 'Invalid credentials'},
+            status=status.HTTP_401_UNAUTHORIZED
+        )
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def auth_logout(request):
+    """Logout current user."""
+    if request.user.is_authenticated:
+        logger.info(f"User {request.user.username} logged out")
+    logout(request)
+    return Response({'status': 'logged out'})

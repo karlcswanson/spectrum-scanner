@@ -25,9 +25,29 @@ export const useScannersStore = defineStore('scanners', () => {
     return `${protocol}//${host}:9001`
   }
 
-  function connect() {
+  async function fetchMqttCredentials() {
+    try {
+      const response = await fetch('/api/mqtt/credentials/', {
+        credentials: 'include',
+      })
+      if (!response.ok) throw new Error('Failed to fetch MQTT credentials')
+      return await response.json()
+    } catch (error) {
+      console.error('Failed to fetch MQTT credentials:', error)
+      return null
+    }
+  }
+
+  async function connect() {
     // Prevent multiple connections
     if (client && client.connected) {
+      return
+    }
+
+    // Fetch credentials from Django
+    const credentials = await fetchMqttCredentials()
+    if (!credentials) {
+      console.error('Could not get MQTT credentials')
       return
     }
 
@@ -36,6 +56,8 @@ export const useScannersStore = defineStore('scanners', () => {
 
     client = mqtt.connect(mqttUrl, {
       clientId: `spectrum-frontend-${Math.random().toString(16).substring(2, 10)}`,
+      username: credentials.username,
+      password: credentials.password,
       clean: true,
       reconnectPeriod: 2000,
       connectTimeout: 10000,
@@ -182,7 +204,9 @@ export const useScannersStore = defineStore('scanners', () => {
 
   async function fetchScanners() {
     try {
-      const response = await fetch('/api/scanners/')
+      const response = await fetch('/api/scanners/', {
+        credentials: 'include',
+      })
       const data = await response.json()
       data.forEach(scanner => {
         scanners.value[scanner.id] = {
@@ -242,7 +266,9 @@ export const useScannersStore = defineStore('scanners', () => {
       if (bandName) {
         url += `&band=${encodeURIComponent(bandName)}`
       }
-      const response = await fetch(url)
+      const response = await fetch(url, {
+        credentials: 'include',
+      })
       if (!response.ok) throw new Error('Failed to fetch timeline')
       return await response.json()
     } catch (error) {
@@ -258,7 +284,9 @@ export const useScannersStore = defineStore('scanners', () => {
       if (bandName) {
         url += `&band=${encodeURIComponent(bandName)}`
       }
-      const response = await fetch(url)
+      const response = await fetch(url, {
+        credentials: 'include',
+      })
       if (!response.ok) throw new Error('Failed to fetch history')
       return await response.json()
     } catch (error) {
@@ -274,7 +302,9 @@ export const useScannersStore = defineStore('scanners', () => {
       if (bandName) {
         url += `&band=${encodeURIComponent(bandName)}`
       }
-      const response = await fetch(url)
+      const response = await fetch(url, {
+        credentials: 'include',
+      })
       if (!response.ok) throw new Error('Failed to fetch scan')
       return await response.json()
     } catch (error) {

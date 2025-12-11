@@ -8,10 +8,15 @@ import './style.css'
 // Views
 import Dashboard from './views/Dashboard.vue'
 import ScannerDetail from './views/ScannerDetail.vue'
+import Login from './views/Login.vue'
+
+// Stores
+import { useAuthStore } from './stores/auth'
 
 const routes = [
-  { path: '/', component: Dashboard },
-  { path: '/scanner/:id', component: ScannerDetail },
+  { path: '/', component: Dashboard, meta: { requiresAuth: true } },
+  { path: '/scanner/:id', component: ScannerDetail, meta: { requiresAuth: true } },
+  { path: '/login', component: Login, meta: { guest: true } },
 ]
 
 const router = createRouter({
@@ -24,4 +29,23 @@ const app = createApp(App)
 
 app.use(pinia)
 app.use(router)
+
+// Navigation guard for auth
+router.beforeEach(async (to, from, next) => {
+  const auth = useAuthStore()
+
+  // Check auth state if not already loaded
+  if (auth.loading && auth.user === null) {
+    await auth.checkAuth()
+  }
+
+  if (to.meta.requiresAuth && !auth.isAuthenticated) {
+    next('/login')
+  } else if (to.meta.guest && auth.isAuthenticated) {
+    next('/')
+  } else {
+    next()
+  }
+})
+
 app.mount('#app')

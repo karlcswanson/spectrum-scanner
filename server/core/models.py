@@ -1,6 +1,14 @@
 """Core models for Spectrum Server."""
 
+import secrets
+import uuid
+
 from django.db import models
+
+
+def generate_auth_token():
+    """Generate a secure random token for scanner authentication."""
+    return secrets.token_urlsafe(32)
 
 
 class Scanner(models.Model):
@@ -14,11 +22,15 @@ class Scanner(models.Model):
         ('import', 'Imported Scan'),
     ]
 
-    id = models.CharField(max_length=100, primary_key=True)
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=200)
-    scanner_type = models.CharField(max_length=20, choices=SCANNER_TYPES)
+    scanner_type = models.CharField(max_length=20, choices=SCANNER_TYPES, default='pluto')
     location = models.CharField(max_length=200, blank=True)
     description = models.TextField(blank=True)
+
+    # Authentication
+    auth_token = models.CharField(max_length=64, default=generate_auth_token)
+    enabled = models.BooleanField(default=True, help_text="Disabled scanners cannot connect")
 
     # Status (updated via MQTT)
     online = models.BooleanField(default=False)
@@ -37,6 +49,37 @@ class Scanner(models.Model):
 
     def __str__(self):
         return f"{self.name} ({self.scanner_type})"
+
+    def regenerate_token(self):
+        """Generate a new auth token for this scanner."""
+        self.auth_token = generate_auth_token()
+        self.save(update_fields=['auth_token'])
+
+
+class UserMQTTCredentials(models.Model):
+    """MQTT credentials for a Django user (read-only access to scan data)."""
+
+    user = models.OneToOneField(
+        'auth.User',
+        on_delete=models.CASCADE,
+        related_name='mqtt_credentials',
+        primary_key=True
+    )
+    mqtt_id = models.UUIDField(default=uuid.uuid4, editable=False, unique=True)
+    auth_token = models.CharField(max_length=64, default=generate_auth_token)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'User MQTT Credentials'
+        verbose_name_plural = 'User MQTT Credentials'
+
+    def __str__(self):
+        return f"MQTT credentials for {self.user.username}"
+
+    def regenerate_token(self):
+        self.auth_token = generate_auth_token()
+        self.save(update_fields=['auth_token', 'updated_at'])
 
 
 class BandTemplate(models.Model):

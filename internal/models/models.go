@@ -46,12 +46,11 @@ type ScannerStatus struct {
 // MQTTConfig holds optional MQTT publishing settings
 type MQTTConfig struct {
 	Enabled     bool   `json:"enabled" yaml:"enabled"`
-	Broker      string `json:"broker" yaml:"broker"`     // e.g., "tcp://localhost:1883"
-	ID          string `json:"id" yaml:"id"`             // Unique scanner ID (auto-generated UUID if empty)
-	Name        string `json:"name" yaml:"name"`         // Human-readable name
-	Location    string `json:"location" yaml:"location"` // Physical location
-	Username    string `json:"username" yaml:"username"`
-	Password    string `json:"password" yaml:"password"`
+	Broker      string `json:"broker" yaml:"broker"`             // e.g., "tcp://localhost:1883"
+	ID          string `json:"id" yaml:"id"`                     // Scanner UUID (from Django admin)
+	Token       string `json:"token" yaml:"token"`               // Auth token (from Django admin)
+	Name        string `json:"name" yaml:"name"`                 // Human-readable name
+	Location    string `json:"location" yaml:"location"`         // Physical location
 	TopicPrefix string `json:"topic_prefix" yaml:"topic_prefix"` // defaults to "spectrum"
 }
 

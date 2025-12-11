@@ -106,9 +106,10 @@ func NewClient(mqttConfig *models.MQTTConfig, scannerConfig *models.Config) (*Cl
 			log.Printf("MQTT connection lost: %v", err)
 		})
 
-	if mqttConfig.Username != "" {
-		opts.SetUsername(mqttConfig.Username)
-		opts.SetPassword(mqttConfig.Password)
+	// Authenticate with scanner ID (UUID) and token
+	if mqttConfig.ID != "" && mqttConfig.Token != "" {
+		opts.SetUsername(mqttConfig.ID)
+		opts.SetPassword(mqttConfig.Token)
 	}
 
 	// Set last will to mark scanner offline
