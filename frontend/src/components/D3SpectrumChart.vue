@@ -81,6 +81,37 @@ function getATSCChannels(startMHz, stopMHz) {
   return channels
 }
 
+// WiFi 2.4 GHz channels (1-14)
+// Each channel is 22 MHz wide, centered on the channel frequency
+function getWifi24Channels(startMHz, stopMHz) {
+  // Channel center frequencies (MHz)
+  const channelCenters = {
+    1: 2412, 2: 2417, 3: 2422, 4: 2427, 5: 2432, 6: 2437, 7: 2442,
+    8: 2447, 9: 2452, 10: 2457, 11: 2462, 12: 2467, 13: 2472, 14: 2484
+  }
+  // Non-overlapping channels (highlighted)
+  const nonOverlapping = [1, 6, 11]
+  // Channel bandwidth is 22 MHz
+  const channelWidth = 22
+
+  const channels = []
+  for (const [ch, center] of Object.entries(channelCenters)) {
+    const lo = center - channelWidth / 2
+    const hi = center + channelWidth / 2
+    // Include channel if any part is visible in the display range
+    if (hi >= startMHz && lo <= stopMHz) {
+      channels.push({
+        num: parseInt(ch),
+        center: center,
+        lo: lo,
+        hi: hi,
+        primary: nonOverlapping.includes(parseInt(ch))
+      })
+    }
+  }
+  return channels
+}
+
 // Update history for averaging/peak detection
 function updateTraceHistory(traceId, power) {
   if (!traceHistory.value[traceId]) {
@@ -159,9 +190,11 @@ function draw() {
   const stopMHz = stopHz / 1e6
   const spanMHz = stopMHz - startMHz
 
-  // Only use ATSC channel grid if we're in the actual TV band (470-608 MHz)
-  const channels = getATSCChannels(startMHz, stopMHz)
-  const isUHF = channels.length > 0
+  // Detect band type for channel overlays
+  const atscChannels = getATSCChannels(startMHz, stopMHz)
+  const wifi24Channels = getWifi24Channels(startMHz, stopMHz)
+  const isUHF = atscChannels.length > 0
+  const isWifi24 = wifi24Channels.length >= 3 // At least a few channels visible
 
   // Select and clear SVG
   const svg = d3.select(svgRef.value)
@@ -192,8 +225,8 @@ function draw() {
 
   // Vertical grid lines
   if (isUHF) {
-    // UHF: 6 MHz channel boundaries (channels already computed above)
-    channels.forEach((ch, idx) => {
+    // UHF: 6 MHz channel boundaries
+    atscChannels.forEach((ch, idx) => {
       if (ch.start >= startMHz) {
         const x = xScale(ch.start * 1e6)
         gridGroup.append('line')
@@ -202,7 +235,7 @@ function draw() {
           .attr('stroke', '#1a1a3e')
           .attr('stroke-width', 1)
       }
-      if (idx === channels.length - 1 && ch.end <= stopMHz) {
+      if (idx === atscChannels.length - 1 && ch.end <= stopMHz) {
         const x = xScale(ch.end * 1e6)
         gridGroup.append('line')
           .attr('x1', x).attr('y1', 0)
@@ -210,6 +243,42 @@ function draw() {
           .attr('stroke', '#1a1a3e')
           .attr('stroke-width', 1)
       }
+    })
+  } else if (isWifi24) {
+    // WiFi 2.4 GHz: channel bands (22 MHz wide)
+    // Draw shaded regions for non-overlapping channels first (background)
+    wifi24Channels.filter(ch => ch.primary).forEach(ch => {
+      const xLo = xScale(ch.lo * 1e6)
+      const xHi = xScale(ch.hi * 1e6)
+      gridGroup.append('rect')
+        .attr('x', xLo)
+        .attr('y', 0)
+        .attr('width', xHi - xLo)
+        .attr('height', plotHeight)
+        .attr('fill', '#1a2a24')
+        .attr('opacity', 0.5)
+    })
+
+    // Draw channel edge lines for all channels
+    wifi24Channels.forEach(ch => {
+      const xLo = xScale(ch.lo * 1e6)
+      const xHi = xScale(ch.hi * 1e6)
+      const lineColor = ch.primary ? '#2a5a4e' : '#1a1a3e'
+      const lineWidth = ch.primary ? 1 : 0.5
+
+      // Low edge
+      gridGroup.append('line')
+        .attr('x1', xLo).attr('y1', 0)
+        .attr('x2', xLo).attr('y2', plotHeight)
+        .attr('stroke', lineColor)
+        .attr('stroke-width', lineWidth)
+
+      // High edge
+      gridGroup.append('line')
+        .attr('x1', xHi).attr('y1', 0)
+        .attr('x2', xHi).attr('y2', plotHeight)
+        .attr('stroke', lineColor)
+        .attr('stroke-width', lineWidth)
     })
   } else {
     // Default frequency grid
@@ -240,11 +309,11 @@ function draw() {
     .attr('transform', `translate(0,${plotHeight})`)
 
   if (isUHF) {
-    // Show frequency at channel boundaries (channels already computed above)
+    // Show frequency at channel boundaries
     const tickValues = []
-    channels.forEach((ch, idx) => {
+    atscChannels.forEach((ch, idx) => {
       if (ch.start >= startMHz) tickValues.push(ch.start * 1e6)
-      if (idx === channels.length - 1 && ch.end <= stopMHz) tickValues.push(ch.end * 1e6)
+      if (idx === atscChannels.length - 1 && ch.end <= stopMHz) tickValues.push(ch.end * 1e6)
     })
 
     xAxisGroup.call(
@@ -263,7 +332,7 @@ function draw() {
     const channelGroup = chart.append('g')
       .attr('transform', `translate(0,${plotHeight + 28})`)
 
-    channels.forEach(ch => {
+    atscChannels.forEach(ch => {
       const x = xScale(ch.center * 1e6)
       if (x > 10 && x < plotWidth - 10) {
         channelGroup.append('text')
@@ -271,6 +340,44 @@ function draw() {
           .attr('y', 0)
           .attr('text-anchor', 'middle')
           .attr('fill', '#00d4ff')
+          .style('font-size', '9px')
+          .text(ch.num)
+      }
+    })
+  } else if (isWifi24) {
+    // WiFi 2.4 GHz: show frequency at channel boundaries (like ATSC)
+    // Use boundaries of non-overlapping channels for cleaner axis
+    const tickValues = []
+    wifi24Channels.filter(ch => ch.primary).forEach((ch, idx, arr) => {
+      if (ch.lo >= startMHz) tickValues.push(ch.lo * 1e6)
+      if (idx === arr.length - 1 && ch.hi <= stopMHz) tickValues.push(ch.hi * 1e6)
+    })
+
+    xAxisGroup.call(
+      d3.axisBottom(xScale)
+        .tickValues(tickValues)
+        .tickFormat(d => (d / 1e6).toFixed(0))
+    )
+      .selectAll('text')
+      .attr('fill', '#666')
+      .style('font-size', '10px')
+
+    xAxisGroup.selectAll('line').attr('stroke', '#666')
+    xAxisGroup.select('.domain').attr('stroke', '#666')
+
+    // Channel numbers centered in each band (primary channels highlighted)
+    const channelGroup = chart.append('g')
+      .attr('transform', `translate(0,${plotHeight + 28})`)
+
+    wifi24Channels.forEach(ch => {
+      const x = xScale(ch.center * 1e6)
+      if (x > 10 && x < plotWidth - 10) {
+        channelGroup.append('text')
+          .attr('x', x)
+          .attr('y', 0)
+          .attr('text-anchor', 'middle')
+          .attr('fill', ch.primary ? '#22c55e' : '#666')
+          .attr('font-weight', ch.primary ? 'bold' : 'normal')
           .style('font-size', '9px')
           .text(ch.num)
       }
