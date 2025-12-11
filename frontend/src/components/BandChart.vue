@@ -59,9 +59,9 @@ const isLive = ref(true)
 const timeline = ref([])
 const historicalScan = ref(null)
 
-// Are we actually showing live data right now?
+// Are we showing live data right now?
 const showingLive = computed(() => {
-  return props.scan && props.scan.power && props.scan.power.length > 0
+  return isLive.value && props.scan && props.scan.power && props.scan.power.length > 0
 })
 
 // Current time being displayed (for scrubber positioning)
@@ -75,13 +75,17 @@ const currentDisplayTime = computed(() => {
   return null
 })
 
-// Active scan - prefer live, fall back to historical
+// Active scan - use historical if selected, otherwise live
 const activeScan = computed(() => {
-  // If we have live scan data, use it
+  // If user selected historical time, show historical scan
+  if (!isLive.value && historicalScan.value) {
+    return historicalScan.value
+  }
+  // Otherwise show live scan if available
   if (props.scan && props.scan.power && props.scan.power.length > 0) {
     return props.scan
   }
-  // Otherwise use historical scan if available
+  // Fall back to historical if no live data
   return historicalScan.value
 })
 
@@ -170,11 +174,22 @@ function hasLiveScan() {
   return props.scan && props.scan.power && props.scan.power.length > 0
 }
 
-// Load the most recent historical scan
+// Load the most recent historical scan (as fallback, stays in live mode)
 async function loadLatestHistorical() {
   if (timeline.value.length > 0) {
     const latestTime = new Date(timeline.value[timeline.value.length - 1].timestamp)
-    await handleTimeSelect(latestTime)
+    // Load the scan but don't switch out of live mode - this is just a fallback
+    const scan = await store.fetchScanAtTime(props.scannerId, latestTime, props.band.name)
+    if (scan) {
+      historicalScan.value = {
+        hz_lo: scan.hz_lo,
+        hz_hi: scan.hz_hi,
+        step: scan.step_hz,
+        power: scan.power,
+        timestamp: scan.timestamp,
+      }
+    }
+    // Keep isLive = true so we switch to live data when it arrives
   }
 }
 

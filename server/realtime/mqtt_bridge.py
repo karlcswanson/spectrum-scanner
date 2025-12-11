@@ -23,8 +23,8 @@ logger = logging.getLogger(__name__)
 class MQTTBridge:
     """Bridges MQTT messages to Django database."""
 
-    # Store scans every N seconds (60 = 1 minute)
-    STORE_INTERVAL_SECONDS = 60
+    # Store scans every N seconds
+    STORE_INTERVAL_SECONDS = 10
 
     def __init__(self):
         self.client = mqtt.Client(
