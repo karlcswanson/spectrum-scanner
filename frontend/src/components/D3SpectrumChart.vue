@@ -155,6 +155,19 @@ function resetPeak(traceId) {
   }
 }
 
+// Cache for chart structure to avoid rebuilding static elements
+let chartCache = {
+  width: 0,
+  height: 0,
+  startHz: 0,
+  stopHz: 0,
+  xScale: null,
+  yScale: null,
+  margin: null,
+  plotWidth: 0,
+  plotHeight: 0,
+}
+
 // Main drawing function using D3
 function draw() {
   if (!svgRef.value || !container.value) return
@@ -196,9 +209,17 @@ function draw() {
   const isUHF = atscChannels.length > 0
   const isWifi24 = wifi24Channels.length >= 3 // At least a few channels visible
 
-  // Select and clear SVG
   const svg = d3.select(svgRef.value)
-  svg.selectAll('*').remove()
+
+  // Check if we need to rebuild the entire chart structure
+  const needsRebuild = chartCache.width !== width ||
+    chartCache.height !== height ||
+    chartCache.startHz !== startHz ||
+    chartCache.stopHz !== stopHz
+
+  if (needsRebuild) {
+    // Full rebuild - clear everything
+    svg.selectAll('*').remove()
 
   // Set SVG dimensions
   svg
@@ -430,14 +451,31 @@ function draw() {
     .style('font-size', '10px')
     .text('MHz')
 
+  // Create traces group (will be cleared and redrawn on each update)
+  chart.append('g').attr('class', 'traces')
+
+  // Create legend group
+  svg.append('g').attr('class', 'legend')
+    .attr('transform', `translate(${width - margin.right - 10}, ${margin.top + 10})`)
+
+  // Update cache
+  chartCache = { width, height, startHz, stopHz, xScale, yScale, margin, plotWidth, plotHeight }
+  }
+
+  // Use cached values (either just created or from previous render)
+  const xScale = chartCache.xScale
+  const yScale = chartCache.yScale
+  const cachedPlotWidth = chartCache.plotWidth
+
   // Create line generator
   const lineGenerator = d3.line()
     .x(d => d.x)
     .y(d => d.y)
     .curve(d3.curveLinear)
 
-  // Draw traces
-  const tracesGroup = chart.append('g').attr('class', 'traces')
+  // Clear and redraw traces (fast path - only updates the lines)
+  const tracesGroup = svg.select('.traces')
+  tracesGroup.selectAll('*').remove()
 
   normalizedTraces.value.forEach((trace, traceIdx) => {
     if (!trace.scan?.power?.length) return
@@ -451,7 +489,7 @@ function draw() {
     // Convert power data to screen coordinates
     function powerToPoints(powerData) {
       const points = []
-      const sampleStep = Math.max(1, Math.floor(powerData.length / plotWidth))
+      const sampleStep = Math.max(1, Math.floor(powerData.length / cachedPlotWidth))
 
       for (let i = 0; i < powerData.length; i += sampleStep) {
         const freq = hz_lo + (i / powerData.length) * (hz_hi - hz_lo)
@@ -501,10 +539,10 @@ function draw() {
     }
   })
 
-  // Legend (only if multiple traces)
+  // Legend (only if multiple traces) - update existing legend group
+  const legendGroup = svg.select('.legend')
+  legendGroup.selectAll('*').remove()
   if (normalizedTraces.value.length > 1) {
-    const legendGroup = svg.append('g')
-      .attr('transform', `translate(${width - margin.right - 10}, ${margin.top + 10})`)
 
     normalizedTraces.value.forEach((trace, idx) => {
       const legendItem = legendGroup.append('g')

@@ -15,7 +15,7 @@ from django.contrib.auth import authenticate, login, logout
 from core.models import Scanner, Band, Scan, UserMQTTCredentials
 from .serializers import (
     ScannerSerializer, BandSerializer, ScanSerializer, ScanCreateSerializer,
-    ScanTimelineSerializer
+    ScanTimelineSerializer, DecimatedScanSerializer
 )
 
 logger = logging.getLogger(__name__)
@@ -58,11 +58,13 @@ class ScannerViewSet(viewsets.ModelViewSet):
         - band: Filter by band name
         - hours: How far back to look (default 24, max 24)
         - limit: Max scans to return (default 1000)
+        - decimated: If true, downsample power arrays to ~1920 points
         """
         scanner = self.get_object()
         band_name = request.query_params.get('band')
         hours = min(float(request.query_params.get('hours', 24)), 24)
         limit = min(int(request.query_params.get('limit', 1000)), 1000)
+        decimated = request.query_params.get('decimated', '').lower() == 'true'
 
         cutoff = timezone.now() - timedelta(hours=hours)
         queryset = scanner.scans.filter(timestamp__gte=cutoff).order_by('timestamp')
@@ -71,6 +73,11 @@ class ScannerViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(band__name=band_name)
 
         scans = queryset[:limit]
+
+        if decimated:
+            # Return decimated scans for scrubber preview
+            return Response(DecimatedScanSerializer(scans, many=True).data)
+
         return Response(ScanSerializer(scans, many=True).data)
 
     @action(detail=True, methods=['get'])

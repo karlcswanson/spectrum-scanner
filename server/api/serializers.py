@@ -49,6 +49,46 @@ class ScanTimelineSerializer(serializers.ModelSerializer):
         fields = ['id', 'timestamp', 'band_name']
 
 
+class DecimatedScanSerializer(serializers.ModelSerializer):
+    """Serializer that decimates power array to ~1920 points for fast scrubbing."""
+
+    scanner_id = serializers.UUIDField(source='scanner.id', read_only=True)
+    band_name = serializers.CharField(source='band.name', read_only=True, allow_null=True)
+    power = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Scan
+        fields = [
+            'id', 'scanner_id', 'band_name',
+            'timestamp', 'hz_lo', 'hz_hi', 'step_hz', 'power'
+        ]
+
+    def get_power(self, obj):
+        """Decimate power array to ~1920 points using max-pooling."""
+        if not obj.power:
+            return []
+
+        target_points = 1920
+        original = obj.power
+
+        if len(original) <= target_points:
+            return original
+
+        # Calculate decimation factor
+        factor = len(original) / target_points
+        result = []
+
+        for i in range(target_points):
+            start = int(i * factor)
+            end = int((i + 1) * factor)
+            # Use max value in each bin to preserve peaks
+            chunk = original[start:end]
+            if chunk:
+                result.append(max(chunk))
+
+        return result
+
+
 class ScanCreateSerializer(serializers.Serializer):
     """Serializer for incoming scan data (from MQTT or direct POST)."""
 

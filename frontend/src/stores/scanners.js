@@ -8,7 +8,27 @@ export const useScannersStore = defineStore('scanners', () => {
   const bandScans = ref({})         // { scannerId: { bandName: lastScan } }
   const timelines = ref({})         // { `${scannerId}:${bandName}`: [{ id, timestamp, band__name }] }
   const scanCache = ref({})         // { `${scannerId}:${bandName}`: [{ timestamp, scan }, ...] } - historical scans
+  const decimatedCache = ref({})    // { `${scannerId}:${bandName}`: [{ timestamp, scan }, ...] } - decimated scans for scrubbing
   const connected = ref(false)
+
+  // Global tick for timeline redraws (updates every 500ms)
+  const tick = ref(0)
+  let tickInterval = null
+
+  function startTick() {
+    if (!tickInterval) {
+      tickInterval = setInterval(() => {
+        tick.value++
+      }, 500)
+    }
+  }
+
+  function stopTick() {
+    if (tickInterval) {
+      clearInterval(tickInterval)
+      tickInterval = null
+    }
+  }
   const subscriptions = ref(new Set()) // Track subscribed scanner IDs
   let client = null
   let reconnectTimeout = null
@@ -69,6 +89,9 @@ export const useScannersStore = defineStore('scanners', () => {
       console.log('MQTT connected')
       connected.value = true
 
+      // Start the global tick timer
+      startTick()
+
       // Subscribe to all scanner topics (config, status, scan, timeline)
       // Using wildcard to get all scanners
       client.subscribe(`${TOPIC_PREFIX}/scanners/+/config`, { qos: 1 })
@@ -122,6 +145,7 @@ export const useScannersStore = defineStore('scanners', () => {
       client.end()
       client = null
     }
+    stopTick()
     connected.value = false
   }
 
@@ -360,6 +384,83 @@ export const useScannersStore = defineStore('scanners', () => {
     }
   }
 
+  // Load decimated cache from API (for scrubber preview)
+  async function loadDecimatedCache(scannerId, bandName, hours = 0.167) {
+    const key = `${scannerId}:${bandName}`
+    try {
+      const scans = await fetchHistory(scannerId, bandName, hours, 1000, true)
+      if (scans && scans.length > 0) {
+        decimatedCache.value[key] = scans.map(s => ({
+          id: s.id,
+          timestamp: new Date(s.timestamp).getTime(),
+          scan: {
+            hz_lo: s.hz_lo,
+            hz_hi: s.hz_hi,
+            step: s.step_hz,
+            power: s.power,
+            timestamp: s.timestamp,
+          }
+        })).sort((a, b) => a.timestamp - b.timestamp)
+      } else {
+        decimatedCache.value[key] = []
+      }
+      return decimatedCache.value[key]
+    } catch (err) {
+      console.error(`Error loading decimated cache for ${scannerId}/${bandName}:`, err)
+      decimatedCache.value[key] = []
+      return []
+    }
+  }
+
+  // Find closest scan in decimated cache (binary search)
+  function findScanInDecimatedCache(scannerId, bandName, targetTime) {
+    const key = `${scannerId}:${bandName}`
+    const cache = decimatedCache.value[key]
+    if (!cache || cache.length === 0) return null
+
+    const targetMs = targetTime.getTime()
+
+    // Binary search for closest
+    let left = 0
+    let right = cache.length - 1
+
+    while (left < right) {
+      const mid = Math.floor((left + right) / 2)
+      if (cache[mid].timestamp < targetMs) {
+        left = mid + 1
+      } else {
+        right = mid
+      }
+    }
+
+    // Check left and left-1 to find closest
+    const candidates = []
+    if (left < cache.length) candidates.push(cache[left])
+    if (left > 0) candidates.push(cache[left - 1])
+
+    let closest = null
+    let closestDiff = Infinity
+    for (const c of candidates) {
+      const diff = Math.abs(c.timestamp - targetMs)
+      if (diff < closestDiff) {
+        closestDiff = diff
+        closest = c
+      }
+    }
+
+    return closest?.scan || null
+  }
+
+  // Clear decimated cache (when switching views)
+  function clearDecimatedCache(scannerId = null, bandName = null) {
+    if (scannerId && bandName) {
+      const key = `${scannerId}:${bandName}`
+      delete decimatedCache.value[key]
+    } else {
+      decimatedCache.value = {}
+    }
+  }
+
   async function fetchScanners() {
     try {
       const response = await fetch('/api/scanners/', {
@@ -442,11 +543,14 @@ export const useScannersStore = defineStore('scanners', () => {
   }
 
   // Fetch historical scan data
-  async function fetchHistory(scannerId, bandName = null, hours = 24, limit = 1000) {
+  async function fetchHistory(scannerId, bandName = null, hours = 24, limit = 1000, decimated = false) {
     try {
       let url = `/api/scanners/${scannerId}/history/?hours=${hours}&limit=${limit}`
       if (bandName) {
         url += `&band=${encodeURIComponent(bandName)}`
+      }
+      if (decimated) {
+        url += '&decimated=true'
       }
       const response = await fetch(url, {
         credentials: 'include',
@@ -484,6 +588,7 @@ export const useScannersStore = defineStore('scanners', () => {
     bandScans,
     timelines,
     scanCache,
+    decimatedCache,
     connected,
     connect,
     disconnect,
@@ -498,5 +603,9 @@ export const useScannersStore = defineStore('scanners', () => {
     getScanCache,
     findScanInCache,
     loadScanCache,
+    loadDecimatedCache,
+    findScanInDecimatedCache,
+    clearDecimatedCache,
+    tick,
   }
 })

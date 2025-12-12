@@ -1,6 +1,9 @@
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import * as d3 from 'd3'
+import { useScannersStore } from '../stores/scanners'
+
+const store = useScannersStore()
 
 const props = defineProps({
   scannerId: {
@@ -48,7 +51,7 @@ const props = defineProps({
   },
 })
 
-const emit = defineEmits(['select', 'live'])
+const emit = defineEmits(['select', 'preview', 'live'])
 
 const container = ref(null)
 const svgRef = ref(null)
@@ -83,19 +86,9 @@ function getTimeRange() {
   return { start, end: now }
 }
 
-function selectTime(time) {
-  if (time === null) {
-    // Go live
-    dragTime.value = null
-    emit('live')
-  } else {
-    dragTime.value = time
-    emit('select', time)
-  }
-}
-
 function goLive() {
-  selectTime(null)
+  dragTime.value = null
+  emit('live')
 }
 
 // Find closest scan to a given time
@@ -114,26 +107,16 @@ function findClosestScan(time) {
   return closest
 }
 
-// Throttle helper
-let lastDrawTime = 0
-let pendingDraw = null
-const THROTTLE_MS = 50
 
-function throttledDraw() {
-  const now = Date.now()
-  const elapsed = now - lastDrawTime
+// RAF-based draw scheduling (no artificial delays, just sync to display refresh)
+let pendingRAF = null
 
-  if (elapsed >= THROTTLE_MS) {
-    // Enough time has passed, draw immediately
-    lastDrawTime = now
-    draw()
-  } else if (!pendingDraw) {
-    // Schedule a draw for later
-    pendingDraw = setTimeout(() => {
-      lastDrawTime = Date.now()
-      pendingDraw = null
+function scheduleDraw() {
+  if (!pendingRAF) {
+    pendingRAF = requestAnimationFrame(() => {
+      pendingRAF = null
       draw()
-    }, THROTTLE_MS - elapsed)
+    })
   }
 }
 
@@ -319,12 +302,12 @@ function draw() {
   // Only set up drag behavior once
   if (!scrubber.node().__dragInitialized) {
     scrubber.node().__dragInitialized = true
-    let lastFetchedScanId = null
+    let lastPreviewScanId = null
 
     const drag = d3.drag()
       .on('start', () => {
         isDragging.value = true
-        lastFetchedScanId = null
+        lastPreviewScanId = null
       })
       .on('drag', (event) => {
         // Immediately follow the mouse for responsive feel
@@ -335,22 +318,24 @@ function draw() {
         scrubber.select('line').attr('stroke', '#00d4ff')
         scrubber.selectAll('path').attr('fill', '#00d4ff')
 
-        // Find closest scan and emit immediately (no throttle)
+        // Find closest scan and emit preview (decimated) immediately
         const time = currentXScale.invert(x)
         const closest = findClosestScan(time)
-        if (closest && closest.id !== lastFetchedScanId) {
-          lastFetchedScanId = closest.id
-          selectTime(closest.date)
+        if (closest && closest.id !== lastPreviewScanId) {
+          lastPreviewScanId = closest.id
+          dragTime.value = closest.date
+          emit('preview', closest.date)
         }
       })
       .on('end', (event) => {
         isDragging.value = false
-        // On release, immediately find and fetch closest scan
+        // On release, emit select for full resolution fetch
         const x = Math.max(0, Math.min(plotWidth, event.x))
         const time = currentXScale.invert(x)
         const closest = findClosestScan(time)
         if (closest) {
-          selectTime(closest.date)
+          dragTime.value = closest.date
+          emit('select', closest.date)
         }
         // Redraw will snap scrubber to actual data point
         draw()
@@ -358,14 +343,15 @@ function draw() {
 
     scrubber.call(drag)
 
-    // Click anywhere on timeline to seek
+    // Click anywhere on timeline to seek (full resolution immediately)
     chart.select('.click-area')
       .on('click', (event) => {
         const [x] = d3.pointer(event)
         const time = currentXScale.invert(x)
         const closest = findClosestScan(time)
         if (closest) {
-          selectTime(closest.date)
+          dragTime.value = closest.date
+          emit('select', closest.date)
         }
       })
   }
@@ -386,8 +372,8 @@ onUnmounted(() => {
   if (resizeObserver) {
     resizeObserver.disconnect()
   }
-  if (pendingDraw) {
-    clearTimeout(pendingDraw)
+  if (pendingRAF) {
+    cancelAnimationFrame(pendingRAF)
   }
   // Reset state for potential remount
   svgInitialized = false
@@ -409,18 +395,10 @@ watch(() => props.showingLive, (live) => {
   }
 })
 
-// Redraw when timeline data changes (new stored scans via MQTT)
-// Watch length instead of deep watch for better performance
-watch(() => props.timeline.length, () => {
+// Redraw on global tick (every 500ms) - decoupled from reactive timeline updates
+watch(() => store.tick, () => {
   if (!isDragging.value) {
-    throttledDraw()
-  }
-})
-
-// Redraw when any live scan comes in (keeps "now" line current)
-watch(() => props.lastScanTime, () => {
-  if (!isDragging.value) {
-    throttledDraw()
+    scheduleDraw()
   }
 })
 

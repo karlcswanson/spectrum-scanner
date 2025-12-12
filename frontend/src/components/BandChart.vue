@@ -178,15 +178,15 @@ async function loadTimeline() {
     const hours = props.timelineHours
     // Fetch initial timeline data - store handles MQTT updates after this
     await store.fetchTimeline(props.scannerId, props.band.name, hours)
-    // Load scan cache for fast scrubbing (same time range)
-    await store.loadScanCache(props.scannerId, props.band.name, hours)
+    // Load decimated cache for fast scrubbing preview
+    await store.loadDecimatedCache(props.scannerId, props.band.name, hours)
   }
 }
 
-function handleTimeSelect(time) {
+// Preview handler (while dragging) - use decimated cache
+function handleTimePreview(time) {
   isLive.value = false
-  // Use cache for instant lookup instead of API call
-  const scan = store.findScanInCache(props.scannerId, props.band.name, time)
+  const scan = store.findScanInDecimatedCache(props.scannerId, props.band.name, time)
   if (scan) {
     historicalScan.value = {
       hz_lo: scan.hz_lo,
@@ -195,8 +195,22 @@ function handleTimeSelect(time) {
       power: scan.power,
       timestamp: scan.timestamp,
     }
-  } else {
-    console.warn(`No scan found in cache for ${props.scannerId}/${props.band.name} at ${time}`)
+  }
+}
+
+// Select handler (on release) - fetch full resolution
+async function handleTimeSelect(time) {
+  isLive.value = false
+  // Fetch full resolution scan from API
+  const scan = await store.fetchScanAtTime(props.scannerId, time, props.band.name)
+  if (scan) {
+    historicalScan.value = {
+      hz_lo: scan.hz_lo,
+      hz_hi: scan.hz_hi,
+      step: scan.step_hz,
+      power: scan.power,
+      timestamp: scan.timestamp,
+    }
   }
 }
 
@@ -327,6 +341,7 @@ watch(() => props.band.name, async () => {
       :current-time="currentDisplayTime"
       :last-scan-time="scan?._receivedAt"
       class="mt-3"
+      @preview="handleTimePreview"
       @select="handleTimeSelect"
       @live="handleLive"
     />

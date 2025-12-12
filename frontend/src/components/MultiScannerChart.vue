@@ -46,8 +46,6 @@ const showPeak = ref(false)
 // Historical playback state
 const isLive = ref(true)
 const historicalScans = ref({}) // { 'scannerId:bandName': scan } - currently displayed
-const scanCache = ref({}) // { 'scannerId:bandName': [{ timestamp, scan }, ...] } - all loaded history
-const cacheLoading = ref(false)
 
 // Color palette for multiple scanners
 const scannerColors = [
@@ -67,16 +65,26 @@ function getScannerColor(idx) {
 }
 
 // Combine timelines from all selected scanners
+// Cache parsed timestamps to avoid re-parsing
+const timelineCache = new Map()
+function getTimestampMs(entry) {
+  if (!timelineCache.has(entry.id)) {
+    timelineCache.set(entry.id, new Date(entry.timestamp).getTime())
+  }
+  return timelineCache.get(entry.id)
+}
+
 const combinedTimeline = computed(() => {
+  // Depend on tick to re-evaluate periodically
+  void store.tick
+
   const allEntries = []
   for (const scanner of props.availableScanners) {
     const timeline = store.getTimeline(scanner.scannerId, scanner.bandName)
     allEntries.push(...timeline)
   }
-  // Sort by timestamp - parse once, not on every comparison
-  return allEntries
-    .map(t => ({ ...t, _ts: new Date(t.timestamp).getTime() }))
-    .sort((a, b) => a._ts - b._ts)
+  // Sort using cached timestamps
+  return allEntries.sort((a, b) => getTimestampMs(a) - getTimestampMs(b))
 })
 
 // Get the latest scan timestamp for triggering redraws
@@ -189,103 +197,41 @@ function exportCSV() {
   })
 }
 
-// Timeline handlers
-async function loadTimelines() {
-  // Fetch timeline for each selected scanner/band
-  for (const scanner of props.availableScanners) {
-    await store.fetchTimeline(scanner.scannerId, scanner.bandName, 24)
-  }
-}
-
-// Load all historical data for selected scanners into cache
-async function loadScanCache() {
-  cacheLoading.value = true
-  const hours = 0.167 // 10 minutes - matches scrubber max-hours
-
-  const loadPromises = props.availableScanners.map(async (scanner) => {
-    const key = `${scanner.scannerId}:${scanner.bandName}`
-    try {
-      // Fetch all scans for this scanner/band in the time window
-      const scans = await store.fetchHistory(scanner.scannerId, scanner.bandName, hours, 1000)
-      if (scans && scans.length > 0) {
-        // Store as sorted array with parsed timestamps for fast lookup
-        scanCache.value[key] = scans.map(s => ({
-          timestamp: new Date(s.timestamp).getTime(),
-          scan: {
-            hz_lo: s.hz_lo,
-            hz_hi: s.hz_hi,
-            step: s.step_hz,
-            power: s.power,
-            timestamp: s.timestamp,
-          }
-        })).sort((a, b) => a.timestamp - b.timestamp)
-      } else {
-        scanCache.value[key] = []
-      }
-    } catch (err) {
-      console.error(`Error loading cache for ${scanner.scannerName}/${scanner.bandName}:`, err)
-      scanCache.value[key] = []
-    }
-  })
-
-  await Promise.all(loadPromises)
-  scanCache.value = { ...scanCache.value }
-  cacheLoading.value = false
-  console.log('Scan cache loaded:', Object.keys(scanCache.value).map(k => `${k}: ${scanCache.value[k].length} scans`))
-}
-
-// Find closest scan in cache (binary search)
-function findClosestInCache(key, targetTime) {
-  const cache = scanCache.value[key]
-  if (!cache || cache.length === 0) return null
-
-  const targetMs = targetTime.getTime()
-
-  // Binary search for closest
-  let left = 0
-  let right = cache.length - 1
-
-  while (left < right) {
-    const mid = Math.floor((left + right) / 2)
-    if (cache[mid].timestamp < targetMs) {
-      left = mid + 1
-    } else {
-      right = mid
-    }
-  }
-
-  // Check left and left-1 to find closest
-  const candidates = []
-  if (left < cache.length) candidates.push(cache[left])
-  if (left > 0) candidates.push(cache[left - 1])
-
-  let closest = null
-  let closestDiff = Infinity
-  for (const c of candidates) {
-    const diff = Math.abs(c.timestamp - targetMs)
-    if (diff < closestDiff) {
-      closestDiff = diff
-      closest = c
-    }
-  }
-
-  return closest?.scan || null
-}
-
-// Handle time selection - lookup from cache (instant!)
-function handleTimeSelect(time) {
+// Preview handler (while dragging) - use decimated cache for instant response
+function handleTimePreview(time) {
   isLive.value = false
 
-  // Find closest scan for each scanner from cache
   const newScans = {}
   for (const scanner of props.availableScanners) {
     const key = `${scanner.scannerId}:${scanner.bandName}`
-    const scan = findClosestInCache(key, time)
+    const scan = store.findScanInDecimatedCache(scanner.scannerId, scanner.bandName, time)
     if (scan) {
       newScans[key] = scan
     }
   }
-  // Single reactive update
+  historicalScans.value = newScans
+}
+
+// Select handler (on release) - fetch full resolution from API
+async function handleTimeSelect(time) {
+  isLive.value = false
+
+  const newScans = {}
+  const fetchPromises = props.availableScanners.map(async (scanner) => {
+    const key = `${scanner.scannerId}:${scanner.bandName}`
+    const scan = await store.fetchScanAtTime(scanner.scannerId, time, scanner.bandName)
+    if (scan) {
+      newScans[key] = {
+        hz_lo: scan.hz_lo,
+        hz_hi: scan.hz_hi,
+        step: scan.step_hz,
+        power: scan.power,
+        timestamp: scan.timestamp,
+      }
+    }
+  })
+
+  await Promise.all(fetchPromises)
   historicalScans.value = newScans
 }
 
@@ -294,13 +240,24 @@ function handleLive() {
   historicalScans.value = {}
 }
 
-// Load timelines and scan cache when scanners change
-watch(() => props.availableScanners, async () => {
-  if (props.showTimeline) {
-    loadTimelines()
-    await loadScanCache()
+// Track which scanners we've loaded data for
+const loadedScannerKeys = ref(new Set())
+
+// Load timelines and decimated cache only for new scanners
+watch(() => props.availableScanners, async (newScanners) => {
+  if (!props.showTimeline) return
+
+  for (const scanner of newScanners) {
+    const key = `${scanner.scannerId}:${scanner.bandName}`
+    if (!loadedScannerKeys.value.has(key)) {
+      loadedScannerKeys.value.add(key)
+      // Fetch initial timeline (MQTT will update it after this)
+      store.fetchTimeline(scanner.scannerId, scanner.bandName, 24)
+      // Load decimated cache for scrubbing
+      store.loadDecimatedCache(scanner.scannerId, scanner.bandName, 0.167)
+    }
   }
-}, { immediate: true, deep: true })
+}, { immediate: true })
 </script>
 
 <template>
@@ -312,10 +269,7 @@ watch(() => props.availableScanners, async () => {
           <span v-if="label" class="text-gray-500 font-normal text-sm ml-2">
             ({{ freqRange }})
           </span>
-          <span v-if="cacheLoading" class="text-gray-400 text-xs ml-2">
-            Loading history...
-          </span>
-          <span v-else-if="!showingLive" class="text-yellow-400 text-xs ml-2">
+          <span v-if="!showingLive" class="text-yellow-400 text-xs ml-2">
             Historical
           </span>
         </h2>
@@ -396,6 +350,7 @@ watch(() => props.availableScanners, async () => {
       :last-scan-time="latestScanTime"
       :hide-markers="false"
       class="mt-3"
+      @preview="handleTimePreview"
       @select="handleTimeSelect"
       @live="handleLive"
     />
