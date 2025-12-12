@@ -155,6 +155,7 @@ class Scan(models.Model):
         indexes = [
             models.Index(fields=['scanner', 'timestamp']),
             models.Index(fields=['band', 'timestamp']),
+            models.Index(fields=['scanner', 'band', 'timestamp']),
         ]
 
     def __str__(self):

@@ -236,6 +236,7 @@ class MQTTBridge:
 
         This tells the frontend that a new scan was stored in the database,
         so the time scrubber can add a new marker without polling.
+        Includes full scan data so frontend can add to cache without API call.
         """
         try:
             timeline_topic = f"{self.topic_prefix}/scanners/{scanner_id}/timeline"
@@ -243,6 +244,13 @@ class MQTTBridge:
                 'id': scan.id,
                 'timestamp': scan.timestamp.isoformat(),
                 'band__name': band_name,
+                # Include full scan data for caching
+                'scan': {
+                    'hz_lo': scan.hz_lo,
+                    'hz_hi': scan.hz_hi,
+                    'step_hz': scan.step_hz,
+                    'power': scan.power,
+                }
             }
             self.client.publish(
                 timeline_topic,

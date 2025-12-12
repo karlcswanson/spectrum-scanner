@@ -7,6 +7,7 @@ export const useScannersStore = defineStore('scanners', () => {
   const latestScans = ref({})       // { scannerId: lastScan }
   const bandScans = ref({})         // { scannerId: { bandName: lastScan } }
   const timelines = ref({})         // { `${scannerId}:${bandName}`: [{ id, timestamp, band__name }] }
+  const scanCache = ref({})         // { `${scannerId}:${bandName}`: [{ timestamp, scan }, ...] } - historical scans
   const connected = ref(false)
   const subscriptions = ref(new Set()) // Track subscribed scanner IDs
   let client = null
@@ -209,7 +210,7 @@ export const useScannersStore = defineStore('scanners', () => {
 
   function handleTimeline(scannerId, data) {
     // Timeline update from Django - a new scan was stored in the database
-    // Format: { id, timestamp, band__name }
+    // Format: { id, timestamp, band__name, scan?: { hz_lo, hz_hi, step_hz, power } }
     const bandName = data.band__name || 'default'
     const key = `${scannerId}:${bandName}`
 
@@ -231,6 +232,45 @@ export const useScannersStore = defineStore('scanners', () => {
         ? updated.slice(-maxEntries)
         : updated
     }
+
+    // Add scan data to cache if included
+    if (data.scan) {
+      if (!scanCache.value[key]) {
+        scanCache.value[key] = []
+      }
+
+      const scanExists = scanCache.value[key].some(s => s.id === data.id)
+      if (!scanExists) {
+        const timestampMs = new Date(data.timestamp).getTime()
+        const cacheEntry = {
+          id: data.id,
+          timestamp: timestampMs,
+          scan: {
+            hz_lo: data.scan.hz_lo,
+            hz_hi: data.scan.hz_hi,
+            step: data.scan.step_hz,
+            power: data.scan.power,
+            timestamp: data.timestamp,
+          }
+        }
+
+        // Insert in sorted order
+        const insertIdx = scanCache.value[key].findIndex(s => s.timestamp > timestampMs)
+        if (insertIdx === -1) {
+          scanCache.value[key] = [...scanCache.value[key], cacheEntry]
+        } else {
+          const updated = [...scanCache.value[key]]
+          updated.splice(insertIdx, 0, cacheEntry)
+          scanCache.value[key] = updated
+        }
+
+        // Limit cache size (keep last ~10 min at 10s intervals = ~60 entries per scanner)
+        const maxCacheEntries = 100
+        if (scanCache.value[key].length > maxCacheEntries) {
+          scanCache.value[key] = scanCache.value[key].slice(-maxCacheEntries)
+        }
+      }
+    }
   }
 
   // Get timeline for a scanner/band (reactive)
@@ -242,6 +282,82 @@ export const useScannersStore = defineStore('scanners', () => {
       timelines.value[key] = []
     }
     return timelines.value[key]
+  }
+
+  // Get scan cache for a scanner/band
+  function getScanCache(scannerId, bandName = 'default') {
+    const key = `${scannerId}:${bandName}`
+    if (!scanCache.value[key]) {
+      scanCache.value[key] = []
+    }
+    return scanCache.value[key]
+  }
+
+  // Find closest scan in cache (binary search)
+  function findScanInCache(scannerId, bandName, targetTime) {
+    const key = `${scannerId}:${bandName}`
+    const cache = scanCache.value[key]
+    if (!cache || cache.length === 0) return null
+
+    const targetMs = targetTime.getTime()
+
+    // Binary search for closest
+    let left = 0
+    let right = cache.length - 1
+
+    while (left < right) {
+      const mid = Math.floor((left + right) / 2)
+      if (cache[mid].timestamp < targetMs) {
+        left = mid + 1
+      } else {
+        right = mid
+      }
+    }
+
+    // Check left and left-1 to find closest
+    const candidates = []
+    if (left < cache.length) candidates.push(cache[left])
+    if (left > 0) candidates.push(cache[left - 1])
+
+    let closest = null
+    let closestDiff = Infinity
+    for (const c of candidates) {
+      const diff = Math.abs(c.timestamp - targetMs)
+      if (diff < closestDiff) {
+        closestDiff = diff
+        closest = c
+      }
+    }
+
+    return closest?.scan || null
+  }
+
+  // Load scan cache from API (for initial load)
+  async function loadScanCache(scannerId, bandName, hours = 0.167) {
+    const key = `${scannerId}:${bandName}`
+    try {
+      const scans = await fetchHistory(scannerId, bandName, hours, 1000)
+      if (scans && scans.length > 0) {
+        scanCache.value[key] = scans.map(s => ({
+          id: s.id,
+          timestamp: new Date(s.timestamp).getTime(),
+          scan: {
+            hz_lo: s.hz_lo,
+            hz_hi: s.hz_hi,
+            step: s.step_hz,
+            power: s.power,
+            timestamp: s.timestamp,
+          }
+        })).sort((a, b) => a.timestamp - b.timestamp)
+      } else {
+        scanCache.value[key] = []
+      }
+      return scanCache.value[key]
+    } catch (err) {
+      console.error(`Error loading cache for ${scannerId}/${bandName}:`, err)
+      scanCache.value[key] = []
+      return []
+    }
   }
 
   async function fetchScanners() {
@@ -367,6 +483,7 @@ export const useScannersStore = defineStore('scanners', () => {
     latestScans,
     bandScans,
     timelines,
+    scanCache,
     connected,
     connect,
     disconnect,
@@ -378,5 +495,8 @@ export const useScannersStore = defineStore('scanners', () => {
     getTimeline,
     fetchHistory,
     fetchScanAtTime,
+    getScanCache,
+    findScanInCache,
+    loadScanCache,
   }
 })

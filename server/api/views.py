@@ -61,7 +61,7 @@ class ScannerViewSet(viewsets.ModelViewSet):
         """
         scanner = self.get_object()
         band_name = request.query_params.get('band')
-        hours = min(int(request.query_params.get('hours', 24)), 24)
+        hours = min(float(request.query_params.get('hours', 24)), 24)
         limit = min(int(request.query_params.get('limit', 1000)), 1000)
 
         cutoff = timezone.now() - timedelta(hours=hours)
@@ -85,7 +85,7 @@ class ScannerViewSet(viewsets.ModelViewSet):
         """
         scanner = self.get_object()
         band_name = request.query_params.get('band')
-        hours = min(int(request.query_params.get('hours', 24)), 24)
+        hours = min(float(request.query_params.get('hours', 24)), 24)
 
         cutoff = timezone.now() - timedelta(hours=hours)
         queryset = scanner.scans.filter(timestamp__gte=cutoff).order_by('timestamp')

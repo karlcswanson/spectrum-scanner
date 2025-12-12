@@ -41,6 +41,11 @@ const props = defineProps({
     type: [Date, Number, String],
     default: null,
   },
+  // Hide individual scan markers for better performance
+  hideMarkers: {
+    type: Boolean,
+    default: false,
+  },
 })
 
 const emit = defineEmits(['select', 'live'])
@@ -112,7 +117,7 @@ function findClosestScan(time) {
 // Throttle helper
 let lastDrawTime = 0
 let pendingDraw = null
-const THROTTLE_MS = 100
+const THROTTLE_MS = 50
 
 function throttledDraw() {
   const now = Date.now()
@@ -132,6 +137,19 @@ function throttledDraw() {
   }
 }
 
+// Cache parsed dates to avoid re-parsing on every draw
+const parsedDates = new Map()
+function getDate(timestamp) {
+  if (!parsedDates.has(timestamp)) {
+    parsedDates.set(timestamp, new Date(timestamp))
+  }
+  return parsedDates.get(timestamp)
+}
+
+// Track if SVG structure is initialized
+let svgInitialized = false
+let lastWidth = 0
+
 function draw() {
   if (!svgRef.value || !container.value) return
 
@@ -143,16 +161,36 @@ function draw() {
   const plotHeight = height - margin.top - margin.bottom
 
   const svg = d3.select(svgRef.value)
-  svg.selectAll('*').remove()
 
-  svg
-    .attr('width', width)
-    .attr('height', height)
-    .style('background', '#1a1a2e')
+  // Only rebuild structure if width changed or not initialized
+  if (!svgInitialized || width !== lastWidth) {
+    svg.selectAll('*').remove()
+    svg
+      .attr('width', width)
+      .attr('height', height)
+      .style('background', '#1a1a2e')
 
-  const chart = svg
-    .append('g')
-    .attr('transform', `translate(${margin.left},${margin.top})`)
+    svg.append('g')
+      .attr('class', 'chart')
+      .attr('transform', `translate(${margin.left},${margin.top})`)
+
+    svg.select('.chart').append('g').attr('class', 'axis')
+      .attr('transform', `translate(0,${plotHeight})`)
+
+    svg.select('.chart').append('g').attr('class', 'markers')
+    svg.select('.chart').append('line').attr('class', 'now-line')
+    svg.select('.chart').append('g').attr('class', 'scrubber')
+    svg.select('.chart').insert('rect', ':first-child').attr('class', 'click-area')
+      .attr('width', plotWidth)
+      .attr('height', plotHeight)
+      .attr('fill', 'transparent')
+      .attr('cursor', 'pointer')
+
+    svgInitialized = true
+    lastWidth = width
+  }
+
+  const chart = svg.select('.chart')
 
   // Get fresh time range (not cached)
   const timeRange = getTimeRange()
@@ -165,14 +203,13 @@ function draw() {
   // Store for drag operations
   currentXScale = xScale
 
-  // Draw time axis
+  // Update time axis
   const tickCount = Math.min(12, Math.floor(plotWidth / 80))
   const xAxis = d3.axisBottom(xScale)
     .ticks(tickCount)
     .tickFormat(d => d3.timeFormat('%H:%M')(d))
 
-  chart.append('g')
-    .attr('transform', `translate(0,${plotHeight})`)
+  chart.select('.axis')
     .call(xAxis)
     .selectAll('text')
     .attr('fill', '#666')
@@ -181,52 +218,57 @@ function draw() {
   chart.selectAll('.domain, .tick line')
     .attr('stroke', '#333')
 
-  // Draw scan markers
+  // Get markers with cached dates (needed for drag operations even if not drawn)
   const allMarkers = filteredTimeline.value
     .map(t => ({
       ...t,
-      date: new Date(t.timestamp),
+      date: getDate(t.timestamp),
     }))
     .filter(t => t.date >= timeRange.start && t.date <= timeRange.end)
 
   // Store all markers for drag operations (finding closest scan)
   currentMarkers = allMarkers
 
-  // Bin markers if there are too many (more than 1 per 2 pixels)
-  const maxMarkers = Math.floor(plotWidth / 2)
-  let markers = allMarkers
-  if (allMarkers.length > maxMarkers) {
-    // Bin by pixel position - keep one marker per bin
-    const binned = new Map()
-    for (const m of allMarkers) {
-      const px = Math.floor(xScale(m.date))
-      if (!binned.has(px)) {
-        binned.set(px, m)
+  // Only draw markers if not hidden
+  if (!props.hideMarkers) {
+    // Bin markers if there are too many (more than 1 per 2 pixels)
+    const maxMarkers = Math.floor(plotWidth / 2)
+    let markers = allMarkers
+    if (allMarkers.length > maxMarkers) {
+      // Bin by pixel position - keep one marker per bin
+      const binned = new Map()
+      for (const m of allMarkers) {
+        const px = Math.floor(xScale(m.date))
+        if (!binned.has(px)) {
+          binned.set(px, m)
+        }
       }
+      markers = Array.from(binned.values())
     }
-    markers = Array.from(binned.values())
+
+    // Update markers efficiently
+    const markerRadius = 3
+    chart.select('.markers').selectAll('.scan-marker')
+      .data(markers, d => d.id)
+      .join('circle')
+      .attr('class', 'scan-marker')
+      .attr('cx', d => xScale(d.date))
+      .attr('cy', plotHeight / 2)
+      .attr('r', markerRadius)
+      .attr('fill', d => {
+        if (selectedTime.value && Math.abs(d.date - selectedTime.value) < 1000) {
+          return '#00d4ff'
+        }
+        return '#4a5568'
+      })
+  } else {
+    // Clear any existing markers
+    chart.select('.markers').selectAll('.scan-marker').remove()
   }
 
-  // Draw markers
-  const markerRadius = 3
-  chart.selectAll('.scan-marker')
-    .data(markers)
-    .join('circle')
-    .attr('class', 'scan-marker')
-    .attr('cx', d => xScale(d.date))
-    .attr('cy', plotHeight / 2)
-    .attr('r', markerRadius)
-    .attr('fill', d => {
-      if (selectedTime.value && Math.abs(d.date - selectedTime.value) < 1000) {
-        return '#00d4ff'
-      }
-      return '#4a5568'
-    })
-
-  // Draw "now" indicator
+  // Update "now" indicator
   const nowX = xScale(new Date())
-  chart.append('line')
-    .attr('class', 'now-line')
+  chart.select('.now-line')
     .attr('x1', nowX)
     .attr('y1', 0)
     .attr('x2', nowX)
@@ -235,92 +277,98 @@ function draw() {
     .attr('stroke-width', 1)
     .attr('stroke-dasharray', '4,2')
 
-  // Create scrubber handle group
+  // Update scrubber position and colors
   const scrubberX = selectedTime.value ? xScale(selectedTime.value) : nowX
-  const scrubber = chart.append('g')
-    .attr('class', 'scrubber')
+  const scrubber = chart.select('.scrubber')
     .attr('transform', `translate(${Math.max(0, Math.min(plotWidth, scrubberX))}, 0)`)
     .style('cursor', 'ew-resize')
 
-  // Scrubber line
-  scrubber.append('line')
+  const scrubberColor = isLive.value ? '#22c55e' : '#00d4ff'
+
+  // Only create scrubber elements once
+  if (scrubber.select('line').empty()) {
+    scrubber.append('line')
+    scrubber.append('path').attr('class', 'top-handle')
+    scrubber.append('path').attr('class', 'bottom-handle')
+    scrubber.append('rect').attr('class', 'drag-area')
+  }
+
+  scrubber.select('line')
     .attr('x1', 0)
     .attr('y1', 0)
     .attr('x2', 0)
     .attr('y2', plotHeight)
-    .attr('stroke', isLive.value ? '#22c55e' : '#00d4ff')
+    .attr('stroke', scrubberColor)
     .attr('stroke-width', 2)
 
-  // Scrubber handle (triangle/arrow at top)
-  scrubber.append('path')
+  scrubber.select('.top-handle')
     .attr('d', 'M-6,0 L6,0 L0,8 Z')
-    .attr('fill', isLive.value ? '#22c55e' : '#00d4ff')
+    .attr('fill', scrubberColor)
 
-  // Scrubber handle (triangle at bottom)
-  scrubber.append('path')
+  scrubber.select('.bottom-handle')
     .attr('d', `M-6,${plotHeight} L6,${plotHeight} L0,${plotHeight - 8} Z`)
-    .attr('fill', isLive.value ? '#22c55e' : '#00d4ff')
+    .attr('fill', scrubberColor)
 
-  // Invisible wider rect for easier dragging
-  scrubber.append('rect')
+  scrubber.select('.drag-area')
     .attr('x', -10)
     .attr('y', 0)
     .attr('width', 20)
     .attr('height', plotHeight)
     .attr('fill', 'transparent')
 
-  // Track last emitted scan to avoid duplicate fetches
-  let lastEmittedScanId = null
+  // Only set up drag behavior once
+  if (!scrubber.node().__dragInitialized) {
+    scrubber.node().__dragInitialized = true
+    let lastFetchedScanId = null
 
-  // Drag behavior
-  const drag = d3.drag()
-    .on('start', () => {
-      isDragging.value = true
-      lastEmittedScanId = null
-    })
-    .on('drag', (event) => {
-      const x = Math.max(0, Math.min(plotWidth, event.x))
-      scrubber.attr('transform', `translate(${x}, 0)`)
+    const drag = d3.drag()
+      .on('start', () => {
+        isDragging.value = true
+        lastFetchedScanId = null
+      })
+      .on('drag', (event) => {
+        // Immediately follow the mouse for responsive feel
+        const x = Math.max(0, Math.min(plotWidth, event.x))
+        scrubber.attr('transform', `translate(${x}, 0)`)
 
-      // Update line color while dragging
-      scrubber.select('line').attr('stroke', '#00d4ff')
-      scrubber.selectAll('path').attr('fill', '#00d4ff')
+        // Update line color while dragging
+        scrubber.select('line').attr('stroke', '#00d4ff')
+        scrubber.selectAll('path').attr('fill', '#00d4ff')
 
-      // Find and show closest scan as we drag
-      const time = xScale.invert(x)
-      const closest = findClosestScan(time)
-      if (closest && closest.id !== lastEmittedScanId) {
-        lastEmittedScanId = closest.id
-        selectTime(closest.date)
-      }
-    })
-    .on('end', () => {
-      isDragging.value = false
-      // Snap to the currently selected scan position
-      if (selectedTime.value) {
-        const snapX = xScale(selectedTime.value)
-        scrubber.attr('transform', `translate(${Math.max(0, Math.min(plotWidth, snapX))}, 0)`)
-      }
-      // Trigger redraw to update marker highlights
-      draw()
-    })
+        // Find closest scan and emit immediately (no throttle)
+        const time = currentXScale.invert(x)
+        const closest = findClosestScan(time)
+        if (closest && closest.id !== lastFetchedScanId) {
+          lastFetchedScanId = closest.id
+          selectTime(closest.date)
+        }
+      })
+      .on('end', (event) => {
+        isDragging.value = false
+        // On release, immediately find and fetch closest scan
+        const x = Math.max(0, Math.min(plotWidth, event.x))
+        const time = currentXScale.invert(x)
+        const closest = findClosestScan(time)
+        if (closest) {
+          selectTime(closest.date)
+        }
+        // Redraw will snap scrubber to actual data point
+        draw()
+      })
 
-  scrubber.call(drag)
+    scrubber.call(drag)
 
-  // Click anywhere on timeline to seek (behind scrubber)
-  chart.insert('rect', ':first-child')
-    .attr('width', plotWidth)
-    .attr('height', plotHeight)
-    .attr('fill', 'transparent')
-    .attr('cursor', 'pointer')
-    .on('click', (event) => {
-      const [x] = d3.pointer(event)
-      const time = xScale.invert(x)
-      const closest = findClosestScan(time)
-      if (closest) {
-        selectTime(closest.date)
-      }
-    })
+    // Click anywhere on timeline to seek
+    chart.select('.click-area')
+      .on('click', (event) => {
+        const [x] = d3.pointer(event)
+        const time = currentXScale.invert(x)
+        const closest = findClosestScan(time)
+        if (closest) {
+          selectTime(closest.date)
+        }
+      })
+  }
 }
 
 // Resize handling
@@ -341,6 +389,9 @@ onUnmounted(() => {
   if (pendingDraw) {
     clearTimeout(pendingDraw)
   }
+  // Reset state for potential remount
+  svgInitialized = false
+  parsedDates.clear()
 })
 
 // Sync dragTime with props.currentTime when it updates from parent

@@ -174,23 +174,29 @@ function resetPeakHold() {
 // Timeline handlers
 async function loadTimeline() {
   if (props.showTimeline) {
+    // Use same time range for both timeline and cache
+    const hours = props.timelineHours
     // Fetch initial timeline data - store handles MQTT updates after this
-    const apiHours = Math.max(1, Math.ceil(props.timelineHours))
-    await store.fetchTimeline(props.scannerId, props.band.name, apiHours)
+    await store.fetchTimeline(props.scannerId, props.band.name, hours)
+    // Load scan cache for fast scrubbing (same time range)
+    await store.loadScanCache(props.scannerId, props.band.name, hours)
   }
 }
 
-async function handleTimeSelect(time) {
+function handleTimeSelect(time) {
   isLive.value = false
-  const scan = await store.fetchScanAtTime(props.scannerId, time, props.band.name)
+  // Use cache for instant lookup instead of API call
+  const scan = store.findScanInCache(props.scannerId, props.band.name, time)
   if (scan) {
     historicalScan.value = {
       hz_lo: scan.hz_lo,
       hz_hi: scan.hz_hi,
-      step: scan.step_hz,
+      step: scan.step,
       power: scan.power,
       timestamp: scan.timestamp,
     }
+  } else {
+    console.warn(`No scan found in cache for ${props.scannerId}/${props.band.name} at ${time}`)
   }
 }
 
@@ -205,20 +211,17 @@ function hasLiveScan() {
 }
 
 // Load the most recent historical scan (as fallback, stays in live mode)
-async function loadLatestHistorical() {
-  const tl = timeline.value
-  if (tl.length > 0) {
-    const latestTime = new Date(tl[tl.length - 1].timestamp)
-    // Load the scan but don't switch out of live mode - this is just a fallback
-    const scan = await store.fetchScanAtTime(props.scannerId, latestTime, props.band.name)
-    if (scan) {
-      historicalScan.value = {
-        hz_lo: scan.hz_lo,
-        hz_hi: scan.hz_hi,
-        step: scan.step_hz,
-        power: scan.power,
-        timestamp: scan.timestamp,
-      }
+function loadLatestHistorical() {
+  const cache = store.getScanCache(props.scannerId, props.band.name)
+  if (cache.length > 0) {
+    // Get the most recent scan from cache
+    const latest = cache[cache.length - 1]
+    historicalScan.value = {
+      hz_lo: latest.scan.hz_lo,
+      hz_hi: latest.scan.hz_hi,
+      step: latest.scan.step,
+      power: latest.scan.power,
+      timestamp: latest.scan.timestamp,
     }
     // Keep isLive = true so we switch to live data when it arrives
   }
@@ -228,9 +231,9 @@ async function loadLatestHistorical() {
 onMounted(async () => {
   await loadTimeline()
 
-  // If no live scan and we have timeline data, load the most recent scan
+  // If no live scan and we have cached data, load the most recent scan
   if (!hasLiveScan()) {
-    await loadLatestHistorical()
+    loadLatestHistorical()
   }
 })
 
@@ -239,7 +242,7 @@ watch(() => props.band.name, async () => {
   await loadTimeline()
   // Load latest historical if no live scan
   if (!hasLiveScan()) {
-    await loadLatestHistorical()
+    loadLatestHistorical()
   }
 })
 
