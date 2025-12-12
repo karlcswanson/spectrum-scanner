@@ -310,7 +310,7 @@ watch(() => props.availableScanners, () => {
       v-if="showTimeline && availableScanners.length > 0"
       :scanner-id="availableScanners[0]?.scannerId || ''"
       :timeline="combinedTimeline"
-      :max-hours="24"
+      :max-hours="0.167"
       :height="50"
       :showing-live="showingLive"
       :current-time="currentDisplayTime"

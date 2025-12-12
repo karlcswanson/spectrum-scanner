@@ -109,6 +109,29 @@ function findClosestScan(time) {
   return closest
 }
 
+// Throttle helper
+let lastDrawTime = 0
+let pendingDraw = null
+const THROTTLE_MS = 100
+
+function throttledDraw() {
+  const now = Date.now()
+  const elapsed = now - lastDrawTime
+
+  if (elapsed >= THROTTLE_MS) {
+    // Enough time has passed, draw immediately
+    lastDrawTime = now
+    draw()
+  } else if (!pendingDraw) {
+    // Schedule a draw for later
+    pendingDraw = setTimeout(() => {
+      lastDrawTime = Date.now()
+      pendingDraw = null
+      draw()
+    }, THROTTLE_MS - elapsed)
+  }
+}
+
 function draw() {
   if (!svgRef.value || !container.value) return
 
@@ -159,15 +182,30 @@ function draw() {
     .attr('stroke', '#333')
 
   // Draw scan markers
-  const markers = filteredTimeline.value
+  const allMarkers = filteredTimeline.value
     .map(t => ({
       ...t,
       date: new Date(t.timestamp),
     }))
     .filter(t => t.date >= timeRange.start && t.date <= timeRange.end)
 
-  // Store for drag operations
-  currentMarkers = markers
+  // Store all markers for drag operations (finding closest scan)
+  currentMarkers = allMarkers
+
+  // Bin markers if there are too many (more than 1 per 2 pixels)
+  const maxMarkers = Math.floor(plotWidth / 2)
+  let markers = allMarkers
+  if (allMarkers.length > maxMarkers) {
+    // Bin by pixel position - keep one marker per bin
+    const binned = new Map()
+    for (const m of allMarkers) {
+      const px = Math.floor(xScale(m.date))
+      if (!binned.has(px)) {
+        binned.set(px, m)
+      }
+    }
+    markers = Array.from(binned.values())
+  }
 
   // Draw markers
   const markerRadius = 3
@@ -300,6 +338,9 @@ onUnmounted(() => {
   if (resizeObserver) {
     resizeObserver.disconnect()
   }
+  if (pendingDraw) {
+    clearTimeout(pendingDraw)
+  }
 })
 
 // Sync dragTime with props.currentTime when it updates from parent
@@ -320,14 +361,14 @@ watch(() => props.showingLive, (live) => {
 // Redraw when timeline data changes (new stored scans via MQTT)
 watch(() => props.timeline, () => {
   if (!isDragging.value) {
-    draw()
+    throttledDraw()
   }
 }, { deep: true })
 
 // Redraw when any live scan comes in (keeps "now" line current)
 watch(() => props.lastScanTime, () => {
   if (!isDragging.value) {
-    draw()
+    throttledDraw()
   }
 })
 

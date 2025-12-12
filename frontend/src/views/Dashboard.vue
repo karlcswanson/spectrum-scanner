@@ -252,6 +252,7 @@ function selectNone() {
         :band="item.band"
         :scan="item.scan"
         :show-timeline="true"
+        :timeline-hours="0.167"
       />
 
       <div
