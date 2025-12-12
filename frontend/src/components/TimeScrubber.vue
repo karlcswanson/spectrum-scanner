@@ -71,7 +71,6 @@ const isLive = computed(() => props.showingLive && !dragTime.value)
 
 // Store xScale for drag operations
 let currentXScale = null
-let currentMarkers = []
 
 // Filter timeline by band if specified
 const filteredTimeline = computed(() => {
@@ -91,20 +90,30 @@ function goLive() {
   emit('live')
 }
 
-// Find closest scan to a given time
-function findClosestScan(time) {
-  if (currentMarkers.length === 0) return null
+// Pixel-to-scan index for O(1) lookup during drag
+let pixelIndex = new Map() // pixel x -> marker
 
-  let closest = null
-  let closestDiff = Infinity
-  for (const marker of currentMarkers) {
-    const diff = Math.abs(marker.date - time)
-    if (diff < closestDiff) {
-      closestDiff = diff
-      closest = marker
+function buildPixelIndex(markers, xScale) {
+  pixelIndex.clear()
+  for (const marker of markers) {
+    const px = Math.round(xScale(marker.date))
+    // Keep the marker closest to this pixel
+    if (!pixelIndex.has(px)) {
+      pixelIndex.set(px, marker)
     }
   }
-  return closest
+}
+
+// Find scan at pixel position - O(1) with small search radius
+function findScanAtPixel(x) {
+  // Check exact pixel first
+  if (pixelIndex.has(x)) return pixelIndex.get(x)
+  // Search within 3 pixels
+  for (let offset = 1; offset <= 3; offset++) {
+    if (pixelIndex.has(x - offset)) return pixelIndex.get(x - offset)
+    if (pixelIndex.has(x + offset)) return pixelIndex.get(x + offset)
+  }
+  return null
 }
 
 
@@ -209,8 +218,8 @@ function draw() {
     }))
     .filter(t => t.date >= timeRange.start && t.date <= timeRange.end)
 
-  // Store all markers for drag operations (finding closest scan)
-  currentMarkers = allMarkers
+  // Build pixel index for O(1) lookup during drag
+  buildPixelIndex(allMarkers, xScale)
 
   // Only draw markers if not hidden
   if (!props.hideMarkers) {
@@ -318,9 +327,8 @@ function draw() {
         scrubber.select('line').attr('stroke', '#00d4ff')
         scrubber.selectAll('path').attr('fill', '#00d4ff')
 
-        // Find closest scan and emit preview (decimated) immediately
-        const time = currentXScale.invert(x)
-        const closest = findClosestScan(time)
+        // O(1) pixel lookup for scan
+        const closest = findScanAtPixel(Math.round(x))
         if (closest && closest.id !== lastPreviewScanId) {
           lastPreviewScanId = closest.id
           dragTime.value = closest.date
@@ -331,8 +339,7 @@ function draw() {
         isDragging.value = false
         // On release, emit select for full resolution fetch
         const x = Math.max(0, Math.min(plotWidth, event.x))
-        const time = currentXScale.invert(x)
-        const closest = findClosestScan(time)
+        const closest = findScanAtPixel(Math.round(x))
         if (closest) {
           dragTime.value = closest.date
           emit('select', closest.date)
@@ -347,8 +354,7 @@ function draw() {
     chart.select('.click-area')
       .on('click', (event) => {
         const [x] = d3.pointer(event)
-        const time = currentXScale.invert(x)
-        const closest = findClosestScan(time)
+        const closest = findScanAtPixel(Math.round(x))
         if (closest) {
           dragTime.value = closest.date
           emit('select', closest.date)
