@@ -71,8 +71,10 @@ const combinedTimeline = computed(() => {
     const timeline = store.getTimeline(scanner.scannerId, scanner.bandName)
     allEntries.push(...timeline)
   }
-  // Sort by timestamp and dedupe (same timestamp from different bands)
-  return allEntries.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
+  // Sort by timestamp - parse once, not on every comparison
+  return allEntries
+    .map(t => ({ ...t, _ts: new Date(t.timestamp).getTime() }))
+    .sort((a, b) => a._ts - b._ts)
 })
 
 // Get the latest scan timestamp for triggering redraws

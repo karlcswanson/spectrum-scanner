@@ -359,11 +359,12 @@ watch(() => props.showingLive, (live) => {
 })
 
 // Redraw when timeline data changes (new stored scans via MQTT)
-watch(() => props.timeline, () => {
+// Watch length instead of deep watch for better performance
+watch(() => props.timeline.length, () => {
   if (!isDragging.value) {
     throttledDraw()
   }
-}, { deep: true })
+})
 
 // Redraw when any live scan comes in (keeps "now" line current)
 watch(() => props.lastScanTime, () => {
