@@ -7,8 +7,8 @@ import MultiScannerChart from '../components/MultiScannerChart.vue'
 
 const store = useScannersStore()
 
-// View mode: 'combined' shows all selected scanners on one chart, 'separate' shows individual charts
-const viewMode = ref('combined')
+// View mode: 'separate' shows individual charts (default), 'combined' shows overlay
+const viewMode = ref('separate')
 
 // Track which scanners/bands are selected for the combined view (starts empty)
 const selectedScanners = ref(new Set())
@@ -128,27 +128,19 @@ function selectNone() {
     <div class="flex items-center justify-between mb-6">
       <h1 class="text-2xl font-bold">Dashboard</h1>
       <div class="flex items-center gap-4">
-        <!-- View mode toggle -->
-        <div class="flex items-center gap-2 bg-gray-800 rounded-lg p-1">
-          <button
-            @click="viewMode = 'combined'"
-            class="px-3 py-1 rounded text-sm transition-colors"
-            :class="viewMode === 'combined'
-              ? 'bg-cyan-500 text-black font-semibold'
-              : 'text-gray-400 hover:text-white'"
-          >
-            Combined
-          </button>
-          <button
-            @click="viewMode = 'separate'"
-            class="px-3 py-1 rounded text-sm transition-colors"
-            :class="viewMode === 'separate'
-              ? 'bg-cyan-500 text-black font-semibold'
-              : 'text-gray-400 hover:text-white'"
-          >
-            Separate
-          </button>
-        </div>
+        <!-- Overlay mode toggle -->
+        <button
+          @click="viewMode = viewMode === 'separate' ? 'combined' : 'separate'"
+          class="px-3 py-1.5 rounded text-sm transition-colors flex items-center gap-2"
+          :class="viewMode === 'combined'
+            ? 'bg-cyan-500 text-black font-semibold'
+            : 'bg-gray-700 text-gray-300 hover:bg-gray-600'"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+          </svg>
+          Overlay
+        </button>
 
         <div class="flex items-center space-x-2">
           <span
