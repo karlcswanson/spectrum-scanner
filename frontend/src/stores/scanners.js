@@ -6,6 +6,7 @@ export const useScannersStore = defineStore('scanners', () => {
   const scanners = ref({})
   const latestScans = ref({})       // { scannerId: lastScan }
   const bandScans = ref({})         // { scannerId: { bandName: lastScan } }
+  const timelines = ref({})         // { `${scannerId}:${bandName}`: [{ id, timestamp, band__name }] }
   const connected = ref(false)
   const subscriptions = ref(new Set()) // Track subscribed scanner IDs
   let client = null
@@ -67,11 +68,12 @@ export const useScannersStore = defineStore('scanners', () => {
       console.log('MQTT connected')
       connected.value = true
 
-      // Subscribe to all scanner topics (config, status, scan)
+      // Subscribe to all scanner topics (config, status, scan, timeline)
       // Using wildcard to get all scanners
       client.subscribe(`${TOPIC_PREFIX}/scanners/+/config`, { qos: 1 })
       client.subscribe(`${TOPIC_PREFIX}/scanners/+/status`, { qos: 1 })
       client.subscribe(`${TOPIC_PREFIX}/scanners/+/scan`, { qos: 0 })
+      client.subscribe(`${TOPIC_PREFIX}/scanners/+/timeline`, { qos: 0 })
 
       console.log('Subscribed to scanner topics')
     })
@@ -91,6 +93,8 @@ export const useScannersStore = defineStore('scanners', () => {
             handleStatus(scannerId, message)
           } else if (messageType === 'config') {
             handleConfig(scannerId, message)
+          } else if (messageType === 'timeline') {
+            handleTimeline(scannerId, message)
           }
         }
       } catch (error) {
@@ -148,15 +152,16 @@ export const useScannersStore = defineStore('scanners', () => {
     scanners.value[scannerId].online = true
     scanners.value[scannerId].lastSeen = new Date()
 
-    // Store latest scan
-    latestScans.value[scannerId] = data
+    // Store latest scan with receive timestamp
+    const scanWithTime = { ...data, _receivedAt: Date.now() }
+    latestScans.value[scannerId] = scanWithTime
 
     // Also store by band name if available
     if (data.band) {
       if (!bandScans.value[scannerId]) {
         bandScans.value[scannerId] = {}
       }
-      bandScans.value[scannerId][data.band] = data
+      bandScans.value[scannerId][data.band] = scanWithTime
 
       // Auto-populate bands from scan data if not already present
       if (!scanners.value[scannerId].bands) {
@@ -200,6 +205,43 @@ export const useScannersStore = defineStore('scanners', () => {
       settings: data.settings || {},
       online: true,
     }
+  }
+
+  function handleTimeline(scannerId, data) {
+    // Timeline update from Django - a new scan was stored in the database
+    // Format: { id, timestamp, band__name }
+    const bandName = data.band__name || 'default'
+    const key = `${scannerId}:${bandName}`
+
+    // Initialize timeline array if needed
+    if (!timelines.value[key]) {
+      timelines.value[key] = []
+    }
+
+    // Append the new entry (avoid duplicates by id)
+    const exists = timelines.value[key].some(t => t.id === data.id)
+    if (!exists) {
+      // Create new array to trigger Vue reactivity
+      const updated = [...timelines.value[key], data]
+        .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
+
+      // Limit to last 24 hours worth of entries (rough estimate: ~8640 at 10s interval)
+      const maxEntries = 10000
+      timelines.value[key] = updated.length > maxEntries
+        ? updated.slice(-maxEntries)
+        : updated
+    }
+  }
+
+  // Get timeline for a scanner/band (reactive)
+  // Returns the reactive array directly so Vue can track changes
+  function getTimeline(scannerId, bandName = 'default') {
+    const key = `${scannerId}:${bandName}`
+    // Initialize if needed so we return a stable reactive reference
+    if (!timelines.value[key]) {
+      timelines.value[key] = []
+    }
+    return timelines.value[key]
   }
 
   async function fetchScanners() {
@@ -259,7 +301,7 @@ export const useScannersStore = defineStore('scanners', () => {
     console.log('Exported:', filename)
   }
 
-  // Fetch timeline data for time scrubber
+  // Fetch timeline data for time scrubber (also populates the store)
   async function fetchTimeline(scannerId, bandName = null, hours = 24) {
     try {
       let url = `/api/scanners/${scannerId}/timeline/?hours=${hours}`
@@ -270,7 +312,13 @@ export const useScannersStore = defineStore('scanners', () => {
         credentials: 'include',
       })
       if (!response.ok) throw new Error('Failed to fetch timeline')
-      return await response.json()
+      const data = await response.json()
+
+      // Store in the reactive timelines object
+      const key = `${scannerId}:${bandName || 'default'}`
+      timelines.value[key] = data
+
+      return data
     } catch (error) {
       console.error('Failed to fetch timeline:', error)
       return []
@@ -318,6 +366,7 @@ export const useScannersStore = defineStore('scanners', () => {
     scannerList,
     latestScans,
     bandScans,
+    timelines,
     connected,
     connect,
     disconnect,
@@ -326,6 +375,7 @@ export const useScannersStore = defineStore('scanners', () => {
     fetchScanners,
     exportScanCSV,
     fetchTimeline,
+    getTimeline,
     fetchHistory,
     fetchScanAtTime,
   }

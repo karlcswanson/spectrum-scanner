@@ -214,7 +214,7 @@ class MQTTBridge:
                     pass
 
             # Create scan record
-            Scan.objects.create(
+            scan = Scan.objects.create(
                 scanner=scanner,
                 band=band,
                 timestamp=timestamp,
@@ -225,8 +225,33 @@ class MQTTBridge:
                 metadata={},
             )
 
+            # Publish timeline update so frontend scrubbers can update
+            self.publish_timeline_update(scanner_id, scan, band_name)
+
         except Exception as e:
             logger.error(f"Error storing scan: {e}")
+
+    def publish_timeline_update(self, scanner_id: str, scan, band_name: str):
+        """Publish a timeline update notification to MQTT.
+
+        This tells the frontend that a new scan was stored in the database,
+        so the time scrubber can add a new marker without polling.
+        """
+        try:
+            timeline_topic = f"{self.topic_prefix}/scanners/{scanner_id}/timeline"
+            timeline_data = {
+                'id': scan.id,
+                'timestamp': scan.timestamp.isoformat(),
+                'band__name': band_name,
+            }
+            self.client.publish(
+                timeline_topic,
+                json.dumps(timeline_data),
+                qos=0,  # Fire and forget - not critical
+            )
+            logger.debug(f"Published timeline update for {scanner_id}/{band_name}")
+        except Exception as e:
+            logger.error(f"Error publishing timeline update: {e}")
 
     def update_scanner_status(self, scanner_id: str, payload: dict):
         """Update scanner status in database."""

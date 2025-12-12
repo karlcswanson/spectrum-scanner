@@ -307,12 +307,17 @@ def mqtt_acl(request):
     is_subscribe = acc_str in ('1', '4')  # read or subscribe
     is_publish = acc_str == '2'
 
-    # Check if this is the bridge service (subscribe-only to scanner topics)
+    # Check if this is the bridge service
     from django.conf import settings
     bridge_username = getattr(settings, 'MQTT_BRIDGE_USERNAME', '')
     if bridge_username and username == bridge_username:
+        # Bridge can subscribe to scanner topics (to receive scans)
         if is_subscribe and topic.startswith(f"{topic_prefix}/scanners/"):
             logger.debug(f"MQTT ACL: bridge service subscribe to {topic} allowed")
+            return HttpResponse(status=200)
+        # Bridge can publish to timeline topics (to notify frontend of stored scans)
+        if is_publish and topic.startswith(f"{topic_prefix}/scanners/") and topic.endswith("/timeline"):
+            logger.debug(f"MQTT ACL: bridge service publish to {topic} allowed")
             return HttpResponse(status=200)
         logger.warning(f"MQTT ACL: bridge service access to {topic} (acc={acc}) denied")
         return HttpResponse(status=403)

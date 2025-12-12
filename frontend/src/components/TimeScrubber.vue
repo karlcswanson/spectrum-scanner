@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import * as d3 from 'd3'
 
 const props = defineProps({
@@ -36,6 +36,11 @@ const props = defineProps({
     type: Date,
     default: null,
   },
+  // Timestamp of last live scan received (triggers redraw to update "now" line)
+  lastScanTime: {
+    type: [Date, Number, String],
+    default: null,
+  },
 })
 
 const emit = defineEmits(['select', 'live'])
@@ -66,12 +71,12 @@ const filteredTimeline = computed(() => {
   return props.timeline.filter(t => t.band__name === props.bandName)
 })
 
-// Time range
-const timeRange = computed(() => {
+// Time range - computed fresh in draw(), not cached
+function getTimeRange() {
   const now = new Date()
   const start = new Date(now.getTime() - props.maxHours * 60 * 60 * 1000)
   return { start, end: now }
-})
+}
 
 function selectTime(time) {
   if (time === null) {
@@ -126,9 +131,12 @@ function draw() {
     .append('g')
     .attr('transform', `translate(${margin.left},${margin.top})`)
 
+  // Get fresh time range (not cached)
+  const timeRange = getTimeRange()
+
   // Time scale
   const xScale = d3.scaleTime()
-    .domain([timeRange.value.start, timeRange.value.end])
+    .domain([timeRange.start, timeRange.end])
     .range([0, plotWidth])
 
   // Store for drag operations
@@ -156,7 +164,7 @@ function draw() {
       ...t,
       date: new Date(t.timestamp),
     }))
-    .filter(t => t.date >= timeRange.value.start && t.date <= timeRange.value.end)
+    .filter(t => t.date >= timeRange.start && t.date <= timeRange.end)
 
   // Store for drag operations
   currentMarkers = markers
@@ -288,6 +296,12 @@ onMounted(() => {
   draw()
 })
 
+onUnmounted(() => {
+  if (resizeObserver) {
+    resizeObserver.disconnect()
+  }
+})
+
 // Sync dragTime with props.currentTime when it updates from parent
 // (e.g., when parent loads historical scan on mount)
 watch(() => props.currentTime, (newTime) => {
@@ -303,12 +317,26 @@ watch(() => props.showingLive, (live) => {
   }
 })
 
-// Don't redraw while dragging - it disrupts the drag interaction
-watch(() => [props.timeline, selectedTime.value, isLive.value], () => {
+// Redraw when timeline data changes (new stored scans via MQTT)
+watch(() => props.timeline, () => {
   if (!isDragging.value) {
     draw()
   }
 }, { deep: true })
+
+// Redraw when any live scan comes in (keeps "now" line current)
+watch(() => props.lastScanTime, () => {
+  if (!isDragging.value) {
+    draw()
+  }
+})
+
+// Redraw when selected time or live state changes
+watch(() => [selectedTime.value, isLive.value], () => {
+  if (!isDragging.value) {
+    draw()
+  }
+})
 
 // Format selected time for display
 const selectedTimeDisplay = computed(() => {

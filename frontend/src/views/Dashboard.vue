@@ -251,6 +251,7 @@ function selectNone() {
         :scanner-name="item.scannerName"
         :band="item.band"
         :scan="item.scan"
+        :show-timeline="true"
       />
 
       <div

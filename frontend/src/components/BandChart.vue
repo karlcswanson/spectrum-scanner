@@ -56,8 +56,13 @@ const showPeak = ref(false)
 
 // Historical playback state
 const isLive = ref(true)
-const timeline = ref([])
 const historicalScan = ref(null)
+
+// Get timeline from store (reactive - updates via MQTT)
+const timeline = computed(() => {
+  if (!props.showTimeline) return []
+  return store.getTimeline(props.scannerId, props.band.name)
+})
 
 // Are we showing live data right now?
 const showingLive = computed(() => {
@@ -169,9 +174,9 @@ function resetPeakHold() {
 // Timeline handlers
 async function loadTimeline() {
   if (props.showTimeline) {
-    // Convert hours to integer for API (minimum 1 hour for API, but we filter client-side)
+    // Fetch initial timeline data - store handles MQTT updates after this
     const apiHours = Math.max(1, Math.ceil(props.timelineHours))
-    timeline.value = await store.fetchTimeline(props.scannerId, props.band.name, apiHours)
+    await store.fetchTimeline(props.scannerId, props.band.name, apiHours)
   }
 }
 
@@ -201,8 +206,9 @@ function hasLiveScan() {
 
 // Load the most recent historical scan (as fallback, stays in live mode)
 async function loadLatestHistorical() {
-  if (timeline.value.length > 0) {
-    const latestTime = new Date(timeline.value[timeline.value.length - 1].timestamp)
+  const tl = timeline.value
+  if (tl.length > 0) {
+    const latestTime = new Date(tl[tl.length - 1].timestamp)
     // Load the scan but don't switch out of live mode - this is just a fallback
     const scan = await store.fetchScanAtTime(props.scannerId, latestTime, props.band.name)
     if (scan) {
@@ -237,13 +243,7 @@ watch(() => props.band.name, async () => {
   }
 })
 
-// Periodically refresh timeline
-let timelineInterval = null
-onMounted(() => {
-  if (props.showTimeline) {
-    timelineInterval = setInterval(loadTimeline, 60000) // Refresh every minute
-  }
-})
+// No need for periodic refresh - MQTT handles timeline updates
 </script>
 
 <template>
@@ -322,6 +322,7 @@ onMounted(() => {
       :height="50"
       :showing-live="showingLive"
       :current-time="currentDisplayTime"
+      :last-scan-time="scan?._receivedAt"
       class="mt-3"
       @select="handleTimeSelect"
       @live="handleLive"

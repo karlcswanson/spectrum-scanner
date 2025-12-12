@@ -1,7 +1,8 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { useScannersStore } from '../stores/scanners'
 import D3SpectrumChart from './D3SpectrumChart.vue'
+import TimeScrubber from './TimeScrubber.vue'
 
 const props = defineProps({
   // Frequency range for this chart (Hz)
@@ -27,6 +28,11 @@ const props = defineProps({
     type: Number,
     default: 350,
   },
+  // Enable historical playback
+  showTimeline: {
+    type: Boolean,
+    default: true,
+  },
 })
 
 const store = useScannersStore()
@@ -36,6 +42,10 @@ const chartRef = ref(null)
 const showCurrent = ref(true)
 const showAverage = ref(false)
 const showPeak = ref(false)
+
+// Historical playback state
+const isLive = ref(true)
+const historicalScans = ref({}) // { 'scannerId:bandName': scan }
 
 // Color palette for multiple scanners
 const scannerColors = [
@@ -54,12 +64,64 @@ function getScannerColor(idx) {
   return scannerColors[idx % scannerColors.length]
 }
 
+// Combine timelines from all selected scanners
+const combinedTimeline = computed(() => {
+  const allEntries = []
+  for (const scanner of props.availableScanners) {
+    const timeline = store.getTimeline(scanner.scannerId, scanner.bandName)
+    allEntries.push(...timeline)
+  }
+  // Sort by timestamp and dedupe (same timestamp from different bands)
+  return allEntries.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
+})
+
+// Get the latest scan timestamp for triggering redraws
+const latestScanTime = computed(() => {
+  let latest = null
+  for (const scanner of props.availableScanners) {
+    const scan = store.bandScans[scanner.scannerId]?.[scanner.bandName]
+    if (scan?._receivedAt && (!latest || scan._receivedAt > latest)) {
+      latest = scan._receivedAt
+    }
+  }
+  return latest
+})
+
+// Are we showing live data?
+const showingLive = computed(() => {
+  return isLive.value
+})
+
+// Current time being displayed (for scrubber positioning)
+const currentDisplayTime = computed(() => {
+  if (showingLive.value) {
+    return null
+  }
+  // Return the earliest historical scan timestamp we have
+  const times = Object.values(historicalScans.value)
+    .filter(s => s?.timestamp)
+    .map(s => new Date(s.timestamp))
+  if (times.length > 0) {
+    return new Date(Math.min(...times))
+  }
+  return null
+})
+
 // Build traces for the D3 chart from all available scanners
 const traces = computed(() => {
   const result = []
 
   props.availableScanners.forEach((scanner, idx) => {
-    const scan = store.bandScans[scanner.scannerId]?.[scanner.bandName]
+    const key = `${scanner.scannerId}:${scanner.bandName}`
+
+    // Use historical scan if not live, otherwise use live scan
+    let scan
+    if (!isLive.value && historicalScans.value[key]) {
+      scan = historicalScans.value[key]
+    } else {
+      scan = store.bandScans[scanner.scannerId]?.[scanner.bandName]
+    }
+
     if (!scan?.power?.length) return
 
     result.push({
@@ -122,6 +184,47 @@ function exportCSV() {
     URL.revokeObjectURL(url)
   })
 }
+
+// Timeline handlers
+async function loadTimelines() {
+  // Fetch timeline for each selected scanner/band
+  for (const scanner of props.availableScanners) {
+    await store.fetchTimeline(scanner.scannerId, scanner.bandName, 24)
+  }
+}
+
+async function handleTimeSelect(time) {
+  isLive.value = false
+  // Fetch closest scan for each selected scanner/band at this time
+  const fetchPromises = props.availableScanners.map(async (scanner) => {
+    const key = `${scanner.scannerId}:${scanner.bandName}`
+    const scan = await store.fetchScanAtTime(scanner.scannerId, time, scanner.bandName)
+    if (scan) {
+      historicalScans.value[key] = {
+        hz_lo: scan.hz_lo,
+        hz_hi: scan.hz_hi,
+        step: scan.step_hz,
+        power: scan.power,
+        timestamp: scan.timestamp,
+      }
+    }
+  })
+  await Promise.all(fetchPromises)
+  // Trigger reactivity
+  historicalScans.value = { ...historicalScans.value }
+}
+
+function handleLive() {
+  isLive.value = true
+  historicalScans.value = {}
+}
+
+// Load timelines when scanners change
+watch(() => props.availableScanners, () => {
+  if (props.showTimeline) {
+    loadTimelines()
+  }
+}, { immediate: true, deep: true })
 </script>
 
 <template>
@@ -132,6 +235,9 @@ function exportCSV() {
           {{ label || freqRange }}
           <span v-if="label" class="text-gray-500 font-normal text-sm ml-2">
             ({{ freqRange }})
+          </span>
+          <span v-if="!showingLive" class="text-yellow-400 text-xs ml-2">
+            Historical
           </span>
         </h2>
         <p class="text-xs text-gray-500">{{ chartInfo }}</p>
@@ -197,6 +303,21 @@ function exportCSV() {
       :show-current="showCurrent"
       :show-average="showAverage"
       :show-peak="showPeak"
+    />
+
+    <!-- Time scrubber for historical playback -->
+    <TimeScrubber
+      v-if="showTimeline && availableScanners.length > 0"
+      :scanner-id="availableScanners[0]?.scannerId || ''"
+      :timeline="combinedTimeline"
+      :max-hours="24"
+      :height="50"
+      :showing-live="showingLive"
+      :current-time="currentDisplayTime"
+      :last-scan-time="latestScanTime"
+      class="mt-3"
+      @select="handleTimeSelect"
+      @live="handleLive"
     />
   </div>
 </template>
