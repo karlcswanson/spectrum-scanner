@@ -14,10 +14,18 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGetRadio(w http.ResponseWriter, r *http.Request) {
-	info, err := s.engine.GetRFInfo()
-	if err != nil {
-		http.Error(w, "Cannot connect to radio: "+err.Error(), http.StatusServiceUnavailable)
-		return
+	// Return backend info and capabilities
+	backend := s.engine.Backend()
+	minHz, maxHz := backend.FrequencyRange()
+
+	info := map[string]interface{}{
+		"backend_type": backend.Type(),
+		"backend_name": backend.Name(),
+		"connected":    backend.IsConnected(),
+		"min_freq_hz":  minHz,
+		"max_freq_hz":  maxHz,
+		"min_freq_mhz": float64(minHz) / 1e6,
+		"max_freq_mhz": float64(maxHz) / 1e6,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -159,12 +167,7 @@ func (s *Server) handlePutGain(w http.ResponseWriter, r *http.Request) {
 	}
 	s.engine.UpdateConfig(s.config)
 
-	// Apply gain to radio immediately
-	if err := s.engine.ApplyGain(s.config.RxGain, s.config.RxGainMode); err != nil {
-		log.Printf("Warning: failed to apply gain to radio: %v", err)
-		// Continue anyway - config is updated, gain will be applied on next scan start
-	}
-
+	// Gain will be applied on next sweep/configure cycle
 	log.Printf("Gain updated: %.1f dB, mode: %s", s.config.RxGain, s.config.RxGainMode)
 
 	w.Header().Set("Content-Type", "application/json")
@@ -181,20 +184,22 @@ func (s *Server) handlePutBandwidth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// This endpoint is primarily for SDR backends (Pluto)
+	// For spectrum analyzers like OWON, RBW is controlled via backend config
+	backend := s.engine.Backend()
+	if backend.Type() != "pluto" {
+		http.Error(w, "Bandwidth control not supported for "+backend.Type()+" backend. Use RBW in config.", http.StatusBadRequest)
+		return
+	}
+
 	// AD9361 supports 200 kHz to 56 MHz RF bandwidth
 	if settings.RxBandwidthMHz < 0.2 || settings.RxBandwidthMHz > 56 {
 		http.Error(w, "rx_bandwidth_mhz must be between 0.2 and 56 MHz", http.StatusBadRequest)
 		return
 	}
 
-	// Convert to Hz and apply
-	bwHz := uint32(settings.RxBandwidthMHz * 1e6)
-	if err := s.engine.SetRxBandwidth(bwHz); err != nil {
-		http.Error(w, "Failed to set bandwidth: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	log.Printf("RF bandwidth updated: %.2f MHz", settings.RxBandwidthMHz)
+	// Store in config for next sweep
+	log.Printf("RF bandwidth setting updated: %.2f MHz (will apply on next sweep)", settings.RxBandwidthMHz)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(settings)

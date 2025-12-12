@@ -1,0 +1,62 @@
+# Example configuration for OWON HSA1016-TG spectrum analyzer
+# Copy this file to your scanner and modify as needed
+
+device_id: "owon-studio-a"
+name: "Studio A Scanner"
+description: "OWON HSA1016-TG in Studio A"
+
+# Backend configuration
+backend:
+  type: owon
+  address: "10.10.125.155"
+  port: 1015
+  # Resolution bandwidth (Hz) - 0 for auto
+  # Common values: 1000 (1kHz), 10000 (10kHz), 100000 (100kHz)
+  rbw: 10000
+  # Video bandwidth (Hz) - 0 for auto
+  vbw: 0
+  # Input attenuation (dB) - 0 to 40
+  attenuation_db: 10
+
+# Frequency bands to scan
+bands:
+  - name: "UHF TV"
+    start_mhz: 470
+    stop_mhz: 608
+    enabled: true
+
+  - name: "600 MHz Band"
+    start_mhz: 614
+    stop_mhz: 698
+    enabled: false
+
+  - name: "700 MHz Band"
+    start_mhz: 698
+    stop_mhz: 806
+    enabled: false
+
+  - name: "Business Radio"
+    start_mhz: 450
+    stop_mhz: 470
+    enabled: false
+
+  - name: "2.4 GHz WiFi"
+    start_mhz: 2400
+    stop_mhz: 2500
+    enabled: false
+
+# Dwell time per sweep segment (ms)
+dwell_time_ms: 100
+
+# Start scanning automatically when scanner starts
+auto_start: false
+
+# MQTT configuration for central server
+#mqtt:
+#  enabled: true
+#  broker: "tcp://your-server:1883"
+#  id: "00000000-0000-0000-0000-000000000000"  # Get from Django admin
+#  token: "your-auth-token"                      # Get from Django admin
+#  name: "Studio A Scanner"
+#  location: "Studio A"
+#  topic_prefix: "spectrum"

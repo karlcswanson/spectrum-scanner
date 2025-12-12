@@ -8,7 +8,7 @@ import (
 
 	"spectrum-pluto/internal/models"
 	"spectrum-pluto/internal/mqtt"
-	"spectrum-pluto/internal/sweep"
+	"spectrum-pluto/internal/scanner"
 )
 
 //go:embed web
@@ -16,14 +16,14 @@ var webFS embed.FS
 
 // Server handles HTTP requests for the spectrum scanner
 type Server struct {
-	engine *sweep.Engine
+	engine *scanner.Engine
 	config *models.Config
 	mqtt   *mqtt.Client
 	mux    *http.ServeMux
 }
 
 // NewServer creates a new HTTP server
-func NewServer(engine *sweep.Engine, config *models.Config, mqttClient *mqtt.Client) *Server {
+func NewServer(engine *scanner.Engine, config *models.Config, mqttClient *mqtt.Client) *Server {
 	s := &Server{
 		engine: engine,
 		config: config,

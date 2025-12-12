@@ -54,18 +54,46 @@ type MQTTConfig struct {
 	TopicPrefix string `json:"topic_prefix" yaml:"topic_prefix"` // defaults to "spectrum"
 }
 
+// BackendConfig holds configuration for the scanner backend/hardware
+type BackendConfig struct {
+	// Type specifies which backend to use: "pluto", "owon", "rtlsdr", "rfexplorer", "tti"
+	Type string `json:"type" yaml:"type"`
+
+	// Address for network-connected devices (IP or hostname)
+	Address string `json:"address" yaml:"address"`
+
+	// Port for network-connected devices (0 = use default)
+	Port int `json:"port" yaml:"port"`
+
+	// Device for serial/USB devices (e.g., "/dev/ttyUSB0", "COM3")
+	Device string `json:"device" yaml:"device"`
+
+	// URL for HTTP-based backends like maia-httpd (e.g., "https://192.168.2.1")
+	URL string `json:"url" yaml:"url"`
+
+	// RBW (Resolution Bandwidth) in Hz, 0 = auto
+	RBW int64 `json:"rbw" yaml:"rbw"`
+
+	// VBW (Video Bandwidth) in Hz, 0 = auto
+	VBW int64 `json:"vbw" yaml:"vbw"`
+
+	// Attenuation in dB (for backends that support it)
+	AttenuationDB float64 `json:"attenuation_db" yaml:"attenuation_db"`
+}
+
 // Config holds scanner configuration
 type Config struct {
-	DeviceID    string      `json:"device_id" yaml:"device_id"`
-	Name        string      `json:"name" yaml:"name"`
-	Description string      `json:"description" yaml:"description"`
-	Bands       []Band      `json:"bands" yaml:"bands"`
-	DwellTimeMs int         `json:"dwell_time_ms" yaml:"dwell_time_ms"`
-	Mode        string      `json:"mode" yaml:"mode"`                     // "Average" or "PeakDetect"
-	RxGain      float64     `json:"rx_gain" yaml:"rx_gain"`               // RX gain in dB (0-73)
-	RxGainMode  string      `json:"rx_gain_mode" yaml:"rx_gain_mode"`     // "manual", "slow_attack", "fast_attack"
-	AutoStart   bool        `json:"auto_start" yaml:"auto_start"`         // Start scanning automatically on boot
-	MQTT        *MQTTConfig `json:"mqtt,omitempty" yaml:"mqtt,omitempty"` // Optional MQTT publishing
+	DeviceID    string         `json:"device_id" yaml:"device_id"`
+	Name        string         `json:"name" yaml:"name"`
+	Description string         `json:"description" yaml:"description"`
+	Bands       []Band         `json:"bands" yaml:"bands"`
+	DwellTimeMs int            `json:"dwell_time_ms" yaml:"dwell_time_ms"`
+	Mode        string         `json:"mode" yaml:"mode"`                           // "Average" or "PeakDetect"
+	RxGain      float64        `json:"rx_gain" yaml:"rx_gain"`                     // RX gain in dB (0-73) for SDR
+	RxGainMode  string         `json:"rx_gain_mode" yaml:"rx_gain_mode"`           // "manual", "slow_attack", "fast_attack"
+	AutoStart   bool           `json:"auto_start" yaml:"auto_start"`               // Start scanning automatically on boot
+	Backend     *BackendConfig `json:"backend,omitempty" yaml:"backend,omitempty"` // Hardware backend configuration
+	MQTT        *MQTTConfig    `json:"mqtt,omitempty" yaml:"mqtt,omitempty"`       // Optional MQTT publishing
 }
 
 // NormalizeBands converts MHz to Hz for all bands

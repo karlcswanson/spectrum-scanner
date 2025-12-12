@@ -2,33 +2,26 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"runtime"
+	"strings"
 
 	"spectrum-pluto/internal/api"
+	"spectrum-pluto/internal/backend/owon"
+	"spectrum-pluto/internal/backend/pluto"
 	"spectrum-pluto/internal/config"
-	"spectrum-pluto/internal/maia"
 	"spectrum-pluto/internal/models"
 	"spectrum-pluto/internal/mqtt"
-	"spectrum-pluto/internal/sweep"
+	"spectrum-pluto/internal/scanner"
 )
 
 func main() {
-	// Detect environment and set appropriate defaults
-	defaultMaia := "https://192.168.2.1" // Dev: remote Pluto via USB (HTTPS)
-	defaultListen := ":8080"             // Dev: unprivileged port
-
-	if runtime.GOARCH == "arm" {
-		// Running on the Pluto itself
-		// Port 80 = stock Pluto page, Port 443 = maia-httpd HTTPS
-		defaultMaia = "https://localhost" // Prod: local maia-httpd (HTTPS)
-		defaultListen = ":8080"           // Prod: use 8080 (80 is stock page)
-	}
-
 	// Command line flags
-	listenAddr := flag.String("listen", defaultListen, "HTTP listen address")
-	maiaURL := flag.String("maia", defaultMaia, "maia-httpd base URL")
+	listenAddr := flag.String("listen", ":8080", "HTTP listen address")
+	backendType := flag.String("backend", "", "Backend type: pluto, owon (overrides config)")
+	backendAddr := flag.String("addr", "", "Backend address (IP or URL, overrides config)")
 	configFile := flag.String("config", "", "Config file path (optional)")
 	autoStart := flag.Bool("auto-start", false, "Automatically start scanning on startup")
 	flag.Parse()
@@ -37,8 +30,11 @@ func main() {
 	if envListen := os.Getenv("SCANNER_LISTEN"); envListen != "" {
 		*listenAddr = envListen
 	}
-	if envMaia := os.Getenv("SCANNER_MAIA_URL"); envMaia != "" {
-		*maiaURL = envMaia
+	if envBackend := os.Getenv("SCANNER_BACKEND"); envBackend != "" {
+		*backendType = envBackend
+	}
+	if envAddr := os.Getenv("SCANNER_ADDR"); envAddr != "" {
+		*backendAddr = envAddr
 	}
 
 	// Load configuration
@@ -56,7 +52,26 @@ func main() {
 		log.Println("Using default configuration")
 	}
 
-	// Allow environment variable overrides for identity
+	// Command line overrides for backend
+	if *backendType != "" {
+		if cfg.Backend == nil {
+			cfg.Backend = &models.BackendConfig{}
+		}
+		cfg.Backend.Type = *backendType
+	}
+	if *backendAddr != "" {
+		if cfg.Backend == nil {
+			cfg.Backend = &models.BackendConfig{}
+		}
+		// Detect if it's a URL or IP address
+		if strings.HasPrefix(*backendAddr, "http") {
+			cfg.Backend.URL = *backendAddr
+		} else {
+			cfg.Backend.Address = *backendAddr
+		}
+	}
+
+	// Environment variable overrides for identity
 	if id := os.Getenv("SCANNER_ID"); id != "" {
 		cfg.DeviceID = id
 	}
@@ -83,20 +98,20 @@ func main() {
 			status)
 	}
 
-	// Create maia-httpd client
-	maiaClient := maia.NewClient(*maiaURL)
-
-	// Verify maia-httpd is reachable
-	log.Printf("Connecting to maia-httpd at %s...", *maiaURL)
-	ad9361, err := maiaClient.GetAd9361()
+	// Create the appropriate backend
+	backend, err := createBackend(cfg)
 	if err != nil {
-		log.Printf("Warning: Cannot connect to maia-httpd at %s: %v", *maiaURL, err)
-		log.Println("Continuing anyway - scanning will fail until maia-httpd is available")
+		log.Fatalf("Failed to create backend: %v", err)
+	}
+
+	// Connect to hardware
+	log.Printf("Connecting to %s backend...", backend.Type())
+	if err := backend.Connect(); err != nil {
+		log.Printf("Warning: Cannot connect to backend: %v", err)
+		log.Println("Continuing anyway - scanning will fail until hardware is available")
 	} else {
-		log.Printf("Connected to maia-httpd")
-		log.Printf("  AD9361 RX LO: %.2f MHz", float64(ad9361.RxLoFrequency)/1e6)
-		log.Printf("  Sample rate: %.2f MHz", float64(ad9361.SamplingFrequency)/1e6)
-		log.Printf("  RX Gain: %.1f dB (%s)", ad9361.RxGain, ad9361.RxGainMode)
+		log.Printf("Connected to %s: %s", backend.Type(), backend.Name())
+		defer backend.Close()
 	}
 
 	// Create MQTT client if configured
@@ -115,10 +130,10 @@ func main() {
 		}
 	}
 
-	// Create sweep engine
-	engine := sweep.NewEngine(maiaClient, cfg, mqttClient)
+	// Create sweep engine with the backend
+	engine := scanner.NewEngine(backend, cfg, mqttClient)
 
-	// Auto-start scanning if requested (via flag or config)
+	// Auto-start scanning if requested
 	if *autoStart || cfg.AutoStart {
 		log.Println("Auto-starting scanner...")
 		if err := engine.Start(); err != nil {
@@ -141,5 +156,57 @@ func main() {
 
 	if err := server.ListenAndServe(*listenAddr); err != nil {
 		log.Fatalf("Server error: %v", err)
+	}
+}
+
+// createBackend creates the appropriate scanner backend based on configuration.
+func createBackend(cfg *models.Config) (scanner.Backend, error) {
+	// Determine backend type
+	backendType := "pluto" // default
+	if cfg.Backend != nil && cfg.Backend.Type != "" {
+		backendType = cfg.Backend.Type
+	}
+
+	// Auto-detect Pluto on ARM (running on the device itself)
+	if backendType == "pluto" && runtime.GOARCH == "arm" {
+		// Running on the Pluto itself
+		url := "https://localhost"
+		if cfg.Backend != nil && cfg.Backend.URL != "" {
+			url = cfg.Backend.URL
+		}
+		return pluto.NewClient(url, cfg.Name), nil
+	}
+
+	switch backendType {
+	case "pluto":
+		// ADALM-Pluto via maia-httpd
+		url := "https://192.168.2.1" // default USB network
+		if cfg.Backend != nil && cfg.Backend.URL != "" {
+			url = cfg.Backend.URL
+		}
+		return pluto.NewClient(url, cfg.Name), nil
+
+	case "owon":
+		// OWON HSA1000 series via SCPI/TCP
+		if cfg.Backend == nil || cfg.Backend.Address == "" {
+			return nil, fmt.Errorf("OWON backend requires address (IP) in config or via --addr flag")
+		}
+		port := cfg.Backend.Port
+		if port == 0 {
+			port = owon.DefaultPort
+		}
+		return owon.NewClient(cfg.Backend.Address, port, cfg.Name), nil
+
+	case "rtlsdr":
+		return nil, fmt.Errorf("RTL-SDR backend not yet implemented")
+
+	case "rfexplorer":
+		return nil, fmt.Errorf("RF Explorer backend not yet implemented")
+
+	case "tti":
+		return nil, fmt.Errorf("TTi backend not yet implemented")
+
+	default:
+		return nil, fmt.Errorf("unknown backend type: %s", backendType)
 	}
 }
