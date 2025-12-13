@@ -2,6 +2,7 @@
 import { onMounted, onBeforeUnmount, computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { useScannersStore } from '../stores/scanners'
+import { SCRUBBER_HOURS } from '../constants'
 import BandChart from '../components/BandChart.vue'
 
 const route = useRoute()
@@ -70,7 +71,7 @@ onBeforeUnmount(() => {
           :scan="getScanForBand(band.name)"
           :show-scanner="false"
           :show-timeline="true"
-          :timeline-hours="0.167"
+          :timeline-hours="SCRUBBER_HOURS"
         />
       </div>
 

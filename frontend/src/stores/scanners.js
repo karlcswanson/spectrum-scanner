@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import mqtt from 'mqtt'
+import { SCRUBBER_HOURS } from '../constants'
 
 export const useScannersStore = defineStore('scanners', () => {
   const scanners = ref({})
@@ -10,6 +11,8 @@ export const useScannersStore = defineStore('scanners', () => {
   const scanCache = ref({})         // { `${scannerId}:${bandName}`: [{ timestamp, scan }, ...] } - historical scans
   const decimatedCache = ref({})    // { `${scannerId}:${bandName}`: [{ timestamp, scan }, ...] } - decimated scans for scrubbing
   const connected = ref(false)
+  const lastError = ref(null)       // { message, timestamp } - most recent error
+  const apiErrors = ref(0)          // Count of API errors (resets on success)
 
   // Global tick for timeline redraws (updates every 500ms)
   const tick = ref(0)
@@ -133,10 +136,12 @@ export const useScannersStore = defineStore('scanners', () => {
 
     client.on('error', (error) => {
       console.error('MQTT error:', error)
+      lastError.value = { message: `MQTT: ${error.message || error}`, timestamp: Date.now() }
     })
 
     client.on('reconnect', () => {
       console.log('MQTT reconnecting...')
+      lastError.value = { message: 'MQTT reconnecting...', timestamp: Date.now() }
     })
   }
 
@@ -357,7 +362,7 @@ export const useScannersStore = defineStore('scanners', () => {
   }
 
   // Load scan cache from API (for initial load)
-  async function loadScanCache(scannerId, bandName, hours = 0.167) {
+  async function loadScanCache(scannerId, bandName, hours = SCRUBBER_HOURS) {
     const key = `${scannerId}:${bandName}`
     try {
       const scans = await fetchHistory(scannerId, bandName, hours, 1000)
@@ -385,7 +390,7 @@ export const useScannersStore = defineStore('scanners', () => {
   }
 
   // Load decimated cache from API (for scrubber preview)
-  async function loadDecimatedCache(scannerId, bandName, hours = 0.167) {
+  async function loadDecimatedCache(scannerId, bandName, hours = SCRUBBER_HOURS) {
     const key = `${scannerId}:${bandName}`
     try {
       const scans = await fetchHistory(scannerId, bandName, hours, 1000, true)
@@ -518,6 +523,16 @@ export const useScannersStore = defineStore('scanners', () => {
     console.log('Exported:', filename)
   }
 
+  // Helper for API calls with error tracking
+  function setApiError(message) {
+    apiErrors.value++
+    lastError.value = { message: `API: ${message}`, timestamp: Date.now() }
+  }
+
+  function clearApiError() {
+    apiErrors.value = 0
+  }
+
   // Fetch timeline data for time scrubber (also populates the store)
   async function fetchTimeline(scannerId, bandName = null, hours = 24) {
     try {
@@ -528,16 +543,18 @@ export const useScannersStore = defineStore('scanners', () => {
       const response = await fetch(url, {
         credentials: 'include',
       })
-      if (!response.ok) throw new Error('Failed to fetch timeline')
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
       const data = await response.json()
 
       // Store in the reactive timelines object
       const key = `${scannerId}:${bandName || 'default'}`
       timelines.value[key] = data
+      clearApiError()
 
       return data
     } catch (error) {
       console.error('Failed to fetch timeline:', error)
+      setApiError(`Timeline: ${error.message}`)
       return []
     }
   }
@@ -555,10 +572,12 @@ export const useScannersStore = defineStore('scanners', () => {
       const response = await fetch(url, {
         credentials: 'include',
       })
-      if (!response.ok) throw new Error('Failed to fetch history')
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      clearApiError()
       return await response.json()
     } catch (error) {
       console.error('Failed to fetch history:', error)
+      setApiError(`History: ${error.message}`)
       return []
     }
   }
@@ -573,10 +592,12 @@ export const useScannersStore = defineStore('scanners', () => {
       const response = await fetch(url, {
         credentials: 'include',
       })
-      if (!response.ok) throw new Error('Failed to fetch scan')
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      clearApiError()
       return await response.json()
     } catch (error) {
       console.error('Failed to fetch scan at time:', error)
+      setApiError(`Scan: ${error.message}`)
       return null
     }
   }
@@ -607,5 +628,7 @@ export const useScannersStore = defineStore('scanners', () => {
     findScanInDecimatedCache,
     clearDecimatedCache,
     tick,
+    lastError,
+    apiErrors,
   }
 })

@@ -1,6 +1,7 @@
 <script setup>
 import { computed, ref } from 'vue'
 import { useScannersStore } from '../stores/scanners'
+import { SCRUBBER_HOURS } from '../constants'
 import ScannerCard from '../components/ScannerCard.vue'
 import BandChart from '../components/BandChart.vue'
 import MultiScannerChart from '../components/MultiScannerChart.vue'
@@ -142,14 +143,28 @@ function selectNone() {
           Overlay
         </button>
 
-        <div class="flex items-center space-x-2">
-          <span
-            class="w-3 h-3 rounded-full"
-            :class="store.connected ? 'bg-green-500' : 'bg-red-500'"
-          ></span>
-          <span class="text-sm text-gray-400">
-            {{ store.connected ? 'Connected' : 'Disconnected' }}
-          </span>
+        <div class="flex items-center space-x-4">
+          <!-- Error indicator -->
+          <div
+            v-if="store.lastError && Date.now() - store.lastError.timestamp < 10000"
+            class="flex items-center space-x-2 text-red-400 text-sm"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+            </svg>
+            <span>{{ store.lastError.message }}</span>
+          </div>
+
+          <!-- Connection status -->
+          <div class="flex items-center space-x-2">
+            <span
+              class="w-3 h-3 rounded-full"
+              :class="store.connected ? 'bg-green-500' : 'bg-red-500'"
+            ></span>
+            <span class="text-sm text-gray-400">
+              {{ store.connected ? 'Connected' : 'Disconnected' }}
+            </span>
+          </div>
         </div>
       </div>
     </div>
@@ -252,7 +267,7 @@ function selectNone() {
         :band="item.band"
         :scan="item.scan"
         :show-timeline="true"
-        :timeline-hours="0.167"
+        :timeline-hours="SCRUBBER_HOURS"
       />
 
       <div

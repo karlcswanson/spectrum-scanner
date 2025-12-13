@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, watch, onMounted } from 'vue'
 import { useScannersStore } from '../stores/scanners'
+import { SCRUBBER_HOURS } from '../constants'
 import D3SpectrumChart from './D3SpectrumChart.vue'
 import TimeScrubber from './TimeScrubber.vue'
 
@@ -65,8 +66,11 @@ function getScannerColor(idx) {
 }
 
 // Combine timelines from all selected scanners
-// Cache parsed timestamps to avoid re-parsing
+// Cache the combined result and only rebuild when lengths change
 const timelineCache = new Map()
+let cachedTimeline = []
+let cachedLengths = ''
+
 function getTimestampMs(entry) {
   if (!timelineCache.has(entry.id)) {
     timelineCache.set(entry.id, new Date(entry.timestamp).getTime())
@@ -75,16 +79,26 @@ function getTimestampMs(entry) {
 }
 
 const combinedTimeline = computed(() => {
-  // Depend on tick to re-evaluate periodically
+  // Depend on tick to check periodically
   void store.tick
 
-  const allEntries = []
-  for (const scanner of props.availableScanners) {
-    const timeline = store.getTimeline(scanner.scannerId, scanner.bandName)
-    allEntries.push(...timeline)
+  // Build a signature of current timeline lengths
+  const lengths = props.availableScanners
+    .map(s => store.getTimeline(s.scannerId, s.bandName).length)
+    .join(',')
+
+  // Only rebuild if lengths changed
+  if (lengths !== cachedLengths) {
+    cachedLengths = lengths
+    const allEntries = []
+    for (const scanner of props.availableScanners) {
+      const timeline = store.getTimeline(scanner.scannerId, scanner.bandName)
+      allEntries.push(...timeline)
+    }
+    cachedTimeline = allEntries.sort((a, b) => getTimestampMs(a) - getTimestampMs(b))
   }
-  // Sort using cached timestamps
-  return allEntries.sort((a, b) => getTimestampMs(a) - getTimestampMs(b))
+
+  return cachedTimeline
 })
 
 // Get the latest scan timestamp for triggering redraws
@@ -254,7 +268,7 @@ watch(() => props.availableScanners, async (newScanners) => {
       // Fetch initial timeline (MQTT will update it after this)
       store.fetchTimeline(scanner.scannerId, scanner.bandName, 24)
       // Load decimated cache for scrubbing
-      store.loadDecimatedCache(scanner.scannerId, scanner.bandName, 0.167)
+      store.loadDecimatedCache(scanner.scannerId, scanner.bandName, SCRUBBER_HOURS)
     }
   }
 }, { immediate: true })
@@ -343,7 +357,7 @@ watch(() => props.availableScanners, async (newScanners) => {
       v-if="showTimeline && availableScanners.length > 0"
       :scanner-id="availableScanners[0]?.scannerId || ''"
       :timeline="combinedTimeline"
-      :max-hours="0.167"
+      :max-hours="SCRUBBER_HOURS"
       :height="50"
       :showing-live="showingLive"
       :current-time="currentDisplayTime"
