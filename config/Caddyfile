@@ -22,9 +22,10 @@
         }
     }
 
-    # Static files from Django (admin CSS/JS)
+    # Static files (Django admin + collected static)
     handle /static/* {
-        reverse_proxy server:8000
+        root * /srv
+        file_server
     }
 
     # Everything else goes to the Vue frontend

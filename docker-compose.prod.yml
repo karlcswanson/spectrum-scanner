@@ -16,6 +16,7 @@ services:
     volumes:
       - ./config/Caddyfile:/etc/caddy/Caddyfile:ro
       - frontend_dist:/srv/frontend:ro
+      - django_static:/srv/static:ro
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
@@ -62,6 +63,7 @@ services:
       - CSRF_TRUSTED_ORIGINS=${CSRF_TRUSTED_ORIGINS:-}
     volumes:
       - server_data:/app/data
+      - django_static:/app/staticfiles
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/scanners/')"]
       interval: 30s
@@ -70,6 +72,7 @@ services:
       start_period: 10s
     command: >
       sh -c "python manage.py migrate --noinput &&
+             python manage.py collectstatic --noinput &&
              gunicorn --bind 0.0.0.0:8000 --workers 4 --threads 2 config.wsgi:application"
 
   # MQTT Bridge (stores scans to database)
@@ -110,5 +113,6 @@ volumes:
   mosquitto_log:
   server_data:
   frontend_dist:
+  django_static:
   caddy_data:
   caddy_config:
