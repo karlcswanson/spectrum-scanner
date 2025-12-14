@@ -110,15 +110,37 @@ const freqRange = computed(() => {
 })
 
 // Build traces array for D3 chart
+// When viewing historical data, show BOTH live (dimmed) and historical (bright)
 const traces = computed(() => {
   const result = []
 
-  // Primary trace from this scanner
-  if (activeScan.value) {
+  // If we have live scan data, always show it
+  const hasLiveScan = props.scan && props.scan.power && props.scan.power.length > 0
+
+  // Historical trace (yellow, when scrubbing)
+  if (!isLive.value && historicalScan.value) {
+    result.push({
+      id: `${props.scannerId}-historical`,
+      name: 'Historical',
+      scan: historicalScan.value,
+      color: '#fbbf24', // yellow
+    })
+  }
+
+  // Live trace - show dimmed when viewing historical, bright when live
+  if (hasLiveScan) {
+    result.push({
+      id: props.scannerId,
+      name: isLive.value ? (props.scannerName || 'Live') : 'Live',
+      scan: props.scan,
+      color: isLive.value ? '#00d4ff' : '#00d4ff80', // dimmed cyan when viewing historical
+    })
+  } else if (isLive.value && historicalScan.value) {
+    // Fallback: show historical as primary if no live data
     result.push({
       id: props.scannerId,
       name: props.scannerName || props.scannerId,
-      scan: activeScan.value,
+      scan: historicalScan.value,
       color: '#00d4ff',
     })
   }
@@ -171,16 +193,24 @@ function resetPeakHold() {
   }
 }
 
+// Current time range (for refetching)
+const currentTimeRange = ref({ hours: props.timelineHours })
+
 // Timeline handlers
-async function loadTimeline() {
+async function loadTimeline(options = null) {
   if (props.showTimeline) {
-    // Use same time range for both timeline and cache
-    const hours = props.timelineHours
+    const rangeOpts = options || currentTimeRange.value
     // Fetch initial timeline data - store handles MQTT updates after this
-    await store.fetchTimeline(props.scannerId, props.band.name, hours)
-    // Load decimated cache for fast scrubbing preview
-    await store.loadDecimatedCache(props.scannerId, props.band.name, hours)
+    await store.fetchTimeline(props.scannerId, props.band.name, rangeOpts)
+    // Load decimated cache for fast scrubbing preview (pass full range options)
+    await store.loadDecimatedCache(props.scannerId, props.band.name, rangeOpts)
   }
+}
+
+// Handle time range change from scrubber
+async function handleRangeChange(rangeOpts) {
+  currentTimeRange.value = rangeOpts
+  await loadTimeline(rangeOpts)
 }
 
 // Preview handler (while dragging) - use decimated cache
@@ -344,6 +374,7 @@ watch(() => props.band.name, async () => {
       @preview="handleTimePreview"
       @select="handleTimeSelect"
       @live="handleLive"
+      @range-change="handleRangeChange"
     />
   </div>
 </template>

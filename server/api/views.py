@@ -56,18 +56,46 @@ class ScannerViewSet(viewsets.ModelViewSet):
 
         Query params:
         - band: Filter by band name
-        - hours: How far back to look (default 24, max 24)
+        - hours: How far back to look (default 24) - relative to now
+        - start: ISO timestamp for range start (overrides hours)
+        - end: ISO timestamp for range end (defaults to now)
         - limit: Max scans to return (default 1000)
         - decimated: If true, downsample power arrays to ~1920 points
         """
+        from dateutil.parser import parse as parse_datetime
+
         scanner = self.get_object()
         band_name = request.query_params.get('band')
-        hours = min(float(request.query_params.get('hours', 24)), 24)
-        limit = min(int(request.query_params.get('limit', 1000)), 1000)
+        limit = min(int(request.query_params.get('limit', 1000)), 5000)
         decimated = request.query_params.get('decimated', '').lower() == 'true'
 
-        cutoff = timezone.now() - timedelta(hours=hours)
-        queryset = scanner.scans.filter(timestamp__gte=cutoff).order_by('timestamp')
+        # Determine time range
+        start_param = request.query_params.get('start')
+        end_param = request.query_params.get('end')
+
+        if start_param:
+            # Absolute time range
+            try:
+                start_time = parse_datetime(start_param)
+                end_time = parse_datetime(end_param) if end_param else timezone.now()
+            except Exception as e:
+                logger.error(f"history: Failed to parse date params: start={start_param}, end={end_param}, error={e}")
+                return Response({'error': f'Invalid date format: {e}'}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            # Relative hours (backwards compatible)
+            try:
+                hours_param = request.query_params.get('hours', '24')
+                hours = float(hours_param) if hours_param and hours_param not in ('undefined', 'null', '') else 24
+            except (ValueError, TypeError) as e:
+                logger.error(f"history: Failed to parse hours param: {hours_param}, error={e}")
+                hours = 24
+            end_time = timezone.now()
+            start_time = end_time - timedelta(hours=hours)
+
+        queryset = scanner.scans.filter(
+            timestamp__gte=start_time,
+            timestamp__lte=end_time
+        ).order_by('timestamp')
 
         if band_name:
             queryset = queryset.filter(band__name=band_name)
@@ -88,14 +116,42 @@ class ScannerViewSet(viewsets.ModelViewSet):
 
         Query params:
         - band: Filter by band name
-        - hours: How far back to look (default 24, max 24)
+        - hours: How far back to look (default 24) - relative to now
+        - start: ISO timestamp for range start (overrides hours)
+        - end: ISO timestamp for range end (defaults to now)
         """
+        from dateutil.parser import parse as parse_datetime
+
         scanner = self.get_object()
         band_name = request.query_params.get('band')
-        hours = min(float(request.query_params.get('hours', 24)), 24)
 
-        cutoff = timezone.now() - timedelta(hours=hours)
-        queryset = scanner.scans.filter(timestamp__gte=cutoff).order_by('timestamp')
+        # Determine time range
+        start_param = request.query_params.get('start')
+        end_param = request.query_params.get('end')
+
+        if start_param:
+            # Absolute time range
+            try:
+                start_time = parse_datetime(start_param)
+                end_time = parse_datetime(end_param) if end_param else timezone.now()
+            except Exception as e:
+                logger.error(f"timeline: Failed to parse date params: start={start_param}, end={end_param}, error={e}")
+                return Response({'error': f'Invalid date format: {e}'}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            # Relative hours (backwards compatible)
+            try:
+                hours_param = request.query_params.get('hours', '24')
+                hours = float(hours_param) if hours_param and hours_param not in ('undefined', 'null', '') else 24
+            except (ValueError, TypeError) as e:
+                logger.error(f"timeline: Failed to parse hours param: {hours_param}, error={e}")
+                hours = 24
+            end_time = timezone.now()
+            start_time = end_time - timedelta(hours=hours)
+
+        queryset = scanner.scans.filter(
+            timestamp__gte=start_time,
+            timestamp__lte=end_time
+        ).order_by('timestamp')
 
         if band_name:
             queryset = queryset.filter(band__name=band_name)

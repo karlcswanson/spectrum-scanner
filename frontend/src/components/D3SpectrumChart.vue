@@ -39,6 +39,9 @@ const props = defineProps({
 const container = ref(null)
 const svgRef = ref(null)
 
+// Cursor state for tooltip
+const cursorInfo = ref(null) // { x, y, freqMHz, powerDbm }
+
 // Track historical data for averaging and peak detection
 const traceHistory = ref({}) // { traceId: { samples: [], peak: [], avg: [] } }
 const maxHistorySamples = 30 // Number of samples to keep for averaging
@@ -458,6 +461,47 @@ function draw() {
   svg.append('g').attr('class', 'legend')
     .attr('transform', `translate(${width - margin.right - 10}, ${margin.top + 10})`)
 
+  // Create cursor overlay group (for crosshairs and tooltip)
+  const cursorGroup = chart.append('g').attr('class', 'cursor-overlay')
+
+  // Vertical cursor line
+  cursorGroup.append('line')
+    .attr('class', 'cursor-line-v')
+    .attr('y1', 0)
+    .attr('y2', plotHeight)
+    .attr('stroke', '#666')
+    .attr('stroke-width', 1)
+    .attr('stroke-dasharray', '4,4')
+    .attr('opacity', 0)
+    .attr('pointer-events', 'none')
+
+  // Horizontal cursor line
+  cursorGroup.append('line')
+    .attr('class', 'cursor-line-h')
+    .attr('x1', 0)
+    .attr('x2', plotWidth)
+    .attr('stroke', '#666')
+    .attr('stroke-width', 1)
+    .attr('stroke-dasharray', '4,4')
+    .attr('opacity', 0)
+    .attr('pointer-events', 'none')
+
+  // Cursor dot
+  cursorGroup.append('circle')
+    .attr('class', 'cursor-dot')
+    .attr('r', 4)
+    .attr('fill', '#00d4ff')
+    .attr('opacity', 0)
+    .attr('pointer-events', 'none')
+
+  // Invisible overlay rect for mouse tracking
+  chart.append('rect')
+    .attr('class', 'mouse-overlay')
+    .attr('width', plotWidth)
+    .attr('height', plotHeight)
+    .attr('fill', 'transparent')
+    .attr('pointer-events', 'all')
+
   // Update cache
   chartCache = { width, height, startHz, stopHz, xScale, yScale, margin, plotWidth, plotHeight }
   }
@@ -565,6 +609,54 @@ function draw() {
         .text(trace.name)
     })
   }
+
+  // Set up mouse event handlers for cursor tracking
+  const mouseOverlay = svg.select('.mouse-overlay')
+  const cursorLineV = svg.select('.cursor-line-v')
+  const cursorLineH = svg.select('.cursor-line-h')
+  const cursorDot = svg.select('.cursor-dot')
+
+  // Helper to find power at frequency from the primary trace
+  function getPowerAtFreq(freqHz) {
+    const trace = normalizedTraces.value[0]
+    if (!trace?.scan?.power?.length) return null
+
+    const { hz_lo, hz_hi, power } = trace.scan
+    if (freqHz < hz_lo || freqHz > hz_hi) return null
+
+    const idx = Math.round(((freqHz - hz_lo) / (hz_hi - hz_lo)) * (power.length - 1))
+    if (idx < 0 || idx >= power.length) return null
+    return power[idx]
+  }
+
+  mouseOverlay
+    .on('mousemove', (event) => {
+      const [mx, my] = d3.pointer(event)
+      const freqHz = xScale.invert(mx)
+      const freqMHz = freqHz / 1e6
+      const powerDbm = getPowerAtFreq(freqHz)
+
+      if (powerDbm !== null) {
+        const powerY = yScale(powerDbm)
+
+        cursorLineV.attr('x1', mx).attr('x2', mx).attr('opacity', 0.6)
+        cursorLineH.attr('y1', powerY).attr('y2', powerY).attr('opacity', 0.6)
+        cursorDot.attr('cx', mx).attr('cy', powerY).attr('opacity', 1)
+
+        cursorInfo.value = {
+          x: mx + chartCache.margin.left,
+          y: powerY + chartCache.margin.top,
+          freqMHz: freqMHz.toFixed(3),
+          powerDbm: powerDbm.toFixed(1),
+        }
+      }
+    })
+    .on('mouseleave', () => {
+      cursorLineV.attr('opacity', 0)
+      cursorLineH.attr('opacity', 0)
+      cursorDot.attr('opacity', 0)
+      cursorInfo.value = null
+    })
 }
 
 // Resize handling
@@ -602,8 +694,21 @@ defineExpose({
 </script>
 
 <template>
-  <div ref="container" class="d3-spectrum-chart w-full">
+  <div ref="container" class="d3-spectrum-chart w-full relative">
     <svg ref="svgRef" class="w-full rounded" :style="{ height: `${height}px` }"></svg>
+
+    <!-- Cursor tooltip -->
+    <div
+      v-if="cursorInfo"
+      class="absolute pointer-events-none bg-gray-900/90 border border-cyan-500/50 rounded px-2 py-1 text-xs"
+      :style="{
+        left: `${cursorInfo.x + 10}px`,
+        top: `${cursorInfo.y - 30}px`,
+      }"
+    >
+      <div class="text-cyan-400 font-mono">{{ cursorInfo.freqMHz }} MHz</div>
+      <div class="text-yellow-400 font-mono">{{ cursorInfo.powerDbm }} dBm</div>
+    </div>
   </div>
 </template>
 

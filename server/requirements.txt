@@ -11,4 +11,5 @@ psycopg2-binary>=2.9  # PostgreSQL (optional, SQLite works for dev)
 
 # Utilities
 python-dotenv>=1.0
+python-dateutil>=2.8  # Date parsing for API queries
 gunicorn>=21.0  # WSGI server for production

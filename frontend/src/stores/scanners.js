@@ -398,10 +398,35 @@ export const useScannersStore = defineStore('scanners', () => {
   }
 
   // Load decimated cache from API (for scrubber preview)
-  async function loadDecimatedCache(scannerId, bandName, hours = SCRUBBER_HOURS) {
+  // Accepts either hours (number) or options object { hours, start, end }
+  async function loadDecimatedCache(scannerId, bandName, options = SCRUBBER_HOURS) {
     const key = `${scannerId}:${bandName}`
     try {
-      const scans = await fetchHistory(scannerId, bandName, hours, 1000, true)
+      // Build options for fetchHistory
+      let fetchOpts
+      if (typeof options === 'number') {
+        fetchOpts = { hours: options, limit: 1000, decimated: true }
+      } else if (options && typeof options === 'object') {
+        // Has start/end dates (custom range) or hours (preset)
+        if (options.start && options.end) {
+          fetchOpts = {
+            start: options.start,
+            end: options.end,
+            limit: 1000,
+            decimated: true,
+          }
+        } else {
+          fetchOpts = {
+            hours: options.hours || 24,
+            limit: 1000,
+            decimated: true,
+          }
+        }
+      } else {
+        // Fallback
+        fetchOpts = { hours: 24, limit: 1000, decimated: true }
+      }
+      const scans = await fetchHistory(scannerId, bandName, fetchOpts)
       if (scans && scans.length > 0) {
         decimatedCache.value[key] = scans.map(s => ({
           id: s.id,
@@ -542,9 +567,28 @@ export const useScannersStore = defineStore('scanners', () => {
   }
 
   // Fetch timeline data for time scrubber (also populates the store)
-  async function fetchTimeline(scannerId, bandName = null, hours = 24) {
+  // Supports either relative hours or absolute start/end dates
+  async function fetchTimeline(scannerId, bandName = null, options = {}) {
     try {
-      let url = `/api/scanners/${scannerId}/timeline/?hours=${hours}`
+      // Support both old signature (hours as number) and new signature (options object)
+      let hours, startDate, endDate
+      if (typeof options === 'number') {
+        hours = options
+      } else {
+        hours = options.hours
+        startDate = options.start
+        endDate = options.end
+      }
+
+      let url = `/api/scanners/${scannerId}/timeline/?`
+      if (startDate) {
+        url += `start=${startDate.toISOString()}`
+        if (endDate) {
+          url += `&end=${endDate.toISOString()}`
+        }
+      } else {
+        url += `hours=${hours || 24}`
+      }
       if (bandName) {
         url += `&band=${encodeURIComponent(bandName)}`
       }
@@ -568,9 +612,32 @@ export const useScannersStore = defineStore('scanners', () => {
   }
 
   // Fetch historical scan data
-  async function fetchHistory(scannerId, bandName = null, hours = 24, limit = 1000, decimated = false) {
+  // Supports either relative hours or absolute start/end dates
+  async function fetchHistory(scannerId, bandName = null, options = {}) {
     try {
-      let url = `/api/scanners/${scannerId}/history/?hours=${hours}&limit=${limit}`
+      // Support both old signature and new signature
+      let hours, limit, decimated, startDate, endDate
+      if (typeof options === 'number') {
+        hours = options
+        limit = arguments[3] || 1000
+        decimated = arguments[4] || false
+      } else {
+        hours = options.hours
+        limit = options.limit || 1000
+        decimated = options.decimated || false
+        startDate = options.start
+        endDate = options.end
+      }
+
+      let url = `/api/scanners/${scannerId}/history/?limit=${limit}`
+      if (startDate) {
+        url += `&start=${startDate.toISOString()}`
+        if (endDate) {
+          url += `&end=${endDate.toISOString()}`
+        }
+      } else {
+        url += `&hours=${hours || 24}`
+      }
       if (bandName) {
         url += `&band=${encodeURIComponent(bandName)}`
       }

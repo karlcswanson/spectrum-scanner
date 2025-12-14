@@ -44,14 +44,41 @@ const props = defineProps({
     type: [Date, Number, String],
     default: null,
   },
-  // Hide individual scan markers for better performance
+  // Hide individual scan markers (density bar is usually sufficient)
   hideMarkers: {
     type: Boolean,
     default: false,
   },
+  // Show data density bar
+  showDensity: {
+    type: Boolean,
+    default: true,
+  },
 })
 
-const emit = defineEmits(['select', 'preview', 'live'])
+// Time range presets
+const timeRangeOptions = [
+  { label: '10 min', hours: 0.167 },
+  { label: '30 min', hours: 0.5 },
+  { label: '1 hour', hours: 1 },
+  { label: '6 hours', hours: 6 },
+  { label: '24 hours', hours: 24 },
+]
+
+// Selected time range
+const selectedRange = ref(props.maxHours)
+
+// Custom date range mode
+const showDatePicker = ref(false)
+const customStartDate = ref('')
+const customStartTime = ref('')
+const customEndDate = ref('')
+const customEndTime = ref('')
+const isCustomRange = ref(false)
+const customRangeStart = ref(null)
+const customRangeEnd = ref(null)
+
+const emit = defineEmits(['select', 'preview', 'live', 'rangeChange'])
 
 const container = ref(null)
 const svgRef = ref(null)
@@ -78,12 +105,67 @@ const filteredTimeline = computed(() => {
   return props.timeline.filter(t => t.band__name === props.bandName)
 })
 
-// Time range - computed fresh in draw(), not cached
+// Time range - computed fresh in draw(), using selected range
 function getTimeRange() {
+  if (isCustomRange.value && customRangeStart.value && customRangeEnd.value) {
+    return { start: customRangeStart.value, end: customRangeEnd.value }
+  }
   const now = new Date()
-  const start = new Date(now.getTime() - props.maxHours * 60 * 60 * 1000)
+  const hours = selectedRange.value || props.maxHours
+  const start = new Date(now.getTime() - hours * 60 * 60 * 1000)
   return { start, end: now }
 }
+
+// Handle time range selection (preset)
+function setTimeRange(hours) {
+  isCustomRange.value = false
+  customRangeStart.value = null
+  customRangeEnd.value = null
+  selectedRange.value = hours
+  emit('rangeChange', { hours })
+  scheduleDraw()
+}
+
+// Toggle date picker
+function toggleDatePicker() {
+  showDatePicker.value = !showDatePicker.value
+  if (showDatePicker.value) {
+    // Set default values to today
+    const now = new Date()
+    const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000)
+    customEndDate.value = now.toISOString().split('T')[0]
+    customEndTime.value = now.toTimeString().slice(0, 5)
+    customStartDate.value = yesterday.toISOString().split('T')[0]
+    customStartTime.value = yesterday.toTimeString().slice(0, 5)
+  }
+}
+
+// Apply custom date range
+function applyCustomRange() {
+  const start = new Date(`${customStartDate.value}T${customStartTime.value}`)
+  const end = new Date(`${customEndDate.value}T${customEndTime.value}`)
+
+  if (isNaN(start.getTime()) || isNaN(end.getTime())) {
+    console.error('Invalid date range')
+    return
+  }
+
+  isCustomRange.value = true
+  customRangeStart.value = start
+  customRangeEnd.value = end
+  selectedRange.value = null
+  showDatePicker.value = false
+
+  emit('rangeChange', { start, end })
+  scheduleDraw()
+}
+
+// Format custom range for display
+const customRangeDisplay = computed(() => {
+  if (!isCustomRange.value || !customRangeStart.value) return null
+  const opts = { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }
+  return `${customRangeStart.value.toLocaleDateString('en-US', opts)} - ${customRangeEnd.value.toLocaleDateString('en-US', opts)}`
+})
 
 function goLive() {
   dragTime.value = null
@@ -169,6 +251,7 @@ function draw() {
     svg.select('.chart').append('g').attr('class', 'axis')
       .attr('transform', `translate(0,${plotHeight})`)
 
+    svg.select('.chart').append('g').attr('class', 'density-bar')
     svg.select('.chart').append('g').attr('class', 'markers')
     svg.select('.chart').append('line').attr('class', 'now-line')
     svg.select('.chart').append('g').attr('class', 'scrubber')
@@ -210,6 +293,45 @@ function draw() {
   chart.selectAll('.domain, .tick line')
     .attr('stroke', '#333')
 
+  // Draw density bar to show data availability
+  if (props.showDensity) {
+    const densityBar = chart.select('.density-bar')
+    densityBar.selectAll('*').remove()
+
+    // Create bins for density calculation
+    const numBins = Math.min(plotWidth / 4, 100) // 4px per bin minimum
+    const binWidth = plotWidth / numBins
+    const bins = new Array(numBins).fill(0)
+
+    // Count scans in each bin
+    filteredTimeline.value.forEach(t => {
+      const date = getDate(t.timestamp)
+      if (date >= timeRange.start && date <= timeRange.end) {
+        const x = xScale(date)
+        const binIdx = Math.min(Math.floor(x / binWidth), numBins - 1)
+        if (binIdx >= 0) bins[binIdx]++
+      }
+    })
+
+    // Find max for normalization
+    const maxCount = Math.max(...bins, 1)
+
+    // Draw density rectangles
+    const barHeight = 6
+    bins.forEach((count, idx) => {
+      if (count > 0) {
+        const intensity = Math.min(count / maxCount, 1)
+        densityBar.append('rect')
+          .attr('x', idx * binWidth)
+          .attr('y', plotHeight - barHeight - 2)
+          .attr('width', binWidth - 1)
+          .attr('height', barHeight)
+          .attr('fill', `rgba(34, 197, 94, ${0.3 + intensity * 0.7})`)
+          .attr('rx', 1)
+      }
+    })
+  }
+
   // Get markers with cached dates (needed for drag operations even if not drawn)
   const allMarkers = filteredTimeline.value
     .map(t => ({
@@ -238,8 +360,8 @@ function draw() {
       markers = Array.from(binned.values())
     }
 
-    // Update markers efficiently
-    const markerRadius = 3
+    // Update markers efficiently - smaller and dimmer to complement density bar
+    const markerRadius = 2
     chart.select('.markers').selectAll('.scan-marker')
       .data(markers, d => d.id)
       .join('circle')
@@ -251,7 +373,7 @@ function draw() {
         if (selectedTime.value && Math.abs(d.date - selectedTime.value) < 1000) {
           return '#00d4ff'
         }
-        return '#4a5568'
+        return '#4a556880' // dimmer gray with transparency
       })
   } else {
     // Clear any existing markers
@@ -423,13 +545,37 @@ const selectedTimeDisplay = computed(() => {
 </script>
 
 <template>
-  <div class="time-scrubber bg-gray-900 rounded p-2">
+  <div class="time-scrubber bg-gray-900 rounded p-2 relative">
     <div class="flex items-center justify-between mb-2">
       <div class="text-xs text-gray-500">
-        <span v-if="isLive" class="text-green-400 font-semibold">LIVE</span>
-        <span v-else>{{ selectedTimeDisplay }}</span>
+        <span v-if="isLive" class="text-green-400 font-semibold">● LIVE</span>
+        <span v-else-if="isCustomRange" class="text-purple-400">{{ customRangeDisplay }}</span>
+        <span v-else class="text-yellow-400">{{ selectedTimeDisplay }}</span>
       </div>
       <div class="flex items-center gap-2">
+        <!-- Time range selector -->
+        <div class="flex items-center gap-1 border-r border-gray-700 pr-2 mr-1">
+          <button
+            v-for="opt in timeRangeOptions"
+            :key="opt.hours"
+            @click="setTimeRange(opt.hours)"
+            class="px-2 py-0.5 rounded text-xs transition-colors"
+            :class="selectedRange === opt.hours && !isCustomRange
+              ? 'bg-cyan-600 text-white'
+              : 'bg-gray-800 hover:bg-gray-700 text-gray-400'"
+          >
+            {{ opt.label }}
+          </button>
+          <button
+            @click="toggleDatePicker"
+            class="px-2 py-0.5 rounded text-xs transition-colors"
+            :class="isCustomRange
+              ? 'bg-purple-600 text-white'
+              : 'bg-gray-800 hover:bg-gray-700 text-gray-400'"
+          >
+            Custom
+          </button>
+        </div>
         <span class="text-xs text-gray-600">{{ filteredTimeline.length }} scans</span>
         <button
           @click="goLive"
@@ -442,6 +588,62 @@ const selectedTimeDisplay = computed(() => {
         </button>
       </div>
     </div>
+
+    <!-- Custom date range picker -->
+    <div
+      v-if="showDatePicker"
+      class="absolute top-full left-0 right-0 mt-1 bg-gray-800 border border-gray-700 rounded-lg p-3 z-50 shadow-xl"
+    >
+      <div class="text-xs text-gray-400 mb-2 font-semibold">Custom Date Range</div>
+      <div class="flex items-center gap-4">
+        <div class="flex-1">
+          <label class="text-xs text-gray-500 block mb-1">Start</label>
+          <div class="flex gap-1">
+            <input
+              v-model="customStartDate"
+              type="date"
+              class="bg-gray-700 text-white text-xs rounded px-2 py-1 w-28"
+            />
+            <input
+              v-model="customStartTime"
+              type="time"
+              class="bg-gray-700 text-white text-xs rounded px-2 py-1 w-20"
+            />
+          </div>
+        </div>
+        <div class="text-gray-600">→</div>
+        <div class="flex-1">
+          <label class="text-xs text-gray-500 block mb-1">End</label>
+          <div class="flex gap-1">
+            <input
+              v-model="customEndDate"
+              type="date"
+              class="bg-gray-700 text-white text-xs rounded px-2 py-1 w-28"
+            />
+            <input
+              v-model="customEndTime"
+              type="time"
+              class="bg-gray-700 text-white text-xs rounded px-2 py-1 w-20"
+            />
+          </div>
+        </div>
+        <div class="flex gap-2">
+          <button
+            @click="applyCustomRange"
+            class="px-3 py-1 bg-purple-600 hover:bg-purple-500 text-white text-xs rounded font-semibold"
+          >
+            Apply
+          </button>
+          <button
+            @click="showDatePicker = false"
+            class="px-3 py-1 bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs rounded"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+
     <div ref="container" class="w-full">
       <svg ref="svgRef" class="w-full" :style="{ height: `${height}px` }"></svg>
     </div>
