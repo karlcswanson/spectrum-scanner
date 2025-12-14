@@ -1,0 +1,114 @@
+version: '3.8'
+
+# Production Docker Compose for Spectrum Scanner
+# Usage: docker compose -f docker-compose.prod.yml up -d
+
+services:
+  # Caddy - Reverse proxy with automatic HTTPS
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - DOMAIN=${DOMAIN:-localhost}
+    volumes:
+      - ./config/Caddyfile:/etc/caddy/Caddyfile:ro
+      - frontend_dist:/srv/frontend:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      frontend:
+        condition: service_completed_successfully
+      server:
+        condition: service_started
+
+  # MQTT Broker with Django auth
+  mosquitto:
+    image: iegomez/mosquitto-go-auth:latest
+    restart: unless-stopped
+    ports:
+      - "1883:1883"
+      # WebSocket exposed through Caddy, not directly
+    volumes:
+      - ./config/mosquitto.prod.conf:/etc/mosquitto/mosquitto.conf:ro
+      - mosquitto_data:/mosquitto/data
+      - mosquitto_log:/mosquitto/log
+    depends_on:
+      server:
+        condition: service_started
+
+  # Django Backend (REST API + MQTT auth)
+  server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile.prod
+    restart: unless-stopped
+    environment:
+      - DEBUG=${DEBUG:-false}
+      - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY:?Set DJANGO_SECRET_KEY in .env}
+      - ALLOWED_HOSTS=${ALLOWED_HOSTS:-localhost}
+      - MQTT_BROKER_HOST=mosquitto
+      - DB_ENGINE=${DB_ENGINE:-django.db.backends.sqlite3}
+      - DB_NAME=${DB_NAME:-/app/data/db.sqlite3}
+      - DB_USER=${DB_USER:-}
+      - DB_PASSWORD=${DB_PASSWORD:-}
+      - DB_HOST=${DB_HOST:-}
+      - DB_PORT=${DB_PORT:-}
+      - MQTT_BRIDGE_USERNAME=${MQTT_BRIDGE_USERNAME:-spectrum-bridge}
+      - MQTT_BRIDGE_PASSWORD=${MQTT_BRIDGE_PASSWORD:?Set MQTT_BRIDGE_PASSWORD in .env}
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-}
+      - CSRF_TRUSTED_ORIGINS=${CSRF_TRUSTED_ORIGINS:-}
+    volumes:
+      - server_data:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/scanners/')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    command: >
+      sh -c "python manage.py migrate --noinput &&
+             gunicorn --bind 0.0.0.0:8000 --workers 4 --threads 2 config.wsgi:application"
+
+  # MQTT Bridge (stores scans to database)
+  mqtt-bridge:
+    build:
+      context: ./server
+      dockerfile: Dockerfile.prod
+    restart: unless-stopped
+    environment:
+      - MQTT_BROKER_HOST=mosquitto
+      - DB_ENGINE=${DB_ENGINE:-django.db.backends.sqlite3}
+      - DB_NAME=${DB_NAME:-/app/data/db.sqlite3}
+      - DB_USER=${DB_USER:-}
+      - DB_PASSWORD=${DB_PASSWORD:-}
+      - DB_HOST=${DB_HOST:-}
+      - DB_PORT=${DB_PORT:-}
+      - MQTT_BRIDGE_USERNAME=${MQTT_BRIDGE_USERNAME:-spectrum-bridge}
+      - MQTT_BRIDGE_PASSWORD=${MQTT_BRIDGE_PASSWORD:?Set MQTT_BRIDGE_PASSWORD in .env}
+    volumes:
+      - server_data:/app/data
+    depends_on:
+      mosquitto:
+        condition: service_started
+      server:
+        condition: service_healthy
+    command: python manage.py mqtt_bridge
+
+  # Frontend build (runs once, copies static files to volume)
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    volumes:
+      - frontend_dist:/srv/frontend
+
+volumes:
+  mosquitto_data:
+  mosquitto_log:
+  server_data:
+  frontend_dist:
+  caddy_data:
+  caddy_config:

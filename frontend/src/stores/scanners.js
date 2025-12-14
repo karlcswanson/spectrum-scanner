@@ -42,12 +42,20 @@ export const useScannersStore = defineStore('scanners', () => {
   const TOPIC_PREFIX = 'spectrum'
 
   function getMqttUrl() {
-    // In Docker, connect to mosquitto service on port 9001
-    // In dev, connect to localhost:9001
     const host = window.location.hostname
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    // Use port 9001 for MQTT over WebSocket
-    return `${protocol}//${host}:9001`
+    const port = window.location.port
+
+    // In production (via Caddy), use /mqtt path on same host
+    // In development, connect directly to mosquitto on port 9001
+    if (import.meta.env.PROD) {
+      // Production: WebSocket through Caddy reverse proxy
+      const portPart = port ? `:${port}` : ''
+      return `${protocol}//${host}${portPart}/mqtt`
+    } else {
+      // Development: direct connection to mosquitto
+      return `${protocol}//${host}:9001`
+    }
   }
 
   async function fetchMqttCredentials() {

@@ -1,0 +1,39 @@
+# Production Caddyfile for Spectrum Scanner
+# Handles TLS/HTTPS automatically via Let's Encrypt
+
+{$DOMAIN:localhost} {
+    # API routes to Django backend
+    handle /api/* {
+        reverse_proxy server:8000
+    }
+
+    # MQTT WebSocket proxy
+    handle /mqtt {
+        reverse_proxy mosquitto:9001
+    }
+
+    # Static files from Django (admin, etc)
+    handle /static/* {
+        reverse_proxy server:8000
+    }
+
+    # Everything else goes to the Vue frontend
+    handle {
+        root * /srv/frontend
+        try_files {path} /index.html
+        file_server
+    }
+
+    # Logging
+    log {
+        output stdout
+        format console
+    }
+
+    # Security headers
+    header {
+        X-Content-Type-Options nosniff
+        X-Frame-Options DENY
+        Referrer-Policy strict-origin-when-cross-origin
+    }
+}
