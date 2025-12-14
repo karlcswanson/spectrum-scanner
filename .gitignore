@@ -1,13 +1,18 @@
+# IDE
 .idea/
-CLAUDE.md
-claude_notes.md
-reference/
-bin/
-frontend/node_modules/*
-frontend/dist/*
 
-# Go binary (root level only)
-/scanner
+# Development notes
+claude_notes.md
+
+# Reference projects (large, not part of main codebase)
+reference/
+
+# Build artifacts
+scanner/bin/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
 
 # Python cache
 __pycache__/
@@ -16,3 +21,10 @@ __pycache__/
 # SQLite database
 *.sqlite3
 server/data/*.sqlite3
+
+# OS files
+.DS_Store
+
+# Environment files with secrets
+.env
+!.env.example

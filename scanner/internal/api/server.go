@@ -6,9 +6,9 @@ import (
 	"log"
 	"net/http"
 
-	"spectrum-pluto/internal/models"
-	"spectrum-pluto/internal/mqtt"
-	"spectrum-pluto/internal/scanner"
+	"scanner/internal/models"
+	"scanner/internal/mqtt"
+	"scanner/internal/scanner"
 )
 
 //go:embed web

@@ -4,7 +4,7 @@ package scanner
 import (
 	"context"
 
-	"spectrum-pluto/internal/models"
+	"scanner/internal/models"
 )
 
 // Backend defines the interface that all spectrum analyzer backends must implement.

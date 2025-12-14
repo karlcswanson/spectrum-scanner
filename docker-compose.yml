@@ -8,7 +8,7 @@ services:
       - "1883:1883"
       - "9001:9001"
     volumes:
-      - ./docker/mosquitto/mosquitto.conf:/etc/mosquitto/mosquitto.conf
+      - ./config/mosquitto/mosquitto.conf:/etc/mosquitto/mosquitto.conf
       - mosquitto_data:/mosquitto/data
       - mosquitto_log:/mosquitto/log
     depends_on:

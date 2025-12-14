@@ -1,4 +1,4 @@
-module spectrum-pluto
+module scanner
 
 go 1.23
 

@@ -8,7 +8,7 @@ import (
 
 	pahomqtt "github.com/eclipse/paho.mqtt.golang"
 
-	"spectrum-pluto/internal/models"
+	"scanner/internal/models"
 )
 
 // Client handles MQTT publishing for scan data

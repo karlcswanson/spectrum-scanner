@@ -12,24 +12,24 @@ build-arm:
 	GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 \
 		go build -ldflags="-s -w" -o bin/scanner-arm ./cmd/scanner
 
-# Development: run on Mac, talk to Plany uto over USB
+# Development: run on Mac, talk to Pluto over USB
 dev:
 	go run ./cmd/scanner \
 		-listen :8080 \
-		-maia https://192.168.2.1 \
-		-config config.yaml
+		-addr https://192.168.2.1 \
+		-config ../config.yaml
 
 # Run with auto-start (for testing)
 dev-auto:
 	go run ./cmd/scanner \
 		-listen :8080 \
-		-maia https://192.168.2.1 \
-		-config config.yaml \
+		-addr https://192.168.2.1 \
+		-config ../config.yaml \
 		-auto-start
 
 # Run locally built binary
 run: build
-	./bin/scanner -listen :8080 -maia https://192.168.2.1
+	./bin/scanner -listen :8080 -addr https://192.168.2.1
 
 # Deploy binary to Pluto via SSH (using legacy SCP protocol for Pluto compatibility)
 deploy: build-arm
@@ -43,7 +43,7 @@ deploy-service: deploy
 	@echo '#!/bin/sh /etc/rc.common' > /tmp/spectrum-scanner.init
 	@echo 'START=99' >> /tmp/spectrum-scanner.init
 	@echo 'STOP=10' >> /tmp/spectrum-scanner.init
-	@echo 'start() { echo "Starting spectrum-scanner..."; /usr/bin/spectrum-scanner -listen :8080 -maia https://localhost -auto-start & }' >> /tmp/spectrum-scanner.init
+	@echo 'start() { echo "Starting spectrum-scanner..."; /usr/bin/spectrum-scanner -listen :8080 -addr https://localhost -auto-start & }' >> /tmp/spectrum-scanner.init
 	@echo 'stop() { echo "Stopping spectrum-scanner..."; killall spectrum-scanner 2>/dev/null; }' >> /tmp/spectrum-scanner.init
 	@echo 'restart() { stop; sleep 1; start; }' >> /tmp/spectrum-scanner.init
 	scp -O /tmp/spectrum-scanner.init root@192.168.2.1:/etc/init.d/spectrum-scanner

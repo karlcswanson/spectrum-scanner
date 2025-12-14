@@ -6,8 +6,8 @@ import (
 	"log"
 	"sync"
 
-	"spectrum-pluto/internal/models"
-	"spectrum-pluto/internal/mqtt"
+	"scanner/internal/models"
+	"scanner/internal/mqtt"
 )
 
 // Engine orchestrates frequency sweeping across bands using any Backend.

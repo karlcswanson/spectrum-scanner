@@ -8,13 +8,13 @@ import (
 	"runtime"
 	"strings"
 
-	"spectrum-pluto/internal/api"
-	"spectrum-pluto/internal/backend/owon"
-	"spectrum-pluto/internal/backend/pluto"
-	"spectrum-pluto/internal/config"
-	"spectrum-pluto/internal/models"
-	"spectrum-pluto/internal/mqtt"
-	"spectrum-pluto/internal/scanner"
+	"scanner/internal/api"
+	"scanner/internal/backend/owon"
+	"scanner/internal/backend/pluto"
+	"scanner/internal/config"
+	"scanner/internal/models"
+	"scanner/internal/mqtt"
+	"scanner/internal/scanner"
 )
 
 func main() {

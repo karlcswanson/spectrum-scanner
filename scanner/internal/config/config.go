@@ -9,7 +9,7 @@ import (
 	"github.com/google/uuid"
 	"gopkg.in/yaml.v3"
 
-	"spectrum-pluto/internal/models"
+	"scanner/internal/models"
 )
 
 // DefaultConfig returns sensible defaults for live production RF scanning

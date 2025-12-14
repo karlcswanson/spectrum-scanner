@@ -14,8 +14,8 @@ import (
 	"sync"
 	"time"
 
-	"spectrum-pluto/internal/models"
-	"spectrum-pluto/internal/scanner"
+	"scanner/internal/models"
+	"scanner/internal/scanner"
 )
 
 const (
