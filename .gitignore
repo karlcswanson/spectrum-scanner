@@ -6,8 +6,8 @@ bin/
 frontend/node_modules/*
 frontend/dist/*
 
-# Go binary
-scanner
+# Go binary (root level only)
+/scanner
 
 # Python cache
 __pycache__/
