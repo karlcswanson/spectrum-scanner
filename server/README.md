@@ -181,7 +181,8 @@ MQTT_BRIDGE_PASSWORD=your-bridge-password
 
 # Optional
 DEBUG=false
-ALLOWED_HOSTS=spectrum.example.com,localhost
+# NOTE: Must include 'localhost' and 'server' for Mosquitto auth plugin
+ALLOWED_HOSTS=spectrum.example.com,localhost,server
 
 # Database (SQLite default, or PostgreSQL)
 DB_ENGINE=django.db.backends.sqlite3
