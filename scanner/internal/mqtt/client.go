@@ -122,17 +122,26 @@ func NewClient(mqttConfig *models.MQTTConfig, scannerConfig *models.Config) (*Cl
 	return c, nil
 }
 
-// Connect establishes the MQTT connection
+// Connect establishes the MQTT connection asynchronously.
+// The scanner will work locally even if MQTT is unavailable.
 func (c *Client) Connect() error {
-	log.Printf("Connecting to MQTT broker at %s...", c.config.Broker)
+	log.Printf("Connecting to MQTT broker at %s (async)...", c.config.Broker)
 
-	token := c.client.Connect()
-	if token.Wait() && token.Error() != nil {
-		return fmt.Errorf("MQTT connect failed: %w", token.Error())
-	}
-
-	// Publish online status
-	c.PublishStatus(true, false, "")
+	// Connect asynchronously - don't block scanner startup
+	go func() {
+		token := c.client.Connect()
+		// Wait with a reasonable timeout for initial connection
+		if token.WaitTimeout(10 * time.Second) {
+			if token.Error() != nil {
+				log.Printf("MQTT initial connection failed: %v (will retry in background)", token.Error())
+			} else {
+				log.Printf("MQTT connected successfully")
+				c.PublishStatus(true, false, "")
+			}
+		} else {
+			log.Printf("MQTT connection timeout (will retry in background)")
+		}
+	}()
 
 	return nil
 }
