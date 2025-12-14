@@ -162,6 +162,64 @@ export const useScannersStore = defineStore('scanners', () => {
     connected.value = false
   }
 
+  // ============== Scanner Command Functions ==============
+
+  // Send start command to a scanner
+  function sendStartCommand(scannerId) {
+    if (!client || !client.connected) {
+      console.error('MQTT not connected')
+      return false
+    }
+    const topic = `${TOPIC_PREFIX}/commands/${scannerId}/start`
+    client.publish(topic, JSON.stringify({}), { qos: 1 })
+    console.log('Sent start command to', scannerId)
+    return true
+  }
+
+  // Send stop command to a scanner
+  function sendStopCommand(scannerId) {
+    if (!client || !client.connected) {
+      console.error('MQTT not connected')
+      return false
+    }
+    const topic = `${TOPIC_PREFIX}/commands/${scannerId}/stop`
+    client.publish(topic, JSON.stringify({}), { qos: 1 })
+    console.log('Sent stop command to', scannerId)
+    return true
+  }
+
+  // Send band configuration to a scanner
+  function sendBandsCommand(scannerId, bands) {
+    if (!client || !client.connected) {
+      console.error('MQTT not connected')
+      return false
+    }
+    const topic = `${TOPIC_PREFIX}/commands/${scannerId}/bands`
+    // Send array of band configs: [{ name, start_hz, stop_hz, enabled }, ...]
+    const payload = bands.map(b => ({
+      name: b.name,
+      start_hz: b.start_hz,
+      stop_hz: b.stop_hz,
+      enabled: b.enabled,
+    }))
+    client.publish(topic, JSON.stringify(payload), { qos: 1 })
+    console.log('Sent bands command to', scannerId, payload)
+    return true
+  }
+
+  // Send gain settings to a scanner
+  function sendGainCommand(scannerId, rxGain, rxGainMode) {
+    if (!client || !client.connected) {
+      console.error('MQTT not connected')
+      return false
+    }
+    const topic = `${TOPIC_PREFIX}/commands/${scannerId}/gain`
+    const payload = { rx_gain: rxGain, rx_gain_mode: rxGainMode }
+    client.publish(topic, JSON.stringify(payload), { qos: 1 })
+    console.log('Sent gain command to', scannerId, payload)
+    return true
+  }
+
   // Subscribe/unsubscribe are now no-ops since we use wildcard subscription
   // Keep the API for compatibility with existing components
   function subscribe(scannerId) {
@@ -705,5 +763,10 @@ export const useScannersStore = defineStore('scanners', () => {
     tick,
     lastError,
     apiErrors,
+    // Scanner commands
+    sendStartCommand,
+    sendStopCommand,
+    sendBandsCommand,
+    sendGainCommand,
   }
 })

@@ -404,15 +404,20 @@ def mqtt_acl(request):
         logger.warning(f"MQTT ACL: bridge service access to {topic} (acc={acc}) denied")
         return HttpResponse(status=403)
 
-    # Check if this is a user (subscribe-only to all topics)
+    # Check if this is a user
     try:
         from uuid import UUID
         mqtt_uuid = UUID(username)
         is_user = UserMQTTCredentials.objects.filter(mqtt_id=mqtt_uuid).exists()
         print(f"MQTT ACL: UUID lookup for {username}: is_user={is_user}")
         if is_user:
-            if is_subscribe:  # Subscribe/read only
+            # Users can subscribe to all topics
+            if is_subscribe:
                 print(f"MQTT ACL: user {username[:8]}... subscribe to {topic} ALLOWED")
+                return HttpResponse(status=200)
+            # Users can publish to command topics (to control scanners)
+            if is_publish and f"{topic_prefix}/commands/" in topic:
+                print(f"MQTT ACL: user {username[:8]}... publish to {topic} ALLOWED")
                 return HttpResponse(status=200)
             print(f"MQTT ACL: user {username[:8]}... publish to {topic} DENIED")
             return HttpResponse(status=403)

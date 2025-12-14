@@ -255,3 +255,69 @@ func (e *Engine) ScanOnce(ctx context.Context, band models.Band) (models.ScanLin
 	scan.ID = config.DeviceID
 	return scan, nil
 }
+
+// ============== CommandHandler Interface Implementation ==============
+
+// HandleStart implements mqtt.CommandHandler - starts scanning
+func (e *Engine) HandleStart() error {
+	return e.Start()
+}
+
+// HandleStop implements mqtt.CommandHandler - stops scanning
+func (e *Engine) HandleStop() {
+	e.Stop()
+}
+
+// HandleBands implements mqtt.CommandHandler - updates band configuration
+func (e *Engine) HandleBands(bands []mqtt.BandConfig) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	// Update band enabled states
+	for _, newBand := range bands {
+		for i := range e.config.Bands {
+			if e.config.Bands[i].Name == newBand.Name {
+				e.config.Bands[i].Enabled = newBand.Enabled
+				log.Printf("Band %s enabled=%v", newBand.Name, newBand.Enabled)
+				break
+			}
+		}
+	}
+
+	// Re-publish config
+	if e.mqtt != nil && e.mqtt.IsConnected() {
+		e.mqtt.PublishConfig()
+	}
+
+	return nil
+}
+
+// HandleGain implements mqtt.CommandHandler - updates gain settings
+func (e *Engine) HandleGain(gain float64, mode string) error {
+	e.mu.Lock()
+	e.config.RxGain = gain
+	if mode != "" {
+		e.config.RxGainMode = mode
+	}
+	e.mu.Unlock()
+
+	// Apply gain to backend if it supports it
+	if setter, ok := e.backend.(GainSetter); ok {
+		if err := setter.SetGain(gain, mode); err != nil {
+			log.Printf("Failed to set gain on backend: %v", err)
+			return err
+		}
+	}
+
+	// Re-publish config
+	if e.mqtt != nil && e.mqtt.IsConnected() {
+		e.mqtt.PublishConfig()
+	}
+
+	return nil
+}
+
+// GainSetter is an optional interface for backends that support gain control
+type GainSetter interface {
+	SetGain(gain float64, mode string) error
+}

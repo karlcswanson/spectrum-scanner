@@ -166,6 +166,33 @@
             align-self: flex-start;
         }
         .btn-apply:hover { background: #00a8cc; }
+        .collapsible-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+            color: #888;
+            font-size: 14px;
+            padding: 10px 0;
+            border-top: 1px solid #0f3460;
+            margin-top: 15px;
+        }
+        .collapsible-header:hover { color: #aaa; }
+        .collapsible-arrow {
+            transition: transform 0.2s;
+            font-size: 10px;
+        }
+        .collapsible-arrow.open { transform: rotate(90deg); }
+        .details-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            padding-top: 15px;
+        }
+        .details-grid .detail-item { }
+        .details-grid .detail-label { color: #666; font-size: 12px; }
+        .details-grid .detail-value { color: #ccc; font-size: 14px; margin-top: 2px; }
+        .details-grid .detail-value.mono { font-family: monospace; font-size: 11px; word-break: break-all; }
     </style>
 </head>
 <body>
@@ -194,6 +221,44 @@
                 <button id="btn-start" class="btn-start" onclick="startScan()">Start Scan</button>
                 <button id="btn-stop" class="btn-stop btn-disabled" onclick="stopScan()" disabled>Stop Scan</button>
                 <button id="btn-export" class="btn-export" onclick="exportCSV()">Export CSV</button>
+            </div>
+
+            <!-- Collapsible Scanner Details -->
+            <div class="collapsible-header" onclick="toggleDetails()">
+                <span id="details-arrow" class="collapsible-arrow">&#9654;</span>
+                Scanner Details
+            </div>
+            <div id="scanner-details" style="display: none;">
+                <div class="details-grid">
+                    <div class="detail-item">
+                        <div class="detail-label">Backend Type</div>
+                        <div class="detail-value" id="detail-backend-type">--</div>
+                    </div>
+                    <div class="detail-item">
+                        <div class="detail-label">Backend Name</div>
+                        <div class="detail-value" id="detail-backend-name">--</div>
+                    </div>
+                    <div class="detail-item">
+                        <div class="detail-label">Frequency Range</div>
+                        <div class="detail-value" id="detail-freq-range">--</div>
+                    </div>
+                    <div class="detail-item">
+                        <div class="detail-label">Connected</div>
+                        <div class="detail-value" id="detail-connected">--</div>
+                    </div>
+                    <div class="detail-item">
+                        <div class="detail-label">Dwell Time</div>
+                        <div class="detail-value" id="detail-dwell-time">--</div>
+                    </div>
+                    <div class="detail-item">
+                        <div class="detail-label">Mode</div>
+                        <div class="detail-value" id="detail-mode">--</div>
+                    </div>
+                    <div class="detail-item">
+                        <div class="detail-label">Description</div>
+                        <div class="detail-value" id="detail-description">--</div>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -240,6 +305,15 @@
         let bands = [];
         let bandScans = {};  // { bandName: lastScanData }
         let bandCanvases = {};  // { bandName: { canvas, ctx } }
+        let detailsExpanded = false;
+
+        function toggleDetails() {
+            detailsExpanded = !detailsExpanded;
+            const details = document.getElementById('scanner-details');
+            const arrow = document.getElementById('details-arrow');
+            details.style.display = detailsExpanded ? 'block' : 'none';
+            arrow.classList.toggle('open', detailsExpanded);
+        }
 
         function log(msg) {
             const logEl = document.getElementById('log');
@@ -418,13 +492,42 @@
                 const resp = await fetch('/api/radio');
                 if (!resp.ok) {
                     log('Radio: not connected');
+                    document.getElementById('detail-connected').textContent = 'No';
                     return;
                 }
                 const info = await resp.json();
-                log(`Radio: ${info.sample_rate_mhz.toFixed(2)} MHz sample rate, ${info.rx_bandwidth_mhz.toFixed(2)} MHz RF BW, ${(info.bin_size_hz/1000).toFixed(2)} kHz/bin`);
-                log(`Radio: RX gain ${info.rx_gain_db.toFixed(1)} dB (${info.rx_gain_mode}), FFT ${info.fft_size} bins`);
+
+                // Update details panel
+                document.getElementById('detail-backend-type').textContent = info.backend_type || '--';
+                document.getElementById('detail-backend-name').textContent = info.backend_name || '--';
+                document.getElementById('detail-connected').textContent = info.connected ? 'Yes' : 'No';
+                if (info.min_freq_mhz && info.max_freq_mhz) {
+                    document.getElementById('detail-freq-range').textContent =
+                        `${info.min_freq_mhz.toFixed(0)} - ${(info.max_freq_mhz/1000).toFixed(1)} GHz`;
+                }
+
+                // Log radio info if we have sample rate info
+                if (info.sample_rate_mhz) {
+                    log(`Radio: ${info.sample_rate_mhz.toFixed(2)} MHz sample rate`);
+                }
             } catch (e) {
                 log('Radio: error fetching info');
+            }
+        }
+
+        async function fetchConfig() {
+            try {
+                const resp = await fetch('/api/config');
+                if (!resp.ok) return;
+                const config = await resp.json();
+
+                // Update details panel
+                document.getElementById('detail-dwell-time').textContent =
+                    config.dwell_time_ms ? `${config.dwell_time_ms} ms` : '--';
+                document.getElementById('detail-mode').textContent = config.mode || 'Average';
+                document.getElementById('detail-description').textContent = config.description || '--';
+            } catch (e) {
+                // Config fetch is optional
             }
         }
 
@@ -708,6 +811,7 @@
             fetchBands();
             fetchGain();
             fetchRadioInfo();
+            fetchConfig();
             setInterval(fetchStatus, 5000);
 
             fetch('/api/status')

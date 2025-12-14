@@ -52,7 +52,8 @@ spectrum/
 │   └── {scanner-uuid}/
 │       ├── start             # Start scanning command
 │       ├── stop              # Stop scanning command
-│       └── configure         # Configuration update command
+│       ├── bands             # Update band enabled states
+│       └── gain              # Update gain settings
 │
 └── server/
     └── announce              # Server presence/heartbeat (future)
@@ -171,19 +172,65 @@ Includes full scan data so frontend can add to cache without API call.
 
 ### spectrum/commands/{uuid}/start
 
-Start scanning command. Empty payload or specify bands:
+Start scanning command. Empty payload.
 
 ```json
-{"bands": ["UHF", "WiFi 2.4"]}
+{}
 ```
+
+**Publisher:** Server frontend (users)
+**Subscriber:** Scanner
 
 ### spectrum/commands/{uuid}/stop
 
 Stop scanning command. Empty payload.
 
-### spectrum/commands/{uuid}/configure
+```json
+{}
+```
 
-Configuration update. Same format as config message. Scanner applies and republishes to config topic.
+**Publisher:** Server frontend (users)
+**Subscriber:** Scanner
+
+### spectrum/commands/{uuid}/bands
+
+Update band enabled states. Scanner applies changes and republishes to config topic.
+
+```json
+[
+  {"name": "UHF", "start_hz": 470000000, "stop_hz": 608000000, "enabled": true},
+  {"name": "WiFi 2.4", "start_hz": 2400000000, "stop_hz": 2500000000, "enabled": false}
+]
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| name | string | Band name (must match existing band) |
+| start_hz | int | Start frequency in Hz |
+| stop_hz | int | Stop frequency in Hz |
+| enabled | boolean | Whether band should be scanned |
+
+**Publisher:** Server frontend (users)
+**Subscriber:** Scanner
+
+### spectrum/commands/{uuid}/gain
+
+Update receiver gain settings. Scanner applies and republishes to config topic.
+
+```json
+{
+  "rx_gain": 40,
+  "rx_gain_mode": "manual"
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| rx_gain | float | Gain value in dB (0-73 for Pluto) |
+| rx_gain_mode | string | `manual`, `slow_attack`, `fast_attack`, or `hybrid` |
+
+**Publisher:** Server frontend (users)
+**Subscriber:** Scanner
 
 ## Authentication
 
@@ -244,6 +291,7 @@ Response: 200 OK or 403 Forbidden
 | Scanner | `spectrum/commands/{own-uuid}/*` | ✓ | ✗ |
 | Scanner | Other topics | ✗ | ✗ |
 | User | `spectrum/#` | ✓ | ✗ |
+| User | `spectrum/commands/*` | ✗ | ✓ |
 | Bridge | `spectrum/scanners/+/scan` | ✓ | ✗ |
 | Bridge | `spectrum/scanners/+/status` | ✓ | ✗ |
 | Bridge | `spectrum/scanners/+/config` | ✓ | ✗ |

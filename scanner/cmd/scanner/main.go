@@ -133,6 +133,11 @@ func main() {
 	// Create sweep engine with the backend
 	engine := scanner.NewEngine(backend, cfg, mqttClient)
 
+	// Connect engine as command handler for MQTT commands
+	if mqttClient != nil {
+		mqttClient.SetCommandHandler(engine)
+	}
+
 	// Auto-start scanning if requested
 	if *autoStart || cfg.AutoStart {
 		log.Println("Auto-starting scanner...")

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	pahomqtt "github.com/eclipse/paho.mqtt.golang"
@@ -11,13 +12,22 @@ import (
 	"scanner/internal/models"
 )
 
+// CommandHandler handles incoming commands from the server
+type CommandHandler interface {
+	HandleStart() error
+	HandleStop()
+	HandleBands(bands []BandConfig) error
+	HandleGain(gain float64, mode string) error
+}
+
 // Client handles MQTT publishing for scan data
 type Client struct {
-	client        pahomqtt.Client
-	config        *models.MQTTConfig
-	scannerConfig *models.Config
-	topicPrefix   string
-	scannerID     string
+	client         pahomqtt.Client
+	config         *models.MQTTConfig
+	scannerConfig  *models.Config
+	topicPrefix    string
+	scannerID      string
+	commandHandler CommandHandler
 }
 
 // ScanMessage is the minimal MQTT message format for scan data
@@ -101,6 +111,8 @@ func NewClient(mqttConfig *models.MQTTConfig, scannerConfig *models.Config) (*Cl
 			log.Printf("MQTT connected to %s", mqttConfig.Broker)
 			// Publish config on connect/reconnect
 			c.PublishConfig()
+			// Subscribe to command topics
+			c.subscribeToCommands()
 		}).
 		SetConnectionLostHandler(func(client pahomqtt.Client, err error) {
 			log.Printf("MQTT connection lost: %v", err)
@@ -261,4 +273,87 @@ func (c *Client) PublishConfig() {
 	}()
 
 	log.Printf("Published scanner config to %s", topic)
+}
+
+// SetCommandHandler sets the handler for incoming commands
+func (c *Client) SetCommandHandler(handler CommandHandler) {
+	c.commandHandler = handler
+}
+
+// subscribeToCommands subscribes to command topics for this scanner
+func (c *Client) subscribeToCommands() {
+	// Subscribe to all commands for this scanner
+	topic := fmt.Sprintf("%s/commands/%s/#", c.topicPrefix, c.scannerID)
+
+	token := c.client.Subscribe(topic, 1, c.handleCommand)
+	go func() {
+		if token.Wait() && token.Error() != nil {
+			log.Printf("MQTT command subscription error: %v", token.Error())
+		} else {
+			log.Printf("Subscribed to command topic: %s", topic)
+		}
+	}()
+}
+
+// handleCommand processes incoming MQTT commands
+func (c *Client) handleCommand(client pahomqtt.Client, msg pahomqtt.Message) {
+	if c.commandHandler == nil {
+		log.Printf("Received command but no handler set: %s", msg.Topic())
+		return
+	}
+
+	// Extract command type from topic: spectrum/commands/{id}/{command}
+	topic := msg.Topic()
+	parts := strings.Split(topic, "/")
+	if len(parts) < 4 {
+		log.Printf("Invalid command topic: %s", topic)
+		return
+	}
+	command := parts[len(parts)-1]
+	payload := msg.Payload()
+
+	log.Printf("Received command: %s", command)
+
+	switch command {
+	case "start":
+		if err := c.commandHandler.HandleStart(); err != nil {
+			log.Printf("Start command failed: %v", err)
+		} else {
+			log.Printf("Start command executed")
+		}
+
+	case "stop":
+		c.commandHandler.HandleStop()
+		log.Printf("Stop command executed")
+
+	case "bands":
+		var bands []BandConfig
+		if err := json.Unmarshal(payload, &bands); err != nil {
+			log.Printf("Invalid bands payload: %v", err)
+			return
+		}
+		if err := c.commandHandler.HandleBands(bands); err != nil {
+			log.Printf("Bands command failed: %v", err)
+		} else {
+			log.Printf("Bands command executed (%d bands)", len(bands))
+		}
+
+	case "gain":
+		var gainCmd struct {
+			RxGain     float64 `json:"rx_gain"`
+			RxGainMode string  `json:"rx_gain_mode"`
+		}
+		if err := json.Unmarshal(payload, &gainCmd); err != nil {
+			log.Printf("Invalid gain payload: %v", err)
+			return
+		}
+		if err := c.commandHandler.HandleGain(gainCmd.RxGain, gainCmd.RxGainMode); err != nil {
+			log.Printf("Gain command failed: %v", err)
+		} else {
+			log.Printf("Gain command executed: %.1f dB, mode=%s", gainCmd.RxGain, gainCmd.RxGainMode)
+		}
+
+	default:
+		log.Printf("Unknown command: %s", command)
+	}
 }
