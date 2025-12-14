@@ -112,7 +112,7 @@ In a separate terminal:
 python manage.py mqtt_bridge
 ```
 
-### Docker Deployment
+### Docker Development
 
 ```bash
 # From project root
@@ -120,72 +120,197 @@ docker-compose up -d
 ```
 
 Services:
-- `server` - Django + Daphne (port 8000)
-- `mosquitto` - MQTT broker (port 1883)
-- `redis` - Channel layer backend
+- `server` - Django dev server (port 8000)
+- `mosquitto` - MQTT broker (port 1883, WebSocket 9001)
+- `mqtt-bridge` - Saves MQTT data to database
 - `frontend` - Vue dev server (port 5173)
 
-### Production Deployment
+### Docker Production Deployment
 
-1. **Database**: Switch from SQLite to PostgreSQL
+The production setup uses Caddy for reverse proxy with automatic HTTPS.
+
+#### Quick Start
+
+```bash
+# 1. Copy and configure environment
+cp .env.example .env
+
+# 2. Edit .env with your settings:
+#    - DOMAIN: your domain name (or localhost for testing)
+#    - DJANGO_SECRET_KEY: generate a secure random string
+#    - MQTT_BRIDGE_PASSWORD: password for internal MQTT service
+
+# 3. Build and start
+docker compose -f docker-compose.prod.yml up -d --build
+
+# 4. Check logs
+docker compose -f docker-compose.prod.yml logs -f
+```
+
+#### Production Services
+
+| Service | Description | Ports |
+|---------|-------------|-------|
+| `caddy` | Reverse proxy + auto HTTPS | 80, 443 |
+| `server` | Django + Gunicorn (4 workers) | internal |
+| `mosquitto` | MQTT broker | 1883 (scanners) |
+| `mqtt-bridge` | Saves scans to database | internal |
+| `frontend` | Vue static files | internal |
+
+#### Production Architecture
+
+```
+Scanners ──────► Mosquitto:1883 ──────► mqtt-bridge ──► Database
+                      │
+                      │ WebSocket
+                      ▼
+Browsers ──────► Caddy:443 ─────┬────► /mqtt (Mosquitto:9001)
+   (HTTPS)                      ├────► /api/* (Django:8000)
+                                └────► /* (Vue static files)
+```
+
+#### Environment Variables
+
+Create a `.env` file in the project root:
+
+```env
+# Required
+DOMAIN=spectrum.example.com
+DJANGO_SECRET_KEY=your-secure-random-key
+MQTT_BRIDGE_PASSWORD=your-bridge-password
+
+# Optional
+DEBUG=false
+ALLOWED_HOSTS=spectrum.example.com,localhost
+
+# Database (SQLite default, or PostgreSQL)
+DB_ENGINE=django.db.backends.sqlite3
+DB_NAME=/app/data/db.sqlite3
+
+# For PostgreSQL:
+# DB_ENGINE=django.db.backends.postgresql
+# DB_NAME=spectrum
+# DB_USER=spectrum
+# DB_PASSWORD=db-password
+# DB_HOST=postgres
+# DB_PORT=5432
+```
+
+#### SSL/HTTPS
+
+Caddy automatically obtains Let's Encrypt certificates when:
+1. `DOMAIN` is set to a real domain (not `localhost`)
+2. Ports 80 and 443 are accessible from the internet
+3. DNS points to your server
+
+For local testing, Caddy serves HTTP on port 80.
+
+#### Managing the Deployment
+
+```bash
+# View logs
+docker compose -f docker-compose.prod.yml logs -f server
+
+# Restart a service
+docker compose -f docker-compose.prod.yml restart server
+
+# Update deployment
+docker compose -f docker-compose.prod.yml down
+git pull
+docker compose -f docker-compose.prod.yml up -d --build
+
+# Access Django shell
+docker compose -f docker-compose.prod.yml exec server python manage.py shell
+
+# Run migrations
+docker compose -f docker-compose.prod.yml exec server python manage.py migrate
+```
+
+#### Data Persistence
+
+Data is stored in Docker volumes:
+- `server_data` - SQLite database
+- `mosquitto_data` - MQTT persistence
+- `caddy_data` - SSL certificates
+
+To backup:
+```bash
+docker compose -f docker-compose.prod.yml exec server \
+  cp /app/data/db.sqlite3 /app/data/db.sqlite3.backup
+```
+
+### Manual Production Deployment (without Docker)
+
+If you prefer to deploy without Docker:
+
+1. **Database**: Configure PostgreSQL
    ```python
-   # config/settings.py
-   DATABASES = {
-       'default': {
-           'ENGINE': 'django.db.backends.postgresql',
-           'NAME': 'spectrum',
-           'USER': 'spectrum',
-           'PASSWORD': 'your-password',
-           'HOST': 'localhost',
-           'PORT': '5432',
-       }
-   }
+   # Set environment variables or edit config/settings.py
+   DB_ENGINE=django.db.backends.postgresql
+   DB_NAME=spectrum
+   DB_USER=spectrum
+   DB_PASSWORD=your-password
+   DB_HOST=localhost
    ```
 
-2. **Static Files**: Build and collect
+2. **Static Files**: Build frontend and collect
    ```bash
    cd frontend && npm run build
-   python manage.py collectstatic
+   cd ../server && python manage.py collectstatic
    ```
 
-3. **ASGI Server**: Use Daphne or Uvicorn
+3. **WSGI Server**: Use Gunicorn
    ```bash
-   daphne -b 0.0.0.0 -p 8000 config.asgi:application
+   gunicorn --bind 0.0.0.0:8000 --workers 4 config.wsgi:application
    ```
 
-4. **Process Manager**: Use systemd or supervisor
+4. **Process Manager**: Use systemd
    ```ini
-   # /etc/supervisor/conf.d/spectrum.conf
-   [program:spectrum-server]
-   command=/path/to/venv/bin/daphne -b 0.0.0.0 -p 8000 config.asgi:application
-   directory=/path/to/server
-   autostart=true
-   autorestart=true
+   # /etc/systemd/system/spectrum-server.service
+   [Unit]
+   Description=Spectrum Server
+   After=network.target
 
-   [program:spectrum-mqtt]
-   command=/path/to/venv/bin/python manage.py mqtt_bridge
-   directory=/path/to/server
-   autostart=true
-   autorestart=true
+   [Service]
+   User=spectrum
+   WorkingDirectory=/opt/spectrum/server
+   ExecStart=/opt/spectrum/venv/bin/gunicorn --bind 127.0.0.1:8000 --workers 4 config.wsgi:application
+   Restart=always
+
+   [Install]
+   WantedBy=multi-user.target
    ```
 
-5. **Reverse Proxy**: Nginx configuration
-   ```nginx
-   upstream spectrum {
-       server 127.0.0.1:8000;
-   }
+   ```ini
+   # /etc/systemd/system/spectrum-mqtt.service
+   [Unit]
+   Description=Spectrum MQTT Bridge
+   After=network.target mosquitto.service
 
-   server {
-       listen 80;
-       server_name spectrum.example.com;
+   [Service]
+   User=spectrum
+   WorkingDirectory=/opt/spectrum/server
+   ExecStart=/opt/spectrum/venv/bin/python manage.py mqtt_bridge
+   Restart=always
 
-       location / {
-           proxy_pass http://spectrum;
-           proxy_http_version 1.1;
-           proxy_set_header Upgrade $http_upgrade;
-           proxy_set_header Connection "upgrade";
-           proxy_set_header Host $host;
-           proxy_set_header X-Real-IP $remote_addr;
+   [Install]
+   WantedBy=multi-user.target
+   ```
+
+5. **Reverse Proxy**: Caddy (recommended) or Nginx
+   ```
+   # /etc/caddy/Caddyfile
+   spectrum.example.com {
+       handle /api/* {
+           reverse_proxy localhost:8000
+       }
+       handle /mqtt {
+           reverse_proxy localhost:9001
+       }
+       handle {
+           root * /opt/spectrum/frontend/dist
+           try_files {path} /index.html
+           file_server
        }
    }
    ```
