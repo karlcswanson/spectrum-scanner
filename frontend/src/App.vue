@@ -41,7 +41,11 @@ async function handleLogout() {
               </router-link>
             </nav>
             <div v-if="auth.isAuthenticated" class="flex items-center space-x-3 ml-4 pl-4 border-l border-gray-600">
-              <span class="text-gray-300 text-sm">{{ auth.user?.username }}</span>
+              <!-- Read-only badge for share links -->
+              <span v-if="auth.isReadonly" class="px-2 py-0.5 bg-purple-600 text-white text-xs rounded-full">
+                {{ auth.shareLabel || 'Demo' }} (View Only)
+              </span>
+              <span v-else class="text-gray-300 text-sm">{{ auth.user?.username }}</span>
               <button
                 @click="handleLogout"
                 class="text-sm text-gray-400 hover:text-white"

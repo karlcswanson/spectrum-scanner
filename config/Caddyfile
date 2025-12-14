@@ -12,6 +12,11 @@
         reverse_proxy server:8000
     }
 
+    # Share links (read-only demo access)
+    handle /share/* {
+        reverse_proxy server:8000
+    }
+
     # MQTT WebSocket proxy
     handle /mqtt {
         reverse_proxy mosquitto:9001 {

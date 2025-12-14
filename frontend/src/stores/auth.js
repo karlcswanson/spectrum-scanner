@@ -21,6 +21,8 @@ export const useAuthStore = defineStore('auth', () => {
 
   const isAuthenticated = computed(() => !!user.value)
   const isStaff = computed(() => user.value?.is_staff || false)
+  const isReadonly = computed(() => user.value?.readonly || false)
+  const shareLabel = computed(() => user.value?.share_label || null)
 
   async function checkAuth() {
     loading.value = true
@@ -105,6 +107,8 @@ export const useAuthStore = defineStore('auth', () => {
     error,
     isAuthenticated,
     isStaff,
+    isReadonly,
+    shareLabel,
     checkAuth,
     login,
     logout,

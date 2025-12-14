@@ -166,6 +166,53 @@ class Scan(models.Model):
         return len(self.power) if self.power else 0
 
 
+class ShareLink(models.Model):
+    """Shareable read-only access links for demo/viewing purposes."""
+
+    token = models.CharField(max_length=64, unique=True, default=generate_auth_token)
+    label = models.CharField(max_length=100, help_text="Descriptive label (e.g., 'Super Bowl Demo')")
+
+    # Access control
+    is_active = models.BooleanField(default=True, help_text="Inactive links are revoked")
+    expires_at = models.DateTimeField(null=True, blank=True, help_text="Optional expiration time")
+
+    # Tracking
+    created_at = models.DateTimeField(auto_now_add=True)
+    created_by = models.ForeignKey(
+        'auth.User',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='share_links'
+    )
+    last_used_at = models.DateTimeField(null=True, blank=True)
+    use_count = models.IntegerField(default=0)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        status = "active" if self.is_active else "revoked"
+        return f"{self.label} ({status})"
+
+    def is_valid(self):
+        """Check if link is active and not expired."""
+        if not self.is_active:
+            return False
+        if self.expires_at:
+            from django.utils import timezone
+            if timezone.now() > self.expires_at:
+                return False
+        return True
+
+    def record_use(self):
+        """Record that this link was used."""
+        from django.utils import timezone
+        self.last_used_at = timezone.now()
+        self.use_count += 1
+        self.save(update_fields=['last_used_at', 'use_count'])
+
+
 class ScanAggregate(models.Model):
     """Aggregated scan data (max hold, average over time period)."""
 

@@ -7,7 +7,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.http import HttpResponse
 from rest_framework import viewsets, status
 from rest_framework.decorators import action, api_view, permission_classes
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, BasePermission, SAFE_METHODS
 from rest_framework.response import Response
 
 from django.contrib.auth import authenticate, login, logout
@@ -21,11 +21,28 @@ from .serializers import (
 logger = logging.getLogger(__name__)
 
 
+class ReadOnlyIfShareSession(BasePermission):
+    """Allow read-only access for share link sessions, full access for others."""
+
+    def has_permission(self, request, view):
+        # Always allow safe methods (GET, HEAD, OPTIONS)
+        if request.method in SAFE_METHODS:
+            return True
+
+        # Block write operations for readonly sessions
+        if request.session.get('readonly'):
+            return False
+
+        # Allow write operations for normal authenticated users
+        return True
+
+
 class ScannerViewSet(viewsets.ModelViewSet):
     """API endpoint for scanners."""
 
     queryset = Scanner.objects.all()
     serializer_class = ScannerSerializer
+    permission_classes = [ReadOnlyIfShareSession]
 
     @action(detail=True, methods=['post'])
     def start(self, request, pk=None):
@@ -166,6 +183,7 @@ class BandViewSet(viewsets.ModelViewSet):
 
     queryset = Band.objects.all()
     serializer_class = BandSerializer
+    permission_classes = [ReadOnlyIfShareSession]
 
 
 class ScanViewSet(viewsets.ModelViewSet):
@@ -173,6 +191,7 @@ class ScanViewSet(viewsets.ModelViewSet):
 
     queryset = Scan.objects.select_related('scanner', 'band').all()
     serializer_class = ScanSerializer
+    permission_classes = [ReadOnlyIfShareSession]
 
     def get_queryset(self):
         queryset = super().get_queryset()
@@ -478,6 +497,8 @@ def auth_user(request):
             'username': request.user.username,
             'email': request.user.email,
             'is_staff': request.user.is_staff,
+            'readonly': request.session.get('readonly', False),
+            'share_label': request.session.get('share_label'),
         })
     return Response({'user': None}, status=status.HTTP_200_OK)
 
@@ -521,3 +542,125 @@ def auth_logout(request):
         logger.info(f"User {request.user.username} logged out")
     logout(request)
     return Response({'status': 'logged out'})
+
+
+# ============== Share Link System ==============
+
+from django.contrib.auth.models import User
+from django.shortcuts import redirect
+from core.models import ShareLink
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def share_token_auth(request, token):
+    """Authenticate via share token and redirect to app.
+
+    This endpoint validates a share link from the database and creates a
+    read-only session for demo/viewing purposes.
+    """
+    try:
+        share_link = ShareLink.objects.get(token=token)
+    except ShareLink.DoesNotExist:
+        logger.warning(f"Share link not found: {token[:20]}...")
+        return Response(
+            {'error': 'Invalid share link'},
+            status=status.HTTP_401_UNAUTHORIZED
+        )
+
+    if not share_link.is_valid():
+        reason = "revoked" if not share_link.is_active else "expired"
+        logger.warning(f"Share link {reason}: {share_link.label}")
+        return Response(
+            {'error': f'Share link has been {reason}'},
+            status=status.HTTP_401_UNAUTHORIZED
+        )
+
+    # Get or create the demo user
+    demo_user, created = User.objects.get_or_create(
+        username='demo_viewer',
+        defaults={
+            'email': 'demo@example.com',
+            'is_active': True,
+            'is_staff': False,
+        }
+    )
+    if created:
+        # Set unusable password - can't login normally
+        demo_user.set_unusable_password()
+        demo_user.save()
+        logger.info("Created demo_viewer user for share links")
+
+    # Log in as demo user
+    login(request, demo_user, backend='django.contrib.auth.backends.ModelBackend')
+
+    # Mark session as read-only
+    request.session['readonly'] = True
+    request.session['share_label'] = share_link.label
+
+    # Record usage
+    share_link.record_use()
+
+    logger.info(f"Share link login: {share_link.label} (use #{share_link.use_count})")
+
+    # Redirect to frontend (different URL in dev vs production)
+    from django.conf import settings
+    if settings.DEBUG:
+        return redirect('http://localhost:5173/')
+    return redirect('/')
+
+
+@api_view(['POST'])
+def generate_share_link(request):
+    """Generate a new share link (admin only).
+
+    POST data:
+    - expires_hours: Optional expiration in hours
+    - label: Label to identify this link (required)
+    """
+    if not request.user.is_staff:
+        return Response(
+            {'error': 'Admin access required'},
+            status=status.HTTP_403_FORBIDDEN
+        )
+
+    label = request.data.get('label')
+    if not label:
+        return Response(
+            {'error': 'label is required'},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    expires_hours = request.data.get('expires_hours')
+    expires_at = None
+
+    if expires_hours:
+        try:
+            expires_hours = int(expires_hours)
+            expires_at = timezone.now() + timedelta(hours=expires_hours)
+        except ValueError:
+            return Response(
+                {'error': 'expires_hours must be a number'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+    # Create the share link in the database
+    share_link = ShareLink.objects.create(
+        label=label,
+        expires_at=expires_at,
+        created_by=request.user,
+    )
+
+    # Build the full URL
+    share_url = request.build_absolute_uri(f'/share/{share_link.token}')
+
+    logger.info(f"Generated share link: {label} (expires: {expires_hours or 'never'}h)")
+
+    return Response({
+        'id': share_link.id,
+        'token': share_link.token,
+        'url': share_url,
+        'label': label,
+        'expires_at': share_link.expires_at,
+        'created_at': share_link.created_at,
+    })

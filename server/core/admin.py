@@ -4,7 +4,7 @@ from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.contrib.auth.models import User
 from django.utils.html import format_html
-from .models import Scanner, Band, BandTemplate, Scan, ScanAggregate, UserMQTTCredentials
+from .models import Scanner, Band, BandTemplate, Scan, ScanAggregate, UserMQTTCredentials, ShareLink
 
 
 class BandInline(admin.TabularInline):
@@ -110,6 +110,67 @@ class ScanAggregateAdmin(admin.ModelAdmin):
     list_display = ['scanner', 'band', 'aggregate_type', 'period_type', 'period_start', 'scan_count']
     list_filter = ['scanner', 'aggregate_type', 'period_type']
     date_hierarchy = 'period_start'
+
+
+@admin.register(ShareLink)
+class ShareLinkAdmin(admin.ModelAdmin):
+    list_display = ['label', 'short_token', 'is_active', 'expires_at', 'use_count', 'last_used_at', 'created_at', 'created_by']
+    list_filter = ['is_active', 'created_by']
+    search_fields = ['label', 'token']
+    readonly_fields = ['token', 'share_url_display', 'use_count', 'last_used_at', 'created_at', 'created_by']
+    ordering = ['-created_at']
+    actions = ['revoke_links', 'activate_links']
+
+    fieldsets = (
+        (None, {
+            'fields': ('label', 'is_active')
+        }),
+        ('Share URL', {
+            'fields': ('share_url_display', 'token'),
+            'description': 'Copy this URL to share read-only access'
+        }),
+        ('Expiration', {
+            'fields': ('expires_at',),
+        }),
+        ('Usage Stats', {
+            'fields': ('use_count', 'last_used_at', 'created_at', 'created_by'),
+            'classes': ('collapse',)
+        }),
+    )
+
+    def short_token(self, obj):
+        """Show truncated token for list display."""
+        return f"{obj.token[:12]}..."
+    short_token.short_description = 'Token'
+
+    def share_url_display(self, obj):
+        """Show the full share URL."""
+        if obj.pk:
+            url = f"/share/{obj.token}"
+            return format_html(
+                '<input type="text" value="{}" readonly style="width:100%;font-family:monospace;padding:8px;" '
+                'onclick="this.select();" />'
+                '<p style="color:#666;margin-top:4px;font-size:11px;">Click to select, then copy. '
+                'Prepend your domain (e.g., https://spectrum.example.com{})</p>',
+                url, url
+            )
+        return "Save first to generate URL"
+    share_url_display.short_description = 'Share URL'
+
+    @admin.action(description='Revoke selected share links')
+    def revoke_links(self, request, queryset):
+        count = queryset.update(is_active=False)
+        self.message_user(request, f"Revoked {count} share link(s)")
+
+    @admin.action(description='Activate selected share links')
+    def activate_links(self, request, queryset):
+        count = queryset.update(is_active=True)
+        self.message_user(request, f"Activated {count} share link(s)")
+
+    def save_model(self, request, obj, form, change):
+        if not change:  # New object
+            obj.created_by = request.user
+        super().save_model(request, obj, form, change)
 
 
 class UserMQTTCredentialsInline(admin.StackedInline):
