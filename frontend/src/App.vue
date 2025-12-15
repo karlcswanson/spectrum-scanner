@@ -31,8 +31,9 @@ async function handleLogout() {
     <header v-if="route.path !== '/login'" class="bg-gray-800 border-b border-gray-700">
       <div class="max-w-7xl mx-auto px-4 py-4">
         <div class="flex items-center justify-between">
-          <router-link to="/" class="text-xl font-bold text-white">
-            Spectrum Server
+          <router-link to="/" class="flex items-center gap-3">
+            <img src="/logo.png" alt="Micboard" class="h-8" />
+            <span class="text-xl font-bold text-white">Spectrum Server</span>
           </router-link>
           <div class="flex items-center space-x-4">
             <nav class="flex space-x-4">

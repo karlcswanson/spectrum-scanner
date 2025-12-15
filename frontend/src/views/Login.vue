@@ -26,12 +26,13 @@ async function handleSubmit() {
 <template>
   <div class="min-h-screen flex items-center justify-center bg-gray-900">
     <div class="max-w-md w-full space-y-8 p-8">
-      <div>
-        <h2 class="text-center text-3xl font-bold text-white">
+      <div class="text-center">
+        <img src="/logo.png" alt="Micboard" class="w-full mb-6" />
+        <h2 class="text-3xl font-bold text-white">
           Spectrum Server
         </h2>
-        <p class="mt-2 text-center text-sm text-gray-400">
-          Sign in to access spectrum data
+        <p class="mt-2 text-sm text-gray-400">
+          Sign in to view spectrum data
         </p>
       </div>
 
