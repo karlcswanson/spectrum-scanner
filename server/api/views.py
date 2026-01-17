@@ -47,16 +47,28 @@ class ScannerViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def start(self, request, pk=None):
         """Send start command to scanner via MQTT."""
+        from realtime.mqtt_commands import start_scanner
         scanner = self.get_object()
-        # TODO: Publish to MQTT spectrum/commands/{id}/start
-        return Response({'status': 'start command sent', 'scanner': scanner.id})
+        success = start_scanner(str(scanner.id))
+        if success:
+            return Response({'status': 'start command sent', 'scanner': scanner.id})
+        return Response(
+            {'error': 'Failed to send start command'},
+            status=status.HTTP_503_SERVICE_UNAVAILABLE
+        )
 
     @action(detail=True, methods=['post'])
     def stop(self, request, pk=None):
         """Send stop command to scanner via MQTT."""
+        from realtime.mqtt_commands import stop_scanner
         scanner = self.get_object()
-        # TODO: Publish to MQTT spectrum/commands/{id}/stop
-        return Response({'status': 'stop command sent', 'scanner': scanner.id})
+        success = stop_scanner(str(scanner.id))
+        if success:
+            return Response({'status': 'stop command sent', 'scanner': scanner.id})
+        return Response(
+            {'error': 'Failed to send stop command'},
+            status=status.HTTP_503_SERVICE_UNAVAILABLE
+        )
 
     @action(detail=True, methods=['get'])
     def latest_scan(self, request, pk=None):
@@ -378,7 +390,7 @@ def mqtt_acl(request):
     topic = request.data.get('topic', '')
     acc = request.data.get('acc', '1')  # 1=sub, 2=pub
 
-    print(f"MQTT ACL check: user={username}, topic={topic}, acc={acc} (type={type(acc).__name__})")
+    logger.debug(f"MQTT ACL check: user={username}, topic={topic}, acc={acc}")
 
     topic_prefix = 'spectrum'
 
@@ -409,20 +421,20 @@ def mqtt_acl(request):
         from uuid import UUID
         mqtt_uuid = UUID(username)
         is_user = UserMQTTCredentials.objects.filter(mqtt_id=mqtt_uuid).exists()
-        print(f"MQTT ACL: UUID lookup for {username}: is_user={is_user}")
+        logger.debug(f"MQTT ACL: UUID lookup for {username}: is_user={is_user}")
         if is_user:
             # Users can subscribe to all topics
             if is_subscribe:
-                print(f"MQTT ACL: user {username[:8]}... subscribe to {topic} ALLOWED")
+                logger.debug(f"MQTT ACL: user {username[:8]}... subscribe to {topic} allowed")
                 return HttpResponse(status=200)
             # Users can publish to command topics (to control scanners)
             if is_publish and f"{topic_prefix}/commands/" in topic:
-                print(f"MQTT ACL: user {username[:8]}... publish to {topic} ALLOWED")
+                logger.debug(f"MQTT ACL: user {username[:8]}... publish to {topic} allowed")
                 return HttpResponse(status=200)
-            print(f"MQTT ACL: user {username[:8]}... publish to {topic} DENIED")
+            logger.debug(f"MQTT ACL: user {username[:8]}... publish to {topic} denied")
             return HttpResponse(status=403)
     except (ValueError, TypeError) as e:
-        print(f"MQTT ACL: UUID parse error for {username}: {e}")
+        logger.debug(f"MQTT ACL: UUID parse error for {username}: {e}")
 
     # Check if this is a scanner
     try:

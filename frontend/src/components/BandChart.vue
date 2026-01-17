@@ -44,7 +44,18 @@ const props = defineProps({
     type: Number,
     default: 24,
   },
+  // Enable selection checkbox for overlay comparison
+  selectable: {
+    type: Boolean,
+    default: false,
+  },
+  selected: {
+    type: Boolean,
+    default: false,
+  },
 })
+
+const emit = defineEmits(['update:selected'])
 
 const store = useScannersStore()
 const chartRef = ref(null)
@@ -294,22 +305,37 @@ watch(() => props.band.name, async () => {
 </script>
 
 <template>
-  <div class="bg-gray-800 rounded-lg p-4">
+  <div
+    class="bg-gray-800 rounded-lg p-4 transition-all"
+    :class="selected ? 'ring-2 ring-cyan-500' : ''"
+  >
     <div class="flex justify-between items-start mb-3">
-      <div>
-        <h2 class="text-lg font-semibold text-cyan-400">
-          {{ band.name }}
-          <span class="text-gray-500 font-normal text-sm ml-2">
-            ({{ freqRange }})
-          </span>
-          <span v-if="!showingLive && activeScan" class="text-yellow-400 text-xs ml-2">
-            Historical
-          </span>
-        </h2>
-        <p class="text-xs text-gray-500">
-          <span v-if="showScanner && scannerName" class="mr-3">{{ scannerName }}</span>
-          {{ scanInfo }}
-        </p>
+      <div class="flex items-start gap-3">
+        <!-- Selection checkbox -->
+        <label v-if="selectable" class="flex items-center mt-1 cursor-pointer">
+          <input
+            type="checkbox"
+            :checked="selected"
+            @change="emit('update:selected', !selected)"
+            class="w-4 h-4 accent-cyan-400 cursor-pointer"
+          />
+        </label>
+
+        <div>
+          <h2 class="text-lg font-semibold text-cyan-400">
+            {{ band.name }}
+            <span class="text-gray-500 font-normal text-sm ml-2">
+              ({{ freqRange }})
+            </span>
+            <span v-if="!showingLive && activeScan" class="text-yellow-400 text-xs ml-2">
+              Historical
+            </span>
+          </h2>
+          <p class="text-xs text-gray-500">
+            <span v-if="showScanner && scannerName" class="mr-3">{{ scannerName }}</span>
+            {{ scanInfo }}
+          </p>
+        </div>
       </div>
 
       <div class="flex items-center gap-3">
