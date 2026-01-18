@@ -2,19 +2,14 @@ package main
 
 import (
 	"flag"
-	"fmt"
 	"log"
 	"os"
-	"runtime"
 	"strings"
 
 	"scanner/internal/api"
-	"scanner/internal/backend/owon"
-	"scanner/internal/backend/pluto"
 	"scanner/internal/config"
 	"scanner/internal/models"
-	"scanner/internal/mqtt"
-	"scanner/internal/scanner"
+	"scanner/internal/runner"
 )
 
 func main() {
@@ -98,56 +93,37 @@ func main() {
 			status)
 	}
 
-	// Create the appropriate backend
-	backend, err := createBackend(cfg)
+	// Create runner with all components
+	r, err := runner.New(cfg, runner.DefaultOptions())
 	if err != nil {
-		log.Fatalf("Failed to create backend: %v", err)
+		log.Fatalf("Failed to initialize: %v", err)
 	}
+	defer r.Close()
 
-	// Connect to hardware
-	log.Printf("Connecting to %s backend...", backend.Type())
-	if err := backend.Connect(); err != nil {
-		log.Printf("Warning: Cannot connect to backend: %v", err)
-		log.Println("Continuing anyway - scanning will fail until hardware is available")
-	} else {
-		log.Printf("Connected to %s: %s", backend.Type(), backend.Name())
-		defer backend.Close()
+	// Auto-start scanning if requested (flag overrides config)
+	if *autoStart {
+		cfg.AutoStart = true
 	}
-
-	// Create MQTT client if configured
-	var mqttClient *mqtt.Client
-	if cfg.MQTT != nil && cfg.MQTT.Enabled {
-		log.Printf("MQTT enabled, connecting to %s...", cfg.MQTT.Broker)
-		mqttClient, err = mqtt.NewClient(cfg.MQTT, cfg)
-		if err != nil {
-			log.Printf("Warning: Failed to create MQTT client: %v", err)
-		} else if mqttClient != nil {
-			if err := mqttClient.Connect(); err != nil {
-				log.Printf("Warning: Failed to connect to MQTT broker: %v", err)
-			} else {
-				defer mqttClient.Disconnect()
-			}
-		}
-	}
-
-	// Create sweep engine with the backend
-	engine := scanner.NewEngine(backend, cfg, mqttClient)
-
-	// Connect engine as command handler for MQTT commands
-	if mqttClient != nil {
-		mqttClient.SetCommandHandler(engine)
-	}
-
-	// Auto-start scanning if requested
-	if *autoStart || cfg.AutoStart {
-		log.Println("Auto-starting scanner...")
-		if err := engine.Start(); err != nil {
-			log.Printf("Warning: Failed to auto-start scanner: %v", err)
-		}
+	if err := r.AutoStart(); err != nil {
+		log.Printf("Warning: Failed to auto-start scanner: %v", err)
 	}
 
 	// Create and start HTTP server
-	server := api.NewServer(engine, cfg, mqttClient)
+	server := api.NewServer(r.Engine, cfg, r.MQTTClient)
+
+	// Wire up config save callback if using a config file
+	if *configFile != "" {
+		cfgPath := *configFile
+		server.SetConfigSaveFunc(func() error {
+			return config.SaveToFile(cfgPath, cfg)
+		})
+	}
+
+	// Wire up status change callback to broadcast to WebSocket clients
+	r.Engine.SetStatusChangeCallback(func(scanning bool, currentBand string) {
+		server.WSHub().BroadcastStatus(scanning, currentBand)
+	})
+
 	log.Printf("Starting HTTP server on %s", *listenAddr)
 	log.Printf("API endpoints:")
 	log.Printf("  GET  /api/status     - Scanner status")
@@ -161,57 +137,5 @@ func main() {
 
 	if err := server.ListenAndServe(*listenAddr); err != nil {
 		log.Fatalf("Server error: %v", err)
-	}
-}
-
-// createBackend creates the appropriate scanner backend based on configuration.
-func createBackend(cfg *models.Config) (scanner.Backend, error) {
-	// Determine backend type
-	backendType := "pluto" // default
-	if cfg.Backend != nil && cfg.Backend.Type != "" {
-		backendType = cfg.Backend.Type
-	}
-
-	// Auto-detect Pluto on ARM (running on the device itself)
-	if backendType == "pluto" && runtime.GOARCH == "arm" {
-		// Running on the Pluto itself
-		url := "https://localhost"
-		if cfg.Backend != nil && cfg.Backend.URL != "" {
-			url = cfg.Backend.URL
-		}
-		return pluto.NewClient(url, cfg.Name), nil
-	}
-
-	switch backendType {
-	case "pluto":
-		// ADALM-Pluto via maia-httpd
-		url := "https://192.168.2.1" // default USB network
-		if cfg.Backend != nil && cfg.Backend.URL != "" {
-			url = cfg.Backend.URL
-		}
-		return pluto.NewClient(url, cfg.Name), nil
-
-	case "owon":
-		// OWON HSA1000 series via SCPI/TCP
-		if cfg.Backend == nil || cfg.Backend.Address == "" {
-			return nil, fmt.Errorf("OWON backend requires address (IP) in config or via --addr flag")
-		}
-		port := cfg.Backend.Port
-		if port == 0 {
-			port = owon.DefaultPort
-		}
-		return owon.NewClient(cfg.Backend.Address, port, cfg.Name), nil
-
-	case "rtlsdr":
-		return nil, fmt.Errorf("RTL-SDR backend not yet implemented")
-
-	case "rfexplorer":
-		return nil, fmt.Errorf("RF Explorer backend not yet implemented")
-
-	case "tti":
-		return nil, fmt.Errorf("TTi backend not yet implemented")
-
-	default:
-		return nil, fmt.Errorf("unknown backend type: %s", backendType)
 	}
 }

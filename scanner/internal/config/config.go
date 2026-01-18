@@ -85,9 +85,23 @@ func LoadFromFile(path string) (*models.Config, error) {
 	return cfg, nil
 }
 
-// SaveToFile saves configuration to a JSON file
+// SaveToFile saves configuration to a JSON or YAML file based on extension
 func SaveToFile(path string, cfg *models.Config) error {
-	data, err := json.MarshalIndent(cfg, "", "  ")
+	ext := strings.ToLower(filepath.Ext(path))
+
+	// Prepare bands for saving (convert Hz to MHz for YAML)
+	cfg.PrepareSave()
+
+	var data []byte
+	var err error
+
+	switch ext {
+	case ".yaml", ".yml":
+		data, err = yaml.Marshal(cfg)
+	default:
+		data, err = json.MarshalIndent(cfg, "", "  ")
+	}
+
 	if err != nil {
 		return err
 	}

@@ -12,9 +12,15 @@ scanner/bin/
 scanner/scanner
 scanner/scanner-arm
 
+# Desktop app build outputs
+scanner/cmd/desktop/build/
+scanner/cmd/desktop/frontend/dist/
+scanner/cmd/desktop/frontend/node_modules/
+
 # Frontend
 frontend/node_modules/
 frontend/dist/
+frontend/dist-standalone/
 
 # Python cache
 __pycache__/
@@ -26,6 +32,9 @@ server/data/*.sqlite3
 
 # OS files
 .DS_Store
+
+# SSH artifacts
+scanner/root@*
 
 # Environment files with secrets
 .env

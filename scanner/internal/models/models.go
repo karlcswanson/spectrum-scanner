@@ -22,10 +22,21 @@ func (b *Band) NormalizeHz() {
 	}
 }
 
+// PrepareSave converts Hz fields to MHz for YAML serialization
+func (b *Band) PrepareSave() {
+	if b.StartHz > 0 {
+		b.StartMHz = b.StartHz / 1_000_000
+	}
+	if b.StopHz > 0 {
+		b.StopMHz = b.StopHz / 1_000_000
+	}
+}
+
 // ScanLine matches the RTLPowerLine format for frontend compatibility
 type ScanLine struct {
 	ID        string    `json:"id"`
 	Timestamp time.Time `json:"timestamp"`
+	Band      string    `json:"band,omitempty"` // Band name (set before broadcast)
 	HzLo      float64   `json:"hz_lo"`
 	HzHi      float64   `json:"hz_hi"`
 	Step      float64   `json:"step"`
@@ -52,6 +63,13 @@ type MQTTConfig struct {
 	Name        string `json:"name" yaml:"name"`                 // Human-readable name
 	Location    string `json:"location" yaml:"location"`         // Physical location
 	TopicPrefix string `json:"topic_prefix" yaml:"topic_prefix"` // defaults to "spectrum"
+}
+
+// WebConfig holds optional local web server settings
+type WebConfig struct {
+	Enabled bool   `json:"enabled" yaml:"enabled"`
+	Port    int    `json:"port" yaml:"port"` // defaults to 8080
+	Host    string `json:"host" yaml:"host"` // defaults to "" (all interfaces)
 }
 
 // BackendConfig holds configuration for the scanner backend/hardware
@@ -94,11 +112,19 @@ type Config struct {
 	AutoStart   bool           `json:"auto_start" yaml:"auto_start"`               // Start scanning automatically on boot
 	Backend     *BackendConfig `json:"backend,omitempty" yaml:"backend,omitempty"` // Hardware backend configuration
 	MQTT        *MQTTConfig    `json:"mqtt,omitempty" yaml:"mqtt,omitempty"`       // Optional MQTT publishing
+	Web         *WebConfig     `json:"web,omitempty" yaml:"web,omitempty"`         // Optional local web server
 }
 
 // NormalizeBands converts MHz to Hz for all bands
 func (c *Config) NormalizeBands() {
 	for i := range c.Bands {
 		c.Bands[i].NormalizeHz()
+	}
+}
+
+// PrepareSave converts Hz to MHz for all bands (for YAML serialization)
+func (c *Config) PrepareSave() {
+	for i := range c.Bands {
+		c.Bands[i].PrepareSave()
 	}
 }

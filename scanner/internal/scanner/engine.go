@@ -10,6 +10,9 @@ import (
 	"scanner/internal/mqtt"
 )
 
+// StatusChangeFunc is called when scanning status changes
+type StatusChangeFunc func(scanning bool, currentBand string)
+
 // Engine orchestrates frequency sweeping across bands using any Backend.
 type Engine struct {
 	backend Backend
@@ -24,6 +27,9 @@ type Engine struct {
 	// Subscribers receive scan results via channels
 	subscribers   []chan models.ScanLine
 	subscribersMu sync.RWMutex
+
+	// Status change callback (for WebSocket broadcasts)
+	onStatusChange StatusChangeFunc
 }
 
 // NewEngine creates a new sweep engine with the given backend.
@@ -56,6 +62,27 @@ func (e *Engine) Unsubscribe(ch chan models.ScanLine) {
 			close(ch)
 			return
 		}
+	}
+}
+
+// SetMQTTClient updates the MQTT client for the engine
+func (e *Engine) SetMQTTClient(client *mqtt.Client) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.mqtt = client
+}
+
+// SetStatusChangeCallback sets a function to be called when scanning status changes
+func (e *Engine) SetStatusChangeCallback(fn StatusChangeFunc) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.onStatusChange = fn
+}
+
+// notifyStatusChange calls the status change callback if set
+func (e *Engine) notifyStatusChange(scanning bool, currentBand string) {
+	if e.onStatusChange != nil {
+		e.onStatusChange(scanning, currentBand)
 	}
 }
 
@@ -117,6 +144,9 @@ func (e *Engine) Start() error {
 		e.mqtt.PublishStatus(true, true, "")
 	}
 
+	// Notify local WebSocket clients
+	e.notifyStatusChange(true, "")
+
 	go e.runLoop(ctx)
 	return nil
 }
@@ -140,6 +170,9 @@ func (e *Engine) Stop() {
 	if e.mqtt != nil && e.mqtt.IsConnected() {
 		e.mqtt.PublishStatus(true, false, "")
 	}
+
+	// Notify local WebSocket clients
+	e.notifyStatusChange(false, "")
 }
 
 // UpdateConfig updates the engine configuration
@@ -223,8 +256,9 @@ func (e *Engine) runLoop(ctx context.Context) {
 				continue
 			}
 
-			// Set scanner ID
+			// Set scanner ID and band name
 			scan.ID = config.DeviceID
+			scan.Band = band.Name
 
 			e.broadcast(scan, band.Name)
 		}

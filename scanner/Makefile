@@ -1,7 +1,15 @@
-.PHONY: build build-arm run dev deploy deploy-service clean tidy test
+.PHONY: build build-arm run dev deploy deploy-service clean tidy test build-frontend desktop desktop-deps desktop-mac desktop-windows desktop-linux desktop-dev
 
 # Default target
 all: build
+
+# Build Vue frontend for standalone scanner
+build-frontend:
+	cd ../frontend && npm run build:standalone
+	rm -rf internal/api/web/*
+	cp -r ../frontend/dist-standalone/* internal/api/web/
+	mv internal/api/web/standalone.html internal/api/web/index.html
+	@echo "Frontend built and copied to internal/api/web/"
 
 # Build for local development (macOS/Linux)
 build:
@@ -11,6 +19,36 @@ build:
 build-arm:
 	GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 \
 		go build -ldflags="-s -w" -o bin/scanner-arm ./cmd/scanner
+
+# Build everything: frontend + ARM binary (for deployment)
+build-all: build-frontend build-arm
+	@echo "Built frontend and ARM binary"
+
+# ============== Desktop App (Wails) ==============
+
+# Install desktop frontend dependencies
+desktop-deps:
+	cd cmd/desktop/frontend && npm install
+
+# Build desktop app for current platform
+desktop: desktop-deps
+	cd cmd/desktop && wails build
+
+# Build desktop app for macOS (universal binary)
+desktop-mac: desktop-deps
+	cd cmd/desktop && wails build -platform darwin/universal
+
+# Build desktop app for Windows
+desktop-windows: desktop-deps
+	cd cmd/desktop && wails build -platform windows/amd64
+
+# Build desktop app for Linux
+desktop-linux: desktop-deps
+	cd cmd/desktop && wails build -platform linux/amd64
+
+# Run desktop app in dev mode
+desktop-dev: desktop-deps
+	cd cmd/desktop && wails dev
 
 # Development: run on Mac, talk to Pluto over USB
 dev:
@@ -88,10 +126,21 @@ help:
 	@echo "Spectrum Scanner Build Commands:"
 	@echo ""
 	@echo "Development:"
-	@echo "  make build      - Build for local machine"
-	@echo "  make dev        - Run locally, connect to Pluto at 192.168.2.1"
-	@echo "  make dev-auto   - Run locally with auto-start scanning"
-	@echo "  make test       - Run tests"
+	@echo "  make build          - Build for local machine"
+	@echo "  make dev            - Run locally, connect to Pluto at 192.168.2.1"
+	@echo "  make dev-auto       - Run locally with auto-start scanning"
+	@echo "  make test           - Run tests"
+	@echo ""
+	@echo "Frontend:"
+	@echo "  make build-frontend - Build Vue standalone app"
+	@echo "  make build-all      - Build frontend + ARM binary"
+	@echo ""
+	@echo "Desktop App (Wails):"
+	@echo "  make desktop        - Build for current platform"
+	@echo "  make desktop-mac    - Build for macOS (universal)"
+	@echo "  make desktop-windows- Build for Windows"
+	@echo "  make desktop-linux  - Build for Linux"
+	@echo "  make desktop-dev    - Run in development mode"
 	@echo ""
 	@echo "Deployment:"
 	@echo "  make build-arm      - Cross-compile for Pluto (ARM)"

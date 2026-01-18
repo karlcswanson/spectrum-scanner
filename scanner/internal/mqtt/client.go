@@ -76,8 +76,8 @@ type Settings struct {
 
 // NewClient creates a new MQTT client
 func NewClient(mqttConfig *models.MQTTConfig, scannerConfig *models.Config) (*Client, error) {
-	if mqttConfig == nil || !mqttConfig.Enabled {
-		return nil, nil
+	if mqttConfig == nil {
+		return nil, fmt.Errorf("MQTT config is nil")
 	}
 
 	topicPrefix := mqttConfig.TopicPrefix

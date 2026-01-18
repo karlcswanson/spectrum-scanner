@@ -14,12 +14,17 @@ import (
 //go:embed web
 var webFS embed.FS
 
+// ConfigSaveFunc is called when config changes and should be persisted
+type ConfigSaveFunc func() error
+
 // Server handles HTTP requests for the spectrum scanner
 type Server struct {
-	engine *scanner.Engine
-	config *models.Config
-	mqtt   *mqtt.Client
-	mux    *http.ServeMux
+	engine       *scanner.Engine
+	config       *models.Config
+	mqtt         *mqtt.Client
+	mux          *http.ServeMux
+	wsHub        *WSHub
+	onConfigSave ConfigSaveFunc
 }
 
 // NewServer creates a new HTTP server
@@ -29,9 +34,15 @@ func NewServer(engine *scanner.Engine, config *models.Config, mqttClient *mqtt.C
 		config: config,
 		mqtt:   mqttClient,
 		mux:    http.NewServeMux(),
+		wsHub:  NewWSHub(),
 	}
 	s.setupRoutes()
 	return s
+}
+
+// WSHub returns the WebSocket hub for external status broadcasts
+func (s *Server) WSHub() *WSHub {
+	return s.wsHub
 }
 
 func (s *Server) setupRoutes() {
@@ -93,4 +104,28 @@ func (s *Server) ListenAndServe(addr string) error {
 // Handler returns the HTTP handler (useful for testing)
 func (s *Server) Handler() http.Handler {
 	return s.mux
+}
+
+// SetConfigSaveFunc sets the callback to persist config changes to disk
+func (s *Server) SetConfigSaveFunc(fn ConfigSaveFunc) {
+	s.onConfigSave = fn
+}
+
+// saveConfig calls the config save callback if set
+func (s *Server) saveConfig() {
+	if s.onConfigSave != nil {
+		if err := s.onConfigSave(); err != nil {
+			log.Printf("Warning: failed to save config: %v", err)
+		}
+	}
+}
+
+// SetEngine sets or updates the scanner engine (allows starting server before engine is ready)
+func (s *Server) SetEngine(engine *scanner.Engine) {
+	s.engine = engine
+}
+
+// SetMQTTClient sets or updates the MQTT client
+func (s *Server) SetMQTTClient(client *mqtt.Client) {
+	s.mqtt = client
 }

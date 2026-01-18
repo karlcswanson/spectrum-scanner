@@ -14,6 +14,10 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleGetRadio(w http.ResponseWriter, r *http.Request) {
+	if s.engine == nil {
+		http.Error(w, "Scanner not connected", http.StatusServiceUnavailable)
+		return
+	}
 	// Return backend info and capabilities
 	backend := s.engine.Backend()
 	minHz, maxHz := backend.FrequencyRange()
@@ -34,16 +38,20 @@ func (s *Server) handleGetRadio(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleGetStatus(w http.ResponseWriter, r *http.Request) {
 	var currentBand *string
-	if band := s.engine.CurrentBand(); band != "" {
-		currentBand = &band
+	var scanning bool
+	if s.engine != nil {
+		if band := s.engine.CurrentBand(); band != "" {
+			currentBand = &band
+		}
+		scanning = s.engine.IsRunning()
 	}
 
 	status := models.ScannerStatus{
 		ID:          s.config.DeviceID,
 		Name:        s.config.Name,
 		Description: s.config.Description,
-		Online:      true,
-		Scanning:    s.engine.IsRunning(),
+		Online:      s.engine != nil,
+		Scanning:    scanning,
 		CurrentBand: currentBand,
 	}
 
@@ -85,7 +93,12 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Update the engine with new config
-	s.engine.UpdateConfig(s.config)
+	if s.engine != nil {
+		s.engine.UpdateConfig(s.config)
+	}
+
+	// Persist to disk if callback set
+	s.saveConfig()
 
 	log.Printf("Configuration updated: %s", s.config.Name)
 
@@ -106,7 +119,12 @@ func (s *Server) handlePutBands(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.config.Bands = bands
-	s.engine.UpdateConfig(s.config)
+	if s.engine != nil {
+		s.engine.UpdateConfig(s.config)
+	}
+
+	// Persist to disk if callback set
+	s.saveConfig()
 
 	// Republish config to MQTT so central server sees the change
 	if s.mqtt != nil && s.mqtt.IsConnected() {
@@ -165,7 +183,12 @@ func (s *Server) handlePutGain(w http.ResponseWriter, r *http.Request) {
 	if settings.RxGainMode != "" {
 		s.config.RxGainMode = settings.RxGainMode
 	}
-	s.engine.UpdateConfig(s.config)
+	if s.engine != nil {
+		s.engine.UpdateConfig(s.config)
+	}
+
+	// Persist to disk if callback set
+	s.saveConfig()
 
 	// Gain will be applied on next sweep/configure cycle
 	log.Printf("Gain updated: %.1f dB, mode: %s", s.config.RxGain, s.config.RxGainMode)
@@ -186,6 +209,10 @@ func (s *Server) handlePutBandwidth(w http.ResponseWriter, r *http.Request) {
 
 	// This endpoint is primarily for SDR backends (Pluto)
 	// For spectrum analyzers like OWON, RBW is controlled via backend config
+	if s.engine == nil {
+		http.Error(w, "Scanner not connected", http.StatusServiceUnavailable)
+		return
+	}
 	backend := s.engine.Backend()
 	if backend.Type() != "pluto" {
 		http.Error(w, "Bandwidth control not supported for "+backend.Type()+" backend. Use RBW in config.", http.StatusBadRequest)
@@ -206,6 +233,10 @@ func (s *Server) handlePutBandwidth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleStartScan(w http.ResponseWriter, r *http.Request) {
+	if s.engine == nil {
+		http.Error(w, "Scanner not connected", http.StatusServiceUnavailable)
+		return
+	}
 	if s.engine.IsRunning() {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{
@@ -222,6 +253,9 @@ func (s *Server) handleStartScan(w http.ResponseWriter, r *http.Request) {
 
 	log.Println("Scan started via API")
 
+	// Broadcast status to WebSocket clients
+	s.wsHub.BroadcastStatus(true, "")
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{
 		"status":  "started",
@@ -230,6 +264,10 @@ func (s *Server) handleStartScan(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleStopScan(w http.ResponseWriter, r *http.Request) {
+	if s.engine == nil {
+		http.Error(w, "Scanner not connected", http.StatusServiceUnavailable)
+		return
+	}
 	if !s.engine.IsRunning() {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{
@@ -242,6 +280,9 @@ func (s *Server) handleStopScan(w http.ResponseWriter, r *http.Request) {
 	s.engine.Stop()
 
 	log.Println("Scan stopped via API")
+
+	// Broadcast status to WebSocket clients
+	s.wsHub.BroadcastStatus(false, "")
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]string{

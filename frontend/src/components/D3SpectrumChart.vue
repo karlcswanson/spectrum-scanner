@@ -34,6 +34,19 @@ const props = defineProps({
     type: Boolean,
     default: false,
   },
+  // Event bus mode (for desktop app performance)
+  bandName: {
+    type: String,
+    default: null,
+  },
+  scanBus: {
+    type: Object,
+    default: null,
+  },
+  getScanData: {
+    type: Function,
+    default: null,
+  },
 })
 
 const container = ref(null)
@@ -49,8 +62,26 @@ const maxHistorySamples = 30 // Number of samples to keep for averaging
 // Color palette for multiple traces
 const colorPalette = d3.schemeCategory10
 
-// Normalized traces array - handles both single scan and multiple traces
-const normalizedTraces = computed(() => {
+// For event bus mode, store current scan data (non-reactive)
+let currentScanData = null
+
+// Get traces - either from event bus mode or legacy props
+function getTracesForDraw() {
+  // Event bus mode: use currentScanData (updated via bus handler)
+  if (props.bandName && props.getScanData) {
+    const scan = currentScanData
+    if (scan?.power?.length > 0) {
+      return [{
+        id: props.bandName,
+        name: 'Live',
+        scan: scan,
+        color: '#00d4ff',
+      }]
+    }
+    return []
+  }
+
+  // Legacy mode: traces prop
   if (props.traces.length > 0) {
     return props.traces.map((trace, idx) => ({
       id: trace.id || `trace-${idx}`,
@@ -59,6 +90,7 @@ const normalizedTraces = computed(() => {
       color: trace.color || colorPalette[idx % colorPalette.length],
     }))
   }
+  // Legacy mode: single scan prop
   if (props.scan?.power?.length > 0) {
     return [{
       id: 'default',
@@ -68,7 +100,7 @@ const normalizedTraces = computed(() => {
     }]
   }
   return []
-})
+}
 
 // ATSC TV channels for UHF band labeling
 function getATSCChannels(startMHz, stopMHz) {
@@ -188,7 +220,7 @@ function draw() {
 
   // Determine frequency range from traces or band
   let startHz, stopHz
-  const validTraces = normalizedTraces.value.filter(t => t.scan?.power?.length > 0)
+  const validTraces = getTracesForDraw().filter(t => t.scan?.power?.length > 0)
 
   if (validTraces.length > 0) {
     // Use the widest range from all traces
@@ -521,7 +553,7 @@ function draw() {
   const tracesGroup = svg.select('.traces')
   tracesGroup.selectAll('*').remove()
 
-  normalizedTraces.value.forEach((trace, traceIdx) => {
+  getTracesForDraw().forEach((trace, traceIdx) => {
     if (!trace.scan?.power?.length) return
 
     const { hz_lo, hz_hi, step, power } = trace.scan
@@ -586,9 +618,9 @@ function draw() {
   // Legend (only if multiple traces) - update existing legend group
   const legendGroup = svg.select('.legend')
   legendGroup.selectAll('*').remove()
-  if (normalizedTraces.value.length > 1) {
+  if (getTracesForDraw().length > 1) {
 
-    normalizedTraces.value.forEach((trace, idx) => {
+    getTracesForDraw().forEach((trace, idx) => {
       const legendItem = legendGroup.append('g')
         .attr('transform', `translate(0, ${idx * 18})`)
 
@@ -618,7 +650,7 @@ function draw() {
 
   // Helper to find power at frequency from the primary trace
   function getPowerAtFreq(freqHz) {
-    const trace = normalizedTraces.value[0]
+    const trace = getTracesForDraw()[0]
     if (!trace?.scan?.power?.length) return null
 
     const { hz_lo, hz_hi, power } = trace.scan
@@ -671,16 +703,54 @@ function setupResizeObserver() {
   }
 }
 
-watch(() => [props.scan, props.traces, props.showCurrent, props.showAverage, props.showPeak], draw, { deep: true })
+// Event bus handler for redraw signals
+function handleRedrawSignal(bandName) {
+  if (bandName === props.bandName && props.getScanData) {
+    currentScanData = props.getScanData(bandName)
+    draw()
+  }
+}
+
+// Cleanup function for event bus subscription
+let unsubscribeBus = null
+
+// Only watch props in legacy mode (not event bus mode)
+watch(() => [props.scan, props.traces, props.showCurrent, props.showAverage, props.showPeak], () => {
+  if (!props.scanBus) {
+    draw()
+  }
+}, { deep: true })
+
+// Also redraw when display mode changes in event bus mode
+watch(() => [props.showCurrent, props.showAverage, props.showPeak], () => {
+  if (props.scanBus) {
+    draw()
+  }
+})
 
 onMounted(() => {
   setupResizeObserver()
+
+  // Subscribe to event bus if in event bus mode (VueUse API)
+  if (props.scanBus && props.bandName) {
+    unsubscribeBus = props.scanBus.on(handleRedrawSignal)
+    // Initial data fetch
+    if (props.getScanData) {
+      currentScanData = props.getScanData(props.bandName)
+    }
+  }
+
   draw()
 })
 
 onUnmounted(() => {
   if (resizeObserver) {
     resizeObserver.disconnect()
+  }
+
+  // Unsubscribe from event bus (VueUse returns cleanup function)
+  if (unsubscribeBus) {
+    unsubscribeBus()
   }
 })
 
