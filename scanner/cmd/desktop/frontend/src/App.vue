@@ -1,7 +1,8 @@
 <script setup>
 import { onMounted, onUnmounted, ref, computed, watch } from 'vue'
 import { useDesktopStore, scanBus } from './store'
-import D3SpectrumChart from '@components/D3SpectrumChart.vue'
+import BandCard from '@components/BandCard.vue'
+import ScannerSettings from '@components/ScannerSettings.vue'
 
 const store = useDesktopStore()
 
@@ -23,38 +24,18 @@ const connecting = ref(false)
 const showSettings = ref(false)
 const settingsTab = ref('scanner') // 'scanner' or 'server'
 
-// Gain controls
-const gainValue = ref(40)
-const gainMode = ref('manual')
-
-// Trace display modes
-const showCurrent = ref(true)
-const showAverage = ref(false)
-const showPeak = ref(false)
-
-// Chart refs for peak reset
-const chartRefs = ref({})
-
 // Server mode form fields
 const mqttBroker = ref('')
 const mqttId = ref('')
 const mqttToken = ref('')
-const mqttName = ref('')
 const mqttLocation = ref('')
 const webPort = ref(8080)
-
-// Sync gain from config
-watch(() => store.settings, (settings) => {
-  gainValue.value = settings.rx_gain
-  gainMode.value = settings.rx_gain_mode.toLowerCase()
-}, { immediate: true })
 
 // Sync MQTT config from store
 watch(() => store.mqttConfig, (cfg) => {
   mqttBroker.value = cfg.broker || ''
   mqttId.value = cfg.id || ''
   mqttToken.value = cfg.token || ''
-  mqttName.value = cfg.name || ''
   mqttLocation.value = cfg.location || ''
 }, { immediate: true })
 
@@ -89,50 +70,10 @@ async function handleDisconnect() {
   await store.disconnect()
 }
 
-// Getter function for scan data (passed to chart component)
-function getScanData(bandName) {
-  return store.getScanData(bandName)
-}
-
-// Get band object for chart
-function getBandForChart(band) {
-  return {
-    name: band.name,
-    start_hz: band.start_hz,
-    stop_hz: band.stop_hz,
-  }
-}
-
-// Format frequency range
-function formatFreqRange(band) {
-  const start = (band.start_hz / 1e6).toFixed(0)
-  const stop = (band.stop_hz / 1e6).toFixed(0)
-  return `${start}-${stop} MHz`
-}
-
-// Scan info for a band
-function getScanInfo(bandName) {
-  const scan = store.getScanData(bandName)
-  if (!scan?.power) return '--'
-  const points = scan.power.length
-  const minP = Math.min(...scan.power).toFixed(1)
-  const maxP = Math.max(...scan.power).toFixed(1)
-  return `${points} pts | ${minP} to ${maxP} dBm`
-}
-
-// Export CSV for a band
-async function exportCSV(bandName) {
-  const scan = store.getScanData(bandName)
-  if (!scan) return
-
-  let csv = 'Frequency (MHz),Power (dBm)\n'
-  const startMHz = scan.hz_lo / 1e6
-  const stepMHz = scan.step / 1e6
-
-  for (let i = 0; i < scan.power.length; i++) {
-    const freq = startMHz + (i * stepMHz)
-    csv += `${freq.toFixed(6)},${scan.power[i].toFixed(2)}\n`
-  }
+// Export CSV for a band (using Wails native file dialog)
+async function handleExport(bandName) {
+  const csv = store.generateCSV(bandName)
+  if (!csv) return
 
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
   const filename = `scan_${bandName.replace(/\s+/g, '-')}_${timestamp}.csv`
@@ -151,15 +92,17 @@ async function exportCSV(bandName) {
   }
 }
 
-function resetPeakHold(bandName) {
-  const chart = chartRefs.value[bandName]
-  if (chart) {
-    chart.resetAllPeaks()
-  }
+// Settings handlers
+function handleUpdateName(name) {
+  store.updateName(name)
 }
 
-function applyGain() {
-  store.updateGain(gainValue.value, gainMode.value)
+function handleUpdateGain(value, mode) {
+  store.updateGain(value, mode)
+}
+
+function handleToggleBand(bandName) {
+  store.toggleBand(bandName)
 }
 
 // Server mode functions
@@ -169,7 +112,6 @@ async function saveMQTTConfig() {
     broker: mqttBroker.value,
     id: mqttId.value,
     token: mqttToken.value,
-    name: mqttName.value,
     location: mqttLocation.value,
   })
 }
@@ -182,30 +124,22 @@ async function saveWebConfig() {
 }
 
 async function toggleMQTT() {
-  // Save config first
   await saveMQTTConfig()
-
   if (store.serverStatus.mqtt_connected) {
     await store.disableMQTT()
   } else {
     await store.enableMQTT()
   }
-
-  // Persist to YAML so it auto-starts on next launch
   await store.saveConfig()
 }
 
 async function toggleWebServer() {
-  // Save config first
   await saveWebConfig()
-
   if (store.serverStatus.web_running) {
     await store.disableWebServer()
   } else {
     await store.enableWebServer()
   }
-
-  // Persist to YAML so it auto-starts on next launch
   await store.saveConfig()
 }
 
@@ -222,8 +156,11 @@ async function saveAllConfig() {
     <header class="bg-gray-800 border-b border-gray-700 px-6 py-4">
       <div class="flex items-center justify-between">
         <div class="flex items-center gap-4">
-          <img src="/logo.png" alt="Micboard" class="h-8 w-8" />
-          <h1 class="text-xl font-bold text-cyan-400">Spectrum Scanner</h1>
+          <img src="/logo.png" alt="Spectrum Scanner" class="h-8 w-8" />
+          <h1 class="text-xl font-bold text-white">Spectrum Scanner</h1>
+          <span v-if="store.config?.name && store.config.name !== 'Spectrum Scanner'" class="text-gray-400">
+            {{ store.config.name }}
+          </span>
         </div>
 
         <div class="flex items-center gap-4">
@@ -271,7 +208,6 @@ async function saveAllConfig() {
 
           <!-- Connect/Disconnect -->
           <template v-if="store.connected">
-            <!-- Start/Stop -->
             <button
               v-if="!store.scanning"
               @click="store.startScanning"
@@ -299,7 +235,6 @@ async function saveAllConfig() {
 
       <!-- Settings panel -->
       <div v-if="showSettings" class="mt-4 pt-4 border-t border-gray-700">
-        <!-- Close button -->
         <div class="flex justify-between items-center mb-4">
           <h3 class="text-sm font-medium text-gray-300">
             {{ settingsTab === 'scanner' ? 'Scanner Settings' : 'Server Settings' }}
@@ -316,71 +251,15 @@ async function saveAllConfig() {
         </div>
 
         <!-- Scanner settings -->
-        <div v-if="settingsTab === 'scanner'" class="grid md:grid-cols-2 gap-6">
-          <!-- Bands -->
-          <div>
-            <h4 class="text-sm font-medium text-gray-300 mb-3">Bands</h4>
-            <div class="flex flex-wrap gap-2">
-              <label
-                v-for="band in store.bands"
-                :key="band.name"
-                class="flex items-center gap-2 px-3 py-1.5 rounded cursor-pointer text-sm transition-colors"
-                :class="band.enabled
-                  ? 'bg-cyan-900/50 border border-cyan-500 text-cyan-300'
-                  : 'bg-gray-700 hover:bg-gray-600 text-gray-300 border border-transparent'"
-              >
-                <input
-                  type="checkbox"
-                  :checked="band.enabled"
-                  @change="store.toggleBand(band.name)"
-                  class="w-3.5 h-3.5 accent-cyan-400"
-                />
-                <span>{{ band.name }}</span>
-              </label>
-            </div>
-          </div>
-
-          <!-- Gain -->
-          <div>
-            <h4 class="text-sm font-medium text-gray-300 mb-3">Gain</h4>
-            <div class="space-y-3">
-              <div class="flex items-center gap-3">
-                <input
-                  type="range"
-                  v-model.number="gainValue"
-                  min="0"
-                  max="73"
-                  class="flex-1 accent-cyan-400"
-                />
-                <input
-                  type="number"
-                  v-model.number="gainValue"
-                  min="0"
-                  max="73"
-                  class="w-16 px-2 py-1 bg-gray-900 border border-gray-600 rounded text-center text-sm"
-                />
-                <span class="text-gray-400 text-sm">dB</span>
-              </div>
-              <div class="flex items-center gap-3">
-                <select
-                  v-model="gainMode"
-                  class="flex-1 px-2 py-1.5 bg-gray-900 border border-gray-600 rounded text-sm"
-                >
-                  <option value="manual">Manual</option>
-                  <option value="slow_attack">Slow Attack</option>
-                  <option value="fast_attack">Fast Attack</option>
-                  <option value="hybrid">Hybrid</option>
-                </select>
-                <button
-                  @click="applyGain"
-                  class="px-3 py-1.5 bg-cyan-500 hover:bg-cyan-600 text-black text-sm font-medium rounded"
-                >
-                  Apply
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
+        <ScannerSettings
+          v-if="settingsTab === 'scanner'"
+          :config="store.config"
+          :bands="store.bands"
+          :settings="store.settings"
+          @update:name="handleUpdateName"
+          @update:gain="handleUpdateGain"
+          @toggle-band="handleToggleBand"
+        />
 
         <!-- Server mode settings -->
         <div v-if="settingsTab === 'server'" class="space-y-6">
@@ -430,25 +309,15 @@ async function saveAllConfig() {
                     />
                   </div>
                 </div>
-                <div class="grid grid-cols-2 gap-3">
-                  <div>
-                    <label class="block text-xs text-gray-400 mb-1">Display Name</label>
-                    <input
-                      v-model="mqttName"
-                      type="text"
-                      placeholder="My Scanner"
-                      class="w-full px-3 py-1.5 bg-gray-800 border border-gray-600 rounded text-sm"
-                    />
-                  </div>
-                  <div>
-                    <label class="block text-xs text-gray-400 mb-1">Location</label>
-                    <input
-                      v-model="mqttLocation"
-                      type="text"
-                      placeholder="Studio A"
-                      class="w-full px-3 py-1.5 bg-gray-800 border border-gray-600 rounded text-sm"
-                    />
-                  </div>
+                <div>
+                  <label class="block text-xs text-gray-400 mb-1">Location</label>
+                  <input
+                    v-model="mqttLocation"
+                    type="text"
+                    placeholder="e.g. Stage Left, FOH, Studio A"
+                    class="w-full px-3 py-1.5 bg-gray-800 border border-gray-600 rounded text-sm"
+                  />
+                  <p class="text-xs text-gray-500 mt-1">Physical location (scanner name is set in Scanner Settings)</p>
                 </div>
                 <button
                   @click="toggleMQTT"
@@ -566,73 +435,16 @@ async function saveAllConfig() {
 
         <!-- Band charts -->
         <div class="space-y-6">
-          <div
+          <BandCard
             v-for="band in store.enabledBands"
             :key="band.name"
-            class="bg-gray-800 rounded-lg p-4"
-          >
-            <div class="flex justify-between items-start mb-3">
-              <div>
-                <h2 class="text-lg font-semibold text-cyan-400">
-                  {{ band.name }}
-                  <span class="text-gray-500 font-normal text-sm ml-2">
-                    ({{ formatFreqRange(band) }})
-                  </span>
-                </h2>
-                <p class="text-xs text-gray-500" :data-v="store.scanUpdateCount">
-                  {{ getScanInfo(band.name) }}
-                </p>
-              </div>
-
-              <div class="flex items-center gap-3">
-                <!-- Trace toggles -->
-                <div class="flex items-center gap-2 text-xs">
-                  <label class="flex items-center gap-1 cursor-pointer">
-                    <input type="checkbox" v-model="showCurrent" class="w-3 h-3 accent-cyan-400" />
-                    <span class="text-gray-400">Current</span>
-                  </label>
-                  <label class="flex items-center gap-1 cursor-pointer">
-                    <input type="checkbox" v-model="showAverage" class="w-3 h-3 accent-yellow-400" />
-                    <span class="text-gray-400">Avg</span>
-                  </label>
-                  <label class="flex items-center gap-1 cursor-pointer">
-                    <input type="checkbox" v-model="showPeak" class="w-3 h-3 accent-red-400" />
-                    <span class="text-gray-400">Peak</span>
-                  </label>
-                  <button
-                    v-if="showPeak"
-                    @click="resetPeakHold(band.name)"
-                    class="px-2 py-0.5 rounded text-xs bg-gray-700 hover:bg-gray-600 text-gray-300"
-                  >
-                    Reset
-                  </button>
-                </div>
-
-                <button
-                  @click="exportCSV(band.name)"
-                  :disabled="!store.getScanData(band.name)"
-                  class="px-4 py-2 rounded text-sm font-semibold transition-colors"
-                  :class="store.getScanData(band.name)
-                    ? 'bg-green-500 hover:bg-green-600 text-black'
-                    : 'bg-gray-600 text-gray-400 cursor-not-allowed'"
-                >
-                  Export CSV
-                </button>
-              </div>
-            </div>
-
-            <D3SpectrumChart
-              :ref="el => { if (el) chartRefs[band.name] = el }"
-              :band-name="band.name"
-              :scan-bus="scanBus"
-              :get-scan-data="getScanData"
-              :band="getBandForChart(band)"
-              :height="300"
-              :show-current="showCurrent"
-              :show-average="showAverage"
-              :show-peak="showPeak"
-            />
-          </div>
+            :band="band"
+            :scan-bus="scanBus"
+            :get-scan-data="store.getScanData"
+            :get-scan-info="store.getScanInfo"
+            :scan-update-count="store.scanUpdateCount"
+            :on-export="handleExport"
+          />
         </div>
       </template>
     </main>

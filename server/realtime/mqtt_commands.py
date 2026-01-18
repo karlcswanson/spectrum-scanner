@@ -69,16 +69,3 @@ def start_scanner(scanner_id: str) -> bool:
 def stop_scanner(scanner_id: str) -> bool:
     """Send stop command to a scanner."""
     return publish_command(scanner_id, 'stop')
-
-
-def update_scanner_bands(scanner_id: str, bands: list) -> bool:
-    """Send band configuration update to a scanner."""
-    return publish_command(scanner_id, 'bands', bands)
-
-
-def update_scanner_gain(scanner_id: str, rx_gain: float, rx_gain_mode: str) -> bool:
-    """Send gain settings update to a scanner."""
-    return publish_command(scanner_id, 'gain', {
-        'rx_gain': rx_gain,
-        'rx_gain_mode': rx_gain_mode,
-    })

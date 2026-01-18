@@ -234,11 +234,8 @@ func (c *Client) PublishConfig() {
 		}
 	}
 
-	// Use name/location from MQTT config, fall back to scanner config
-	name := c.config.Name
-	if name == "" {
-		name = c.scannerConfig.Name
-	}
+	// Always use scanner config name (single source of truth)
+	name := c.scannerConfig.Name
 	if name == "" {
 		name = c.scannerID
 	}

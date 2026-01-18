@@ -484,6 +484,24 @@ func (a *App) GetGain() map[string]interface{} {
 	}
 }
 
+// SetName sets the scanner name
+func (a *App) SetName(name string) error {
+	a.mu.Lock()
+	a.config.Name = name
+	configPath := a.configPath
+	cfg := a.config
+	a.mu.Unlock()
+
+	// Save to YAML so setting persists
+	if err := config.SaveToFile(configPath, cfg); err != nil {
+		log.Printf("Warning: failed to save config after name change: %v", err)
+		return err
+	}
+
+	log.Printf("Scanner name set to: %s", name)
+	return nil
+}
+
 // DetectPluto tries to find a connected Pluto device
 func (a *App) DetectPluto() string {
 	// Common addresses to try
@@ -576,7 +594,7 @@ func (a *App) GetWebConfig() *models.WebConfig {
 }
 
 // SetMQTTConfig updates the MQTT configuration
-func (a *App) SetMQTTConfig(enabled bool, broker, id, token, name, location string) error {
+func (a *App) SetMQTTConfig(enabled bool, broker, id, token, location string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
@@ -590,7 +608,6 @@ func (a *App) SetMQTTConfig(enabled bool, broker, id, token, name, location stri
 	a.config.MQTT.Broker = broker
 	a.config.MQTT.ID = id
 	a.config.MQTT.Token = token
-	a.config.MQTT.Name = name
 	a.config.MQTT.Location = location
 
 	return nil

@@ -38,9 +38,6 @@ class Scanner(models.Model):
     current_band = models.CharField(max_length=100, blank=True)
     last_seen = models.DateTimeField(null=True, blank=True)
 
-    # Configuration
-    config = models.JSONField(default=dict, blank=True)
-
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -82,22 +79,6 @@ class UserMQTTCredentials(models.Model):
         self.save(update_fields=['auth_token', 'updated_at'])
 
 
-class BandTemplate(models.Model):
-    """Predefined band templates (for easy setup of new scanners)."""
-
-    name = models.CharField(max_length=100, unique=True)
-    start_hz = models.BigIntegerField()
-    stop_hz = models.BigIntegerField()
-    description = models.TextField(blank=True)
-    color = models.CharField(max_length=20, default='#3b82f6')
-
-    class Meta:
-        ordering = ['start_hz']
-
-    def __str__(self):
-        return f"{self.name} ({self.start_hz/1e6:.1f}-{self.stop_hz/1e6:.1f} MHz)"
-
-
 class Band(models.Model):
     """A frequency band configured for a specific scanner."""
 
@@ -114,7 +95,6 @@ class Band(models.Model):
 
     # Scanner-specific settings for this band
     antenna = models.CharField(max_length=10, blank=True)  # A, B, etc.
-    dwell_time_ms = models.IntegerField(null=True, blank=True)  # Override scanner default
 
     class Meta:
         ordering = ['start_hz']
@@ -211,41 +191,3 @@ class ShareLink(models.Model):
         self.last_used_at = timezone.now()
         self.use_count += 1
         self.save(update_fields=['last_used_at', 'use_count'])
-
-
-class ScanAggregate(models.Model):
-    """Aggregated scan data (max hold, average over time period)."""
-
-    AGGREGATE_TYPES = [
-        ('max', 'Max Hold'),
-        ('min', 'Min Hold'),
-        ('avg', 'Average'),
-    ]
-
-    PERIOD_TYPES = [
-        ('hour', 'Hourly'),
-        ('day', 'Daily'),
-        ('week', 'Weekly'),
-    ]
-
-    scanner = models.ForeignKey(Scanner, on_delete=models.CASCADE, related_name='aggregates')
-    band = models.ForeignKey(Band, on_delete=models.SET_NULL, null=True, blank=True)
-
-    aggregate_type = models.CharField(max_length=10, choices=AGGREGATE_TYPES)
-    period_type = models.CharField(max_length=10, choices=PERIOD_TYPES)
-    period_start = models.DateTimeField()
-    period_end = models.DateTimeField()
-
-    hz_lo = models.BigIntegerField()
-    hz_hi = models.BigIntegerField()
-    step_hz = models.FloatField()
-    power = models.JSONField()
-
-    scan_count = models.IntegerField(default=0)
-
-    class Meta:
-        ordering = ['-period_start']
-        unique_together = ['scanner', 'band', 'aggregate_type', 'period_type', 'period_start']
-
-    def __str__(self):
-        return f"{self.scanner.name} {self.aggregate_type} ({self.period_type}) @ {self.period_start}"

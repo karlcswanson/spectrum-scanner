@@ -1,9 +1,9 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { useEventBus } from '@vueuse/core'
+import { useScanData, scanBus } from '@lib'
 
-// Event bus for scan redraw signals (same key = same instance across app)
-export const scanBus = useEventBus('scan-redraw')
+// Re-export for components that import from store
+export { scanBus }
 
 // Wails runtime bindings (injected at runtime)
 const wails = window.go?.main?.App
@@ -12,6 +12,17 @@ const wails = window.go?.main?.App
  * Desktop scanner store - uses Wails bindings to communicate with Go backend
  */
 export const useDesktopStore = defineStore('desktop', () => {
+  // Shared scan data management
+  const {
+    scanUpdateCount,
+    handleScanData,
+    getScanData,
+    clearScanData,
+    getScanInfo,
+    generateCSV,
+    downloadCSV,
+  } = useScanData()
+
   // Scanner state
   const config = ref(null)
   const status = ref({
@@ -20,13 +31,6 @@ export const useDesktopStore = defineStore('desktop', () => {
     connected: false,
   })
   const lastError = ref(null)
-
-  // Scan data stored in plain object (NOT reactive)
-  // Access via getScanData(bandName) or listen to scanBus
-  const scanDataRaw = {}
-
-  // Lightweight reactive counter - triggers template re-render for scan info text
-  const scanUpdateCount = ref(0)
 
   // Server mode state
   const serverStatus = ref({
@@ -100,30 +104,6 @@ export const useDesktopStore = defineStore('desktop', () => {
     fetchMQTTConfig()
     fetchWebConfig()
     fetchConfigPath()
-  }
-
-  function handleScanData(data) {
-    if (!data.band || !data.power) return
-
-    // Store directly in plain object (no Vue overhead)
-    scanDataRaw[data.band] = {
-      hz_lo: data.hz_lo,
-      hz_hi: data.hz_hi,
-      step: data.step,
-      power: data.power,
-      timestamp: data.timestamp,
-    }
-
-    // Signal the chart to redraw (just the band name, not data)
-    scanBus.emit(data.band)
-
-    // Bump counter to trigger template re-render for scan info text
-    scanUpdateCount.value++
-  }
-
-  // Get scan data for a band (called by chart component)
-  function getScanData(bandName) {
-    return scanDataRaw[bandName] || null
   }
 
   // Wails API calls
@@ -225,6 +205,17 @@ export const useDesktopStore = defineStore('desktop', () => {
     }
   }
 
+  async function updateName(name) {
+    if (!wails) return
+    try {
+      await wails.SetName(name)
+      await fetchConfig()
+    } catch (err) {
+      console.error('Failed to update name:', err)
+      lastError.value = { message: `Name: ${err}`, timestamp: Date.now() }
+    }
+  }
+
   // ============================================================================
   // Server Mode Actions
   // ============================================================================
@@ -285,7 +276,6 @@ export const useDesktopStore = defineStore('desktop', () => {
         cfg.broker,
         cfg.id,
         cfg.token,
-        cfg.name,
         cfg.location
       )
       mqttConfig.value = cfg
@@ -381,6 +371,10 @@ export const useDesktopStore = defineStore('desktop', () => {
     // Scan data (use getScanData + scanBus for performance)
     getScanData,
     scanUpdateCount,
+    clearScanData,
+    getScanInfo,
+    generateCSV,
+    downloadCSV,
 
     // Actions
     init,
@@ -393,6 +387,7 @@ export const useDesktopStore = defineStore('desktop', () => {
     stopScanning,
     toggleBand,
     updateGain,
+    updateName,
 
     // Server mode actions
     fetchServerStatus,

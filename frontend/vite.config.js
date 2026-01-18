@@ -11,6 +11,12 @@ const buildMode = process.env.BUILD_MODE || 'main'
 // Base config shared by both builds
 const baseConfig = {
   plugins: [vue()],
+  resolve: {
+    alias: {
+      '@lib': resolve(__dirname, 'src/lib'),
+      '@components': resolve(__dirname, 'src/components'),
+    },
+  },
 }
 
 // Main app config (central server with auth, multi-scanner)

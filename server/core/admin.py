@@ -4,7 +4,7 @@ from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.contrib.auth.models import User
 from django.utils.html import format_html
-from .models import Scanner, Band, BandTemplate, Scan, ScanAggregate, UserMQTTCredentials, ShareLink
+from .models import Scanner, Band, Scan, UserMQTTCredentials, ShareLink
 
 
 class BandInline(admin.TabularInline):
@@ -84,12 +84,6 @@ class ScannerAdmin(admin.ModelAdmin):
         self.message_user(request, f"Regenerated tokens for {queryset.count()} scanner(s)")
 
 
-@admin.register(BandTemplate)
-class BandTemplateAdmin(admin.ModelAdmin):
-    list_display = ['name', 'start_hz', 'stop_hz', 'color']
-    ordering = ['start_hz']
-
-
 @admin.register(Band)
 class BandAdmin(admin.ModelAdmin):
     list_display = ['scanner', 'name', 'start_mhz', 'stop_mhz', 'enabled', 'antenna', 'color']
@@ -103,13 +97,6 @@ class ScanAdmin(admin.ModelAdmin):
     list_filter = ['scanner', 'band']
     date_hierarchy = 'timestamp'
     readonly_fields = ['scanner', 'timestamp', 'hz_lo', 'hz_hi', 'step_hz', 'power', 'metadata']
-
-
-@admin.register(ScanAggregate)
-class ScanAggregateAdmin(admin.ModelAdmin):
-    list_display = ['scanner', 'band', 'aggregate_type', 'period_type', 'period_start', 'scan_count']
-    list_filter = ['scanner', 'aggregate_type', 'period_type']
-    date_hierarchy = 'period_start'
 
 
 @admin.register(ShareLink)

@@ -15,7 +15,7 @@ from django.contrib.auth import authenticate, login, logout
 from core.models import Scanner, Band, Scan, UserMQTTCredentials
 from .serializers import (
     ScannerSerializer, BandSerializer, ScanSerializer, ScanCreateSerializer,
-    ScanTimelineSerializer, DecimatedScanSerializer
+    DecimatedScanSerializer
 )
 
 logger = logging.getLogger(__name__)

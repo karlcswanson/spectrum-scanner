@@ -1,26 +1,30 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { useEventBus } from '@vueuse/core'
+import { useScanData, scanBus } from '@lib'
 
-// Event bus for scan redraw signals (same key = same instance across app)
-export const scanBus = useEventBus('scan-redraw')
+// Re-export for components that import from store
+export { scanBus }
 
 /**
  * Standalone scanner store - connects directly to Go scanner API
  * No MQTT, no auth - just local WebSocket and REST API
  */
 export const useStandaloneStore = defineStore('standalone', () => {
+  // Shared scan data management
+  const {
+    scanUpdateCount,
+    handleScanData,
+    getScanData,
+    clearScanData,
+    getScanInfo,
+    downloadCSV,
+  } = useScanData()
+
   // Scanner state
   const config = ref(null)
   const status = ref(null)
   const connected = ref(false)
   const lastError = ref(null)
-
-  // Scan data stored in plain object (NOT reactive) for performance
-  const scanDataRaw = {}
-
-  // Lightweight reactive counter for template updates (scan info text)
-  const scanUpdateCount = ref(0)
 
   // WebSocket connection
   let ws = null
@@ -100,31 +104,6 @@ export const useStandaloneStore = defineStore('standalone', () => {
       ws = null
     }
     connected.value = false
-  }
-
-  function handleScanData(data) {
-    // Go scanner sends: { band, hz_lo, hz_hi, step, power: [...], timestamp }
-    if (data.band && data.power) {
-      // Store in plain object (no Vue overhead)
-      scanDataRaw[data.band] = {
-        hz_lo: data.hz_lo,
-        hz_hi: data.hz_hi,
-        step: data.step,
-        power: data.power,
-        timestamp: data.timestamp,
-      }
-
-      // Signal chart to redraw
-      scanBus.emit(data.band)
-
-      // Bump counter for template updates (scan info text)
-      scanUpdateCount.value++
-    }
-  }
-
-  // Get scan data for a band (called by chart component)
-  function getScanData(bandName) {
-    return scanDataRaw[bandName] || null
   }
 
   function handleStatusUpdate(data) {
@@ -213,6 +192,21 @@ export const useStandaloneStore = defineStore('standalone', () => {
     }
   }
 
+  async function updateName(name) {
+    try {
+      const response = await fetch('/api/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      })
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      await fetchConfig()
+    } catch (err) {
+      console.error('Failed to update name:', err)
+      lastError.value = { message: `Name: ${err.message}`, timestamp: Date.now() }
+    }
+  }
+
   // Toggle single band enabled state
   function toggleBand(bandName) {
     const updated = bands.value.map(b => ({
@@ -239,6 +233,9 @@ export const useStandaloneStore = defineStore('standalone', () => {
     // Scan data (use getScanData + scanBus for performance)
     getScanData,
     scanUpdateCount,
+    clearScanData,
+    getScanInfo,
+    downloadCSV,
 
     // Actions
     connect,
@@ -249,6 +246,7 @@ export const useStandaloneStore = defineStore('standalone', () => {
     stopScanning,
     updateBands,
     updateGain,
+    updateName,
     toggleBand,
   }
 })

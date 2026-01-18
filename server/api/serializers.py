@@ -20,7 +20,7 @@ class ScannerSerializer(serializers.ModelSerializer):
         model = Scanner
         fields = [
             'id', 'name', 'scanner_type', 'location', 'description',
-            'online', 'scanning', 'current_band', 'last_seen', 'config',
+            'online', 'scanning', 'current_band', 'last_seen',
             'bands', 'created_at', 'updated_at'
         ]
         read_only_fields = ['online', 'scanning', 'current_band', 'last_seen', 'bands', 'created_at', 'updated_at']
@@ -37,16 +37,6 @@ class ScanSerializer(serializers.ModelSerializer):
             'id', 'scanner_id', 'scanner_name', 'band_name',
             'timestamp', 'hz_lo', 'hz_hi', 'step_hz', 'power', 'metadata', 'bin_count'
         ]
-
-
-class ScanTimelineSerializer(serializers.ModelSerializer):
-    """Lightweight serializer for timeline display (no power data)."""
-
-    band_name = serializers.CharField(source='band.name', read_only=True, allow_null=True)
-
-    class Meta:
-        model = Scan
-        fields = ['id', 'timestamp', 'band_name']
 
 
 class DecimatedScanSerializer(serializers.ModelSerializer):
