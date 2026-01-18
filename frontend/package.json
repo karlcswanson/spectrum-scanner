@@ -8,7 +8,9 @@
     "build": "vite build",
     "preview": "vite preview",
     "dev:standalone": "BUILD_MODE=standalone vite",
-    "build:standalone": "BUILD_MODE=standalone vite build"
+    "build:standalone": "BUILD_MODE=standalone vite build",
+    "build:scanner": "BUILD_MODE=standalone vite build && rm -rf ../scanner/internal/api/web/assets && cp -r dist-standalone/assets ../scanner/internal/api/web/ && cp dist-standalone/standalone.html ../scanner/internal/api/web/index.html && cp dist-standalone/logo.png ../scanner/internal/api/web/ && cp dist-standalone/favicon.png ../scanner/internal/api/web/",
+    "build:all": "npm run build && npm run build:scanner"
   },
   "dependencies": {
     "@vueuse/core": "^14.1.0",
