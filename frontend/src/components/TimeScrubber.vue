@@ -95,8 +95,10 @@ const selectedTime = computed(() => {
   return props.currentTime
 })
 
-// Is the display in live mode?
-const isLive = computed(() => props.showingLive && !dragTime.value)
+// Is the display in live mode? (user hasn't selected a historical time)
+// Use dragTime as the primary indicator - if null, we're in live mode
+// showingLive is secondary (indicates if live data is actually available)
+const isLive = computed(() => !dragTime.value)
 
 // Store xScale for drag operations
 let currentXScale = null
@@ -518,12 +520,7 @@ watch(() => props.currentTime, (newTime) => {
   }
 })
 
-// Clear dragTime when going live
-watch(() => props.showingLive, (live) => {
-  if (live) {
-    dragTime.value = null
-  }
-})
+// Note: dragTime is cleared directly in goLive(), no watcher needed
 
 // Redraw on tick prop change (for periodic updates)
 watch(() => props.tick, () => {

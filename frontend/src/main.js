@@ -34,8 +34,8 @@ app.use(router)
 router.beforeEach(async (to, from, next) => {
   const auth = useAuthStore()
 
-  // Check auth state if not already loaded
-  if (auth.loading && auth.user === null) {
+  // Always check auth on initial load (loading=true means we haven't checked yet)
+  if (auth.loading) {
     await auth.checkAuth()
   }
 

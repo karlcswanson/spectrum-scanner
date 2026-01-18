@@ -621,6 +621,10 @@ let unsubscribeBus = null
 
 // Watch for display mode changes
 watch(() => [props.showCurrent, props.showAverage, props.showPeak], () => {
+  // Refresh scan data when toggling display modes (especially when going back to live)
+  if (props.getScanData && props.bandName && props.showCurrent) {
+    currentScanData = props.getScanData(props.bandName)
+  }
   updateTraces()
 })
 
