@@ -1,9 +1,6 @@
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import * as d3 from 'd3'
-import { useScannersStore } from '../stores/scanners'
-
-const store = useScannersStore()
 
 const props = defineProps({
   scannerId: {
@@ -53,6 +50,11 @@ const props = defineProps({
   showDensity: {
     type: Boolean,
     default: true,
+  },
+  // External tick for periodic redraws (standalone mode uses this instead of store.tick)
+  tick: {
+    type: Number,
+    default: 0,
   },
 })
 
@@ -523,8 +525,8 @@ watch(() => props.showingLive, (live) => {
   }
 })
 
-// Redraw on global tick (every 500ms) - decoupled from reactive timeline updates
-watch(() => store.tick, () => {
+// Redraw on tick prop change (for periodic updates)
+watch(() => props.tick, () => {
   if (!isDragging.value) {
     scheduleDraw()
   }

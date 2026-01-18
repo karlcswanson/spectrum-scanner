@@ -4,66 +4,32 @@ import (
 	"flag"
 	"log"
 	"os"
-	"strings"
+	"time"
 
 	"scanner/internal/api"
 	"scanner/internal/config"
-	"scanner/internal/models"
+	"scanner/internal/db"
 	"scanner/internal/runner"
 )
 
 func main() {
-	// Command line flags
-	listenAddr := flag.String("listen", ":8080", "HTTP listen address")
-	backendType := flag.String("backend", "", "Backend type: pluto, owon (overrides config)")
-	backendAddr := flag.String("addr", "", "Backend address (IP or URL, overrides config)")
-	configFile := flag.String("config", "", "Config file path (optional)")
-	autoStart := flag.Bool("auto-start", false, "Automatically start scanning on startup")
+	// Command line flags (env vars are also checked by config.LoadWithOptions)
+	opts := config.DefaultOptions()
+	flag.StringVar(&opts.ListenAddr, "listen", opts.ListenAddr, "HTTP listen address")
+	flag.StringVar(&opts.BackendType, "backend", "", "Backend type: pluto, owon (overrides config)")
+	flag.StringVar(&opts.BackendAddr, "addr", "", "Backend address (IP or URL, overrides config)")
+	flag.StringVar(&opts.ConfigFile, "config", "", "Config file path (optional)")
 	flag.Parse()
 
-	// Allow environment variable overrides
-	if envListen := os.Getenv("SCANNER_LISTEN"); envListen != "" {
-		*listenAddr = envListen
+	// Load config with options (handles env vars and applies overrides)
+	cfg, configPath, err := config.LoadWithOptions(opts)
+	if err != nil {
+		log.Fatalf("Failed to load config from %s: %v", configPath, err)
 	}
-	if envBackend := os.Getenv("SCANNER_BACKEND"); envBackend != "" {
-		*backendType = envBackend
-	}
-	if envAddr := os.Getenv("SCANNER_ADDR"); envAddr != "" {
-		*backendAddr = envAddr
-	}
-
-	// Load configuration
-	var cfg *models.Config
-	var err error
-
-	if *configFile != "" {
-		cfg, err = config.LoadFromFile(*configFile)
-		if err != nil {
-			log.Fatalf("Failed to load config from %s: %v", *configFile, err)
-		}
-		log.Printf("Loaded configuration from %s", *configFile)
+	if configPath != "" {
+		log.Printf("Loaded configuration from %s", configPath)
 	} else {
-		cfg = config.DefaultConfig()
 		log.Println("Using default configuration")
-	}
-
-	// Command line overrides for backend
-	if *backendType != "" {
-		if cfg.Backend == nil {
-			cfg.Backend = &models.BackendConfig{}
-		}
-		cfg.Backend.Type = *backendType
-	}
-	if *backendAddr != "" {
-		if cfg.Backend == nil {
-			cfg.Backend = &models.BackendConfig{}
-		}
-		// Detect if it's a URL or IP address
-		if strings.HasPrefix(*backendAddr, "http") {
-			cfg.Backend.URL = *backendAddr
-		} else {
-			cfg.Backend.Address = *backendAddr
-		}
 	}
 
 	// Environment variable overrides for identity
@@ -100,22 +66,43 @@ func main() {
 	}
 	defer r.Close()
 
-	// Auto-start scanning if requested (flag overrides config)
-	if *autoStart {
-		cfg.AutoStart = true
-	}
+	// Always auto-start scanning
+	cfg.AutoStart = true
 	if err := r.AutoStart(); err != nil {
 		log.Printf("Warning: Failed to auto-start scanner: %v", err)
+	}
+
+	// Initialize SQLite store for scan history (timeline scrubber)
+	var store *db.Store
+	dbPath := config.AppConfigDir() + "/scans.db"
+	store, err = db.NewStore(dbPath)
+	if err != nil {
+		log.Printf("Warning: Failed to initialize scan history database: %v", err)
+	} else {
+		log.Printf("Scan history database: %s", dbPath)
+		defer store.Close()
+		// Start periodic cleanup (keep 24 hours)
+		go func() {
+			ticker := time.NewTicker(1 * time.Hour)
+			defer ticker.Stop()
+			for range ticker.C {
+				store.Cleanup(24)
+			}
+		}()
 	}
 
 	// Create and start HTTP server
 	server := api.NewServer(r.Engine, cfg, r.MQTTClient)
 
+	// Wire up SQLite store for scan history endpoints
+	if store != nil {
+		server.SetStore(store)
+	}
+
 	// Wire up config save callback if using a config file
-	if *configFile != "" {
-		cfgPath := *configFile
+	if configPath != "" {
 		server.SetConfigSaveFunc(func() error {
-			return config.SaveToFile(cfgPath, cfg)
+			return config.SaveToFile(configPath, cfg)
 		})
 	}
 
@@ -124,7 +111,20 @@ func main() {
 		server.WSHub().BroadcastStatus(scanning, currentBand)
 	})
 
-	log.Printf("Starting HTTP server on %s", *listenAddr)
+	// Subscribe to scans and store them
+	if store != nil {
+		go func() {
+			ch := r.Engine.Subscribe()
+			defer r.Engine.Unsubscribe(ch)
+			for scan := range ch {
+				if err := store.StoreScan(&scan); err != nil {
+					log.Printf("Warning: failed to store scan: %v", err)
+				}
+			}
+		}()
+	}
+
+	log.Printf("Starting HTTP server on %s", opts.ListenAddr)
 	log.Printf("API endpoints:")
 	log.Printf("  GET  /api/status     - Scanner status")
 	log.Printf("  GET  /api/config     - Configuration")
@@ -135,7 +135,7 @@ func main() {
 	log.Printf("  POST /api/scan/stop  - Stop scanning")
 	log.Printf("  GET  /ws/stream      - WebSocket for live data")
 
-	if err := server.ListenAndServe(*listenAddr); err != nil {
+	if err := server.ListenAndServe(opts.ListenAddr); err != nil {
 		log.Fatalf("Server error: %v", err)
 	}
 }

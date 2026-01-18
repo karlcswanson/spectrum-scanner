@@ -2,8 +2,10 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
+	"time"
 
 	"scanner/internal/models"
 )
@@ -289,4 +291,120 @@ func (s *Server) handleStopScan(w http.ResponseWriter, r *http.Request) {
 		"status":  "stopped",
 		"message": "Scanner stopped successfully",
 	})
+}
+
+// ============================================================================
+// Scan History Handlers (for timeline scrubber)
+// ============================================================================
+
+func (s *Server) handleGetTimeline(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		http.Error(w, "Scan history not enabled", http.StatusServiceUnavailable)
+		return
+	}
+
+	band := r.URL.Query().Get("band")
+	if band == "" {
+		http.Error(w, "band parameter required", http.StatusBadRequest)
+		return
+	}
+
+	hoursStr := r.URL.Query().Get("hours")
+	hours := 24 // default
+	if hoursStr != "" {
+		fmt.Sscanf(hoursStr, "%d", &hours)
+	}
+
+	entries, err := s.store.GetTimeline(band, hours)
+	if err != nil {
+		http.Error(w, "Failed to get timeline: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(entries)
+}
+
+func (s *Server) handleGetScanAtTime(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		http.Error(w, "Scan history not enabled", http.StatusServiceUnavailable)
+		return
+	}
+
+	band := r.URL.Query().Get("band")
+	if band == "" {
+		http.Error(w, "band parameter required", http.StatusBadRequest)
+		return
+	}
+
+	timeStr := r.URL.Query().Get("time")
+	if timeStr == "" {
+		http.Error(w, "time parameter required", http.StatusBadRequest)
+		return
+	}
+
+	// Parse time (RFC3339 format)
+	t, err := time.Parse(time.RFC3339, timeStr)
+	if err != nil {
+		http.Error(w, "Invalid time format (use RFC3339): "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	scan, err := s.store.GetScanAtTime(band, t)
+	if err != nil {
+		http.Error(w, "Failed to get scan: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if scan == nil {
+		http.Error(w, "No scan found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(scan)
+}
+
+func (s *Server) handleGetDecimatedScans(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		http.Error(w, "Scan history not enabled", http.StatusServiceUnavailable)
+		return
+	}
+
+	band := r.URL.Query().Get("band")
+	if band == "" {
+		http.Error(w, "band parameter required", http.StatusBadRequest)
+		return
+	}
+
+	hoursStr := r.URL.Query().Get("hours")
+	hours := 6 // default for scrubber preview
+	if hoursStr != "" {
+		fmt.Sscanf(hoursStr, "%d", &hours)
+	}
+
+	scans, err := s.store.GetDecimatedScans(band, hours)
+	if err != nil {
+		http.Error(w, "Failed to get decimated scans: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(scans)
+}
+
+func (s *Server) handleGetScanStats(w http.ResponseWriter, r *http.Request) {
+	if s.store == nil {
+		http.Error(w, "Scan history not enabled", http.StatusServiceUnavailable)
+		return
+	}
+
+	stats, err := s.store.GetStats()
+	if err != nil {
+		http.Error(w, "Failed to get stats: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(stats)
 }

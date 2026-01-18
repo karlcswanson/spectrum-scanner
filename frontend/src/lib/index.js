@@ -11,3 +11,6 @@ export { useError } from './useError.js'
 
 // Scan data management
 export { useScanData, scanBus } from './useScanData.js'
+
+// Scan history API (for timeline scrubber)
+export * from './scanApi.js'

@@ -168,11 +168,29 @@ const freqRange = computed(() => {
   return `${startMHz}-${stopMHz} MHz`
 })
 
-// Chart info
+// Format step size for display
+function formatStep(stepHz) {
+  if (!stepHz) return ''
+  if (stepHz >= 1000) {
+    return `${(stepHz / 1000).toFixed(1)} kHz`
+  }
+  return `${stepHz.toFixed(0)} Hz`
+}
+
+// Chart info - show scanner count and resolution from first trace
 const chartInfo = computed(() => {
   const activeTraces = traces.value.length
   const totalScanners = props.availableScanners.length
-  return `${activeTraces}/${totalScanners} scanners`
+  const countInfo = `${activeTraces}/${totalScanners} scanners`
+
+  // Add resolution info from first trace if available
+  const firstScan = traces.value[0]?.scan
+  if (firstScan?.power?.length && firstScan.step) {
+    const points = firstScan.power.length
+    const step = formatStep(firstScan.step)
+    return `${countInfo} | ${points} pts | ${step}`
+  }
+  return countInfo
 })
 
 function resetPeakHold() {

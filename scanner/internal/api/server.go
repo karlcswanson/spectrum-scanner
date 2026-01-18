@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 
+	"scanner/internal/db"
 	"scanner/internal/models"
 	"scanner/internal/mqtt"
 	"scanner/internal/scanner"
@@ -22,6 +23,7 @@ type Server struct {
 	engine       *scanner.Engine
 	config       *models.Config
 	mqtt         *mqtt.Client
+	store        *db.Store
 	mux          *http.ServeMux
 	wsHub        *WSHub
 	onConfigSave ConfigSaveFunc
@@ -58,6 +60,12 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("PUT /api/gain", s.handlePutGain)
 	s.mux.HandleFunc("PUT /api/bandwidth", s.handlePutBandwidth)
 
+	// Scan history endpoints (for timeline scrubber)
+	s.mux.HandleFunc("GET /api/scans/timeline", s.handleGetTimeline)
+	s.mux.HandleFunc("GET /api/scans/at-time", s.handleGetScanAtTime)
+	s.mux.HandleFunc("GET /api/scans/decimated", s.handleGetDecimatedScans)
+	s.mux.HandleFunc("GET /api/scans/stats", s.handleGetScanStats)
+
 	// WebSocket for live scan data
 	s.mux.HandleFunc("GET /ws/stream", s.handleWebSocket)
 
@@ -92,7 +100,9 @@ func (s *Server) setupRoutes() {
 		})
 		return
 	}
-	s.mux.Handle("GET /", http.FileServer(http.FS(webContent)))
+	// Use pattern with wildcard to serve all static files
+	// More specific API routes take precedence in Go 1.22+
+	s.mux.Handle("GET /{path...}", http.FileServer(http.FS(webContent)))
 }
 
 // ListenAndServe starts the HTTP server
@@ -128,4 +138,14 @@ func (s *Server) SetEngine(engine *scanner.Engine) {
 // SetMQTTClient sets or updates the MQTT client
 func (s *Server) SetMQTTClient(client *mqtt.Client) {
 	s.mqtt = client
+}
+
+// SetStore sets the SQLite store for scan history
+func (s *Server) SetStore(store *db.Store) {
+	s.store = store
+}
+
+// Store returns the SQLite store
+func (s *Server) Store() *db.Store {
+	return s.store
 }

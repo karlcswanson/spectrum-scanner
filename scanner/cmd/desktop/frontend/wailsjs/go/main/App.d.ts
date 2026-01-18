@@ -23,15 +23,23 @@ export function GetConfig():Promise<models.Config>;
 
 export function GetConfigPath():Promise<string>;
 
+export function GetDecimatedScans(arg1:string,arg2:number):Promise<Array<main.DecimatedScan>>;
+
 export function GetGain():Promise<Record<string, any>>;
 
 export function GetMQTTConfig():Promise<models.MQTTConfig>;
 
 export function GetPlatform():Promise<string>;
 
+export function GetScanAtTime(arg1:string,arg2:string):Promise<main.ScanEvent>;
+
+export function GetScanStats():Promise<Record<string, any>>;
+
 export function GetServerStatus():Promise<main.ServerStatus>;
 
 export function GetStatus():Promise<main.StatusEvent>;
+
+export function GetTimeline(arg1:string,arg2:number):Promise<Array<main.TimelineEntry>>;
 
 export function GetWebConfig():Promise<models.WebConfig>;
 

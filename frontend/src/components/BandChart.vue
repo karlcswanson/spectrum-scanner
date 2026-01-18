@@ -105,13 +105,23 @@ const activeScan = computed(() => {
   return historicalScan.value
 })
 
+// Format step size for display
+function formatStep(stepHz) {
+  if (!stepHz) return ''
+  if (stepHz >= 1000) {
+    return `${(stepHz / 1000).toFixed(1)} kHz`
+  }
+  return `${stepHz.toFixed(0)} Hz`
+}
+
 const scanInfo = computed(() => {
   const scan = activeScan.value
   if (!scan?.power) return '--'
   const points = scan.power.length
+  const step = formatStep(scan.step)
   const minP = Math.min(...scan.power).toFixed(1)
   const maxP = Math.max(...scan.power).toFixed(1)
-  return `${points} pts | ${minP} to ${maxP} dBm`
+  return `${points} pts | ${step} | ${minP} to ${maxP} dBm`
 })
 
 const freqRange = computed(() => {
@@ -396,6 +406,7 @@ watch(() => props.band.name, async () => {
       :showing-live="showingLive"
       :current-time="currentDisplayTime"
       :last-scan-time="scan?._receivedAt"
+      :tick="store.tick"
       class="mt-3"
       @preview="handleTimePreview"
       @select="handleTimeSelect"

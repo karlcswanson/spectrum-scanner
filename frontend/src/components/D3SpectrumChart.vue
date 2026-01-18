@@ -1,6 +1,9 @@
 <script setup>
 import { ref, watch, onMounted, onUnmounted, computed } from 'vue'
 import * as d3 from 'd3'
+// Import worker using Vite's ?worker&inline syntax for Wails compatibility
+// This embeds the worker as a blob URL instead of a separate file
+import TraceWorker from '../lib/traceWorker.js?worker&inline'
 
 const props = defineProps({
   // Array of traces to display: [{ id, name, scan, color }]
@@ -53,53 +56,91 @@ const container = ref(null)
 const svgRef = ref(null)
 
 // Cursor state for tooltip
-const cursorInfo = ref(null) // { x, y, freqMHz, powerDbm }
+const cursorInfo = ref(null)
 
-// Track historical data for averaging and peak detection
-const traceHistory = ref({}) // { traceId: { samples: [], peak: [], avg: [] } }
-const maxHistorySamples = 30 // Number of samples to keep for averaging
+// Web worker for trace calculations
+let traceWorker = null
+const workerResults = {} // { traceId: { peak, avg } }
 
 // Color palette for multiple traces
 const colorPalette = d3.schemeCategory10
 
+// Sanitize string for use as CSS class name (handles spaces, dots, special chars)
+function sanitizeClass(str) {
+  return String(str).replace(/[^a-zA-Z0-9]/g, '-')
+}
+
 // For event bus mode, store current scan data (non-reactive)
 let currentScanData = null
 
-// Get traces - either from event bus mode or legacy props
+// dB scale constants
+const minDb = -110
+const maxDb = -20
+
+// Initialize web worker
+function initWorker() {
+  if (typeof Worker !== 'undefined') {
+    try {
+      traceWorker = new TraceWorker()
+      traceWorker.onmessage = (e) => {
+        const { type, traceId, peak, avg } = e.data
+        if (type === 'result') {
+          workerResults[traceId] = { peak, avg }
+          // Trigger redraw with new peak/avg data
+          updateTraces()
+        }
+      }
+    } catch (err) {
+      console.warn('Failed to initialize trace worker:', err)
+      traceWorker = null
+    }
+  }
+}
+
+// Get traces - combine event bus mode, explicit traces, and legacy props
 function getTracesForDraw() {
-  // Event bus mode: use currentScanData (updated via bus handler)
-  if (props.bandName && props.getScanData) {
+  const result = []
+
+  // Event bus mode: add live scan if available and showCurrent is enabled
+  if (props.bandName && props.getScanData && props.showCurrent) {
     const scan = currentScanData
     if (scan?.power?.length > 0) {
-      return [{
+      result.push({
         id: props.bandName,
         name: 'Live',
         scan: scan,
         color: '#00d4ff',
-      }]
+        isLive: true,  // Flag to indicate this is a live trace (respects showCurrent)
+      })
     }
-    return []
   }
 
-  // Legacy mode: traces prop
+  // Add explicit traces (e.g., historical scans from scrubber)
+  // These are always drawn regardless of showCurrent
   if (props.traces.length > 0) {
-    return props.traces.map((trace, idx) => ({
-      id: trace.id || `trace-${idx}`,
-      name: trace.name || `Scanner ${idx + 1}`,
-      scan: trace.scan,
-      color: trace.color || colorPalette[idx % colorPalette.length],
-    }))
+    for (const [idx, trace] of props.traces.entries()) {
+      result.push({
+        id: trace.id || `trace-${idx}`,
+        name: trace.name || `Scanner ${idx + 1}`,
+        scan: trace.scan,
+        color: trace.color || colorPalette[idx % colorPalette.length],
+        isLive: false,  // Explicit traces always render
+      })
+    }
   }
-  // Legacy mode: single scan prop
-  if (props.scan?.power?.length > 0) {
-    return [{
+
+  // Legacy single scan prop
+  if (result.length === 0 && props.scan?.power?.length > 0) {
+    result.push({
       id: 'default',
       name: 'Scanner',
       scan: props.scan,
       color: '#00d4ff',
-    }]
+      isLive: true,
+    })
   }
-  return []
+
+  return result
 }
 
 // ATSC TV channels for UHF band labeling
@@ -116,24 +157,19 @@ function getATSCChannels(startMHz, stopMHz) {
   return channels
 }
 
-// WiFi 2.4 GHz channels (1-14)
-// Each channel is 22 MHz wide, centered on the channel frequency
+// WiFi 2.4 GHz channels
 function getWifi24Channels(startMHz, stopMHz) {
-  // Channel center frequencies (MHz)
   const channelCenters = {
     1: 2412, 2: 2417, 3: 2422, 4: 2427, 5: 2432, 6: 2437, 7: 2442,
     8: 2447, 9: 2452, 10: 2457, 11: 2462, 12: 2467, 13: 2472, 14: 2484
   }
-  // Non-overlapping channels (highlighted)
   const nonOverlapping = [1, 6, 11]
-  // Channel bandwidth is 22 MHz
   const channelWidth = 22
 
   const channels = []
   for (const [ch, center] of Object.entries(channelCenters)) {
     const lo = center - channelWidth / 2
     const hi = center + channelWidth / 2
-    // Include channel if any part is visible in the display range
     if (hi >= startMHz && lo <= stopMHz) {
       channels.push({
         num: parseInt(ch),
@@ -147,50 +183,7 @@ function getWifi24Channels(startMHz, stopMHz) {
   return channels
 }
 
-// Update history for averaging/peak detection
-function updateTraceHistory(traceId, power) {
-  if (!traceHistory.value[traceId]) {
-    traceHistory.value[traceId] = {
-      samples: [],
-      peak: [...power],
-      avg: [...power],
-    }
-  }
-
-  const history = traceHistory.value[traceId]
-
-  // Add current sample
-  history.samples.push([...power])
-
-  // Keep only recent samples
-  if (history.samples.length > maxHistorySamples) {
-    history.samples.shift()
-  }
-
-  // Update peak (max hold)
-  for (let i = 0; i < power.length; i++) {
-    if (history.peak[i] === undefined || power[i] > history.peak[i]) {
-      history.peak[i] = power[i]
-    }
-  }
-
-  // Update average
-  history.avg = new Array(power.length).fill(0)
-  for (const sample of history.samples) {
-    for (let i = 0; i < sample.length; i++) {
-      history.avg[i] += sample[i] / history.samples.length
-    }
-  }
-}
-
-// Reset peak hold for a trace
-function resetPeak(traceId) {
-  if (traceHistory.value[traceId]) {
-    traceHistory.value[traceId].peak = []
-  }
-}
-
-// Cache for chart structure to avoid rebuilding static elements
+// Cache for chart structure
 let chartCache = {
   width: 0,
   height: 0,
@@ -201,11 +194,12 @@ let chartCache = {
   margin: null,
   plotWidth: 0,
   plotHeight: 0,
+  lineGenerator: null,
 }
 
-// Main drawing function using D3
-function draw() {
-  if (!svgRef.value || !container.value) return
+// Build or rebuild the chart structure (axes, grid, etc.)
+function buildChartStructure() {
+  if (!svgRef.value || !container.value) return false
 
   const rect = container.value.getBoundingClientRect()
   const width = rect.width
@@ -214,16 +208,11 @@ function draw() {
   const plotWidth = width - margin.left - margin.right
   const plotHeight = height - margin.top - margin.bottom
 
-  // dB scale for spectrum analyzers
-  const minDb = -110
-  const maxDb = -20
-
-  // Determine frequency range from traces or band
+  // Determine frequency range
   let startHz, stopHz
   const validTraces = getTracesForDraw().filter(t => t.scan?.power?.length > 0)
 
   if (validTraces.length > 0) {
-    // Use the widest range from all traces
     startHz = Math.min(...validTraces.map(t => t.scan.hz_lo))
     stopHz = Math.max(...validTraces.map(t => t.scan.hz_hi))
   } else if (props.band) {
@@ -234,40 +223,35 @@ function draw() {
     stopHz = 608e6
   }
 
-  const startMHz = startHz / 1e6
-  const stopMHz = stopHz / 1e6
-  const spanMHz = stopMHz - startMHz
-
-  // Detect band type for channel overlays
-  const atscChannels = getATSCChannels(startMHz, stopMHz)
-  const wifi24Channels = getWifi24Channels(startMHz, stopMHz)
-  const isUHF = atscChannels.length > 0
-  const isWifi24 = wifi24Channels.length >= 3 // At least a few channels visible
-
-  const svg = d3.select(svgRef.value)
-
-  // Check if we need to rebuild the entire chart structure
+  // Check if rebuild needed
   const needsRebuild = chartCache.width !== width ||
     chartCache.height !== height ||
     chartCache.startHz !== startHz ||
     chartCache.stopHz !== stopHz
 
-  if (needsRebuild) {
-    // Full rebuild - clear everything
-    svg.selectAll('*').remove()
+  if (!needsRebuild) return true
 
-  // Set SVG dimensions
+  const startMHz = startHz / 1e6
+  const stopMHz = stopHz / 1e6
+  const spanMHz = stopMHz - startMHz
+
+  const atscChannels = getATSCChannels(startMHz, stopMHz)
+  const wifi24Channels = getWifi24Channels(startMHz, stopMHz)
+  const isUHF = atscChannels.length > 0
+  const isWifi24 = wifi24Channels.length >= 3
+
+  const svg = d3.select(svgRef.value)
+  svg.selectAll('*').remove()
+
   svg
     .attr('width', width)
     .attr('height', height)
     .style('background', '#0a0a1a')
 
-  // Create chart group with margins
   const chart = svg
     .append('g')
     .attr('transform', `translate(${margin.left},${margin.top})`)
 
-  // Create scales
   const xScale = d3.scaleLinear()
     .domain([startHz, stopHz])
     .range([0, plotWidth])
@@ -276,88 +260,60 @@ function draw() {
     .domain([minDb, maxDb])
     .range([plotHeight, 0])
 
-  // Draw grid lines
+  // Grid
   const gridGroup = chart.append('g').attr('class', 'grid')
 
-  // Vertical grid lines
   if (isUHF) {
-    // UHF: 6 MHz channel boundaries
     atscChannels.forEach((ch, idx) => {
       if (ch.start >= startMHz) {
-        const x = xScale(ch.start * 1e6)
         gridGroup.append('line')
-          .attr('x1', x).attr('y1', 0)
-          .attr('x2', x).attr('y2', plotHeight)
-          .attr('stroke', '#1a1a3e')
-          .attr('stroke-width', 1)
+          .attr('x1', xScale(ch.start * 1e6)).attr('y1', 0)
+          .attr('x2', xScale(ch.start * 1e6)).attr('y2', plotHeight)
+          .attr('stroke', '#1a1a3e').attr('stroke-width', 1)
       }
       if (idx === atscChannels.length - 1 && ch.end <= stopMHz) {
-        const x = xScale(ch.end * 1e6)
         gridGroup.append('line')
-          .attr('x1', x).attr('y1', 0)
-          .attr('x2', x).attr('y2', plotHeight)
-          .attr('stroke', '#1a1a3e')
-          .attr('stroke-width', 1)
+          .attr('x1', xScale(ch.end * 1e6)).attr('y1', 0)
+          .attr('x2', xScale(ch.end * 1e6)).attr('y2', plotHeight)
+          .attr('stroke', '#1a1a3e').attr('stroke-width', 1)
       }
     })
   } else if (isWifi24) {
-    // WiFi 2.4 GHz: channel bands (22 MHz wide)
-    // Draw shaded regions for non-overlapping channels first (background)
     wifi24Channels.filter(ch => ch.primary).forEach(ch => {
-      const xLo = xScale(ch.lo * 1e6)
-      const xHi = xScale(ch.hi * 1e6)
       gridGroup.append('rect')
-        .attr('x', xLo)
-        .attr('y', 0)
-        .attr('width', xHi - xLo)
+        .attr('x', xScale(ch.lo * 1e6)).attr('y', 0)
+        .attr('width', xScale(ch.hi * 1e6) - xScale(ch.lo * 1e6))
         .attr('height', plotHeight)
-        .attr('fill', '#1a2a24')
-        .attr('opacity', 0.5)
+        .attr('fill', '#1a2a24').attr('opacity', 0.5)
     })
-
-    // Draw channel edge lines for all channels
     wifi24Channels.forEach(ch => {
-      const xLo = xScale(ch.lo * 1e6)
-      const xHi = xScale(ch.hi * 1e6)
       const lineColor = ch.primary ? '#2a5a4e' : '#1a1a3e'
-      const lineWidth = ch.primary ? 1 : 0.5
-
-      // Low edge
       gridGroup.append('line')
-        .attr('x1', xLo).attr('y1', 0)
-        .attr('x2', xLo).attr('y2', plotHeight)
-        .attr('stroke', lineColor)
-        .attr('stroke-width', lineWidth)
-
-      // High edge
+        .attr('x1', xScale(ch.lo * 1e6)).attr('y1', 0)
+        .attr('x2', xScale(ch.lo * 1e6)).attr('y2', plotHeight)
+        .attr('stroke', lineColor).attr('stroke-width', ch.primary ? 1 : 0.5)
       gridGroup.append('line')
-        .attr('x1', xHi).attr('y1', 0)
-        .attr('x2', xHi).attr('y2', plotHeight)
-        .attr('stroke', lineColor)
-        .attr('stroke-width', lineWidth)
+        .attr('x1', xScale(ch.hi * 1e6)).attr('y1', 0)
+        .attr('x2', xScale(ch.hi * 1e6)).attr('y2', plotHeight)
+        .attr('stroke', lineColor).attr('stroke-width', ch.primary ? 1 : 0.5)
     })
   } else {
-    // Default frequency grid
     const freqStep = spanMHz > 100 ? 20 : spanMHz > 50 ? 10 : spanMHz > 20 ? 5 : spanMHz > 10 ? 2 : 1
     for (let f = Math.ceil(startMHz / freqStep) * freqStep; f <= stopMHz; f += freqStep) {
-      const x = xScale(f * 1e6)
       gridGroup.append('line')
-        .attr('x1', x).attr('y1', 0)
-        .attr('x2', x).attr('y2', plotHeight)
-        .attr('stroke', '#1a1a3e')
-        .attr('stroke-width', 1)
+        .attr('x1', xScale(f * 1e6)).attr('y1', 0)
+        .attr('x2', xScale(f * 1e6)).attr('y2', plotHeight)
+        .attr('stroke', '#1a1a3e').attr('stroke-width', 1)
     }
   }
 
-  // Horizontal grid lines (dB)
+  // Horizontal grid
   const dbStep = 20
   for (let db = minDb; db <= maxDb; db += dbStep) {
-    const y = yScale(db)
     gridGroup.append('line')
-      .attr('x1', 0).attr('y1', y)
-      .attr('x2', plotWidth).attr('y2', y)
-      .attr('stroke', '#1a1a3e')
-      .attr('stroke-width', 1)
+      .attr('x1', 0).attr('y1', yScale(db))
+      .attr('x2', plotWidth).attr('y2', yScale(db))
+      .attr('stroke', '#1a1a3e').attr('stroke-width', 1)
   }
 
   // X-axis
@@ -365,297 +321,241 @@ function draw() {
     .attr('transform', `translate(0,${plotHeight})`)
 
   if (isUHF) {
-    // Show frequency at channel boundaries
     const tickValues = []
     atscChannels.forEach((ch, idx) => {
       if (ch.start >= startMHz) tickValues.push(ch.start * 1e6)
       if (idx === atscChannels.length - 1 && ch.end <= stopMHz) tickValues.push(ch.end * 1e6)
     })
+    xAxisGroup.call(d3.axisBottom(xScale).tickValues(tickValues).tickFormat(d => (d / 1e6).toFixed(0)))
 
-    xAxisGroup.call(
-      d3.axisBottom(xScale)
-        .tickValues(tickValues)
-        .tickFormat(d => (d / 1e6).toFixed(0))
-    )
-      .selectAll('text')
-      .attr('fill', '#666')
-      .style('font-size', '10px')
-
-    xAxisGroup.selectAll('line').attr('stroke', '#666')
-    xAxisGroup.select('.domain').attr('stroke', '#666')
-
-    // Channel numbers below
-    const channelGroup = chart.append('g')
-      .attr('transform', `translate(0,${plotHeight + 28})`)
-
+    const channelGroup = chart.append('g').attr('transform', `translate(0,${plotHeight + 28})`)
     atscChannels.forEach(ch => {
       const x = xScale(ch.center * 1e6)
       if (x > 10 && x < plotWidth - 10) {
         channelGroup.append('text')
-          .attr('x', x)
-          .attr('y', 0)
-          .attr('text-anchor', 'middle')
-          .attr('fill', '#00d4ff')
-          .style('font-size', '9px')
-          .text(ch.num)
+          .attr('x', x).attr('y', 0).attr('text-anchor', 'middle')
+          .attr('fill', '#00d4ff').style('font-size', '9px').text(ch.num)
       }
     })
   } else if (isWifi24) {
-    // WiFi 2.4 GHz: show frequency at channel boundaries (like ATSC)
-    // Use boundaries of non-overlapping channels for cleaner axis
     const tickValues = []
     wifi24Channels.filter(ch => ch.primary).forEach((ch, idx, arr) => {
       if (ch.lo >= startMHz) tickValues.push(ch.lo * 1e6)
       if (idx === arr.length - 1 && ch.hi <= stopMHz) tickValues.push(ch.hi * 1e6)
     })
+    xAxisGroup.call(d3.axisBottom(xScale).tickValues(tickValues).tickFormat(d => (d / 1e6).toFixed(0)))
 
-    xAxisGroup.call(
-      d3.axisBottom(xScale)
-        .tickValues(tickValues)
-        .tickFormat(d => (d / 1e6).toFixed(0))
-    )
-      .selectAll('text')
-      .attr('fill', '#666')
-      .style('font-size', '10px')
-
-    xAxisGroup.selectAll('line').attr('stroke', '#666')
-    xAxisGroup.select('.domain').attr('stroke', '#666')
-
-    // Channel numbers centered in each band (primary channels highlighted)
-    const channelGroup = chart.append('g')
-      .attr('transform', `translate(0,${plotHeight + 28})`)
-
+    const channelGroup = chart.append('g').attr('transform', `translate(0,${plotHeight + 28})`)
     wifi24Channels.forEach(ch => {
       const x = xScale(ch.center * 1e6)
       if (x > 10 && x < plotWidth - 10) {
         channelGroup.append('text')
-          .attr('x', x)
-          .attr('y', 0)
-          .attr('text-anchor', 'middle')
+          .attr('x', x).attr('y', 0).attr('text-anchor', 'middle')
           .attr('fill', ch.primary ? '#22c55e' : '#666')
           .attr('font-weight', ch.primary ? 'bold' : 'normal')
-          .style('font-size', '9px')
-          .text(ch.num)
+          .style('font-size', '9px').text(ch.num)
       }
     })
   } else {
-    // Default axis
-    xAxisGroup.call(
-      d3.axisBottom(xScale)
-        .ticks(10)
-        .tickFormat(d => (d / 1e6).toFixed(1))
-    )
-      .selectAll('text')
-      .attr('fill', '#666')
-      .style('font-size', '10px')
-
-    xAxisGroup.selectAll('line').attr('stroke', '#666')
-    xAxisGroup.select('.domain').attr('stroke', '#666')
+    xAxisGroup.call(d3.axisBottom(xScale).ticks(10).tickFormat(d => (d / 1e6).toFixed(1)))
   }
+
+  xAxisGroup.selectAll('text').attr('fill', '#666').style('font-size', '10px')
+  xAxisGroup.selectAll('line').attr('stroke', '#666')
+  xAxisGroup.select('.domain').attr('stroke', '#666')
 
   // Y-axis
   const yAxisGroup = chart.append('g')
-  yAxisGroup.call(
-    d3.axisLeft(yScale)
-      .tickValues(d3.range(minDb, maxDb + 1, dbStep))
-      .tickFormat(d => `${d}`)
-  )
-    .selectAll('text')
-    .attr('fill', '#666')
-    .style('font-size', '10px')
-
+  yAxisGroup.call(d3.axisLeft(yScale).tickValues(d3.range(minDb, maxDb + 1, dbStep)).tickFormat(d => `${d}`))
+  yAxisGroup.selectAll('text').attr('fill', '#666').style('font-size', '10px')
   yAxisGroup.selectAll('line').attr('stroke', '#666')
   yAxisGroup.select('.domain').attr('stroke', '#666')
 
-  // Y-axis label
+  // Axis labels
   chart.append('text')
     .attr('transform', 'rotate(-90)')
-    .attr('x', -plotHeight / 2)
-    .attr('y', -40)
-    .attr('text-anchor', 'middle')
-    .attr('fill', '#666')
-    .style('font-size', '10px')
-    .text('dBm')
+    .attr('x', -plotHeight / 2).attr('y', -40)
+    .attr('text-anchor', 'middle').attr('fill', '#666')
+    .style('font-size', '10px').text('dBm')
 
-  // X-axis label
   chart.append('text')
-    .attr('x', plotWidth / 2)
-    .attr('y', plotHeight + 42)
-    .attr('text-anchor', 'middle')
-    .attr('fill', '#666')
-    .style('font-size', '10px')
-    .text('MHz')
+    .attr('x', plotWidth / 2).attr('y', plotHeight + 42)
+    .attr('text-anchor', 'middle').attr('fill', '#666')
+    .style('font-size', '10px').text('MHz')
 
-  // Create traces group (will be cleared and redrawn on each update)
+  // Traces group - will hold reusable path elements
   chart.append('g').attr('class', 'traces')
 
-  // Create legend group
+  // Legend group
   svg.append('g').attr('class', 'legend')
     .attr('transform', `translate(${width - margin.right - 10}, ${margin.top + 10})`)
 
-  // Create cursor overlay group (for crosshairs and tooltip)
+  // Cursor overlay
   const cursorGroup = chart.append('g').attr('class', 'cursor-overlay')
+  cursorGroup.append('line').attr('class', 'cursor-line-v')
+    .attr('y1', 0).attr('y2', plotHeight)
+    .attr('stroke', '#666').attr('stroke-width', 1)
+    .attr('stroke-dasharray', '4,4').attr('opacity', 0)
+  cursorGroup.append('line').attr('class', 'cursor-line-h')
+    .attr('x1', 0).attr('x2', plotWidth)
+    .attr('stroke', '#666').attr('stroke-width', 1)
+    .attr('stroke-dasharray', '4,4').attr('opacity', 0)
+  cursorGroup.append('circle').attr('class', 'cursor-dot')
+    .attr('r', 4).attr('fill', '#00d4ff').attr('opacity', 0)
 
-  // Vertical cursor line
-  cursorGroup.append('line')
-    .attr('class', 'cursor-line-v')
-    .attr('y1', 0)
-    .attr('y2', plotHeight)
-    .attr('stroke', '#666')
-    .attr('stroke-width', 1)
-    .attr('stroke-dasharray', '4,4')
-    .attr('opacity', 0)
-    .attr('pointer-events', 'none')
+  // Mouse overlay
+  chart.append('rect').attr('class', 'mouse-overlay')
+    .attr('width', plotWidth).attr('height', plotHeight)
+    .attr('fill', 'transparent').attr('pointer-events', 'all')
 
-  // Horizontal cursor line
-  cursorGroup.append('line')
-    .attr('class', 'cursor-line-h')
-    .attr('x1', 0)
-    .attr('x2', plotWidth)
-    .attr('stroke', '#666')
-    .attr('stroke-width', 1)
-    .attr('stroke-dasharray', '4,4')
-    .attr('opacity', 0)
-    .attr('pointer-events', 'none')
-
-  // Cursor dot
-  cursorGroup.append('circle')
-    .attr('class', 'cursor-dot')
-    .attr('r', 4)
-    .attr('fill', '#00d4ff')
-    .attr('opacity', 0)
-    .attr('pointer-events', 'none')
-
-  // Invisible overlay rect for mouse tracking
-  chart.append('rect')
-    .attr('class', 'mouse-overlay')
-    .attr('width', plotWidth)
-    .attr('height', plotHeight)
-    .attr('fill', 'transparent')
-    .attr('pointer-events', 'all')
-
-  // Update cache
-  chartCache = { width, height, startHz, stopHz, xScale, yScale, margin, plotWidth, plotHeight }
-  }
-
-  // Use cached values (either just created or from previous render)
-  const xScale = chartCache.xScale
-  const yScale = chartCache.yScale
-  const cachedPlotWidth = chartCache.plotWidth
-
-  // Create line generator
+  // Line generator
   const lineGenerator = d3.line()
     .x(d => d.x)
     .y(d => d.y)
     .curve(d3.curveLinear)
 
-  // Clear and redraw traces (fast path - only updates the lines)
-  const tracesGroup = svg.select('.traces')
-  tracesGroup.selectAll('*').remove()
+  // Update cache
+  chartCache = { width, height, startHz, stopHz, xScale, yScale, margin, plotWidth, plotHeight, lineGenerator }
 
-  getTracesForDraw().forEach((trace, traceIdx) => {
+  // Setup mouse handlers
+  setupMouseHandlers()
+
+  return true
+}
+
+// Update just the trace paths (fast path)
+function updateTraces() {
+  if (!svgRef.value) return
+
+  const svg = d3.select(svgRef.value)
+  const tracesGroup = svg.select('.traces')
+  const traces = getTracesForDraw()
+
+  if (!chartCache.xScale || !chartCache.lineGenerator) return
+
+  const { xScale, yScale, lineGenerator, plotWidth } = chartCache
+
+  // Convert power to points
+  function powerToPoints(power, hz_lo, hz_hi) {
+    const points = []
+    const len = power.length
+    // Data is pre-decimated, but still limit if very wide
+    const step = Math.max(1, Math.floor(len / plotWidth))
+
+    for (let i = 0; i < len; i += step) {
+      const freq = hz_lo + (i / len) * (hz_hi - hz_lo)
+      const db = Math.max(minDb, Math.min(maxDb, power[i]))
+      points.push({ x: xScale(freq), y: yScale(db) })
+    }
+    return points
+  }
+
+  // D3 update pattern for traces (use sanitized ID for CSS class names)
+  traces.forEach((trace) => {
     if (!trace.scan?.power?.length) return
 
-    const { hz_lo, hz_hi, step, power } = trace.scan
+    const { hz_lo, hz_hi, power } = trace.scan
+    const traceId = trace.id
+    const safeId = sanitizeClass(traceId)
 
-    // Update history for this trace
-    updateTraceHistory(trace.id, power)
-    const history = traceHistory.value[trace.id]
+    // Send to worker for peak/avg calculation
+    if (traceWorker && (props.showPeak || props.showAverage)) {
+      traceWorker.postMessage({ type: 'update', traceId, power })
+    }
 
-    // Convert power data to screen coordinates
-    function powerToPoints(powerData) {
-      const points = []
-      const sampleStep = Math.max(1, Math.floor(powerData.length / cachedPlotWidth))
+    // Current trace - use D3 update pattern
+    // Live traces respect showCurrent toggle; explicit/historical traces always render
+    const shouldShowTrace = trace.isLive ? props.showCurrent : true
+    if (shouldShowTrace) {
+      const currentPoints = powerToPoints(power, hz_lo, hz_hi)
+      let currentPath = tracesGroup.select(`.trace-current-${safeId}`)
 
-      for (let i = 0; i < powerData.length; i += sampleStep) {
-        const freq = hz_lo + (i / powerData.length) * (hz_hi - hz_lo)
-        const db = Math.max(minDb, Math.min(maxDb, powerData[i]))
-        points.push({
-          x: xScale(freq),
-          y: yScale(db),
-        })
+      if (currentPath.empty()) {
+        currentPath = tracesGroup.append('path')
+          .attr('class', `trace-current-${safeId}`)
+          .attr('fill', 'none')
+          .attr('stroke', trace.color)
+          .attr('stroke-width', 1)
       }
-      return points
+      currentPath.datum(currentPoints).attr('d', lineGenerator)
+    } else {
+      tracesGroup.select(`.trace-current-${safeId}`).remove()
     }
 
-    // Draw peak trace (behind current)
-    if (props.showPeak && history.peak.length > 0) {
-      const peakPoints = powerToPoints(history.peak)
-      tracesGroup.append('path')
-        .datum(peakPoints)
-        .attr('d', lineGenerator)
-        .attr('fill', 'none')
-        .attr('stroke', d3.color(trace.color).darker(0.5).toString())
-        .attr('stroke-width', 1)
-        .attr('opacity', 0.5)
+    // Peak trace
+    const workerData = workerResults[traceId]
+    if (props.showPeak && workerData?.peak) {
+      const peakPoints = powerToPoints(workerData.peak, hz_lo, hz_hi)
+      let peakPath = tracesGroup.select(`.trace-peak-${safeId}`)
+
+      if (peakPath.empty()) {
+        peakPath = tracesGroup.append('path')
+          .attr('class', `trace-peak-${safeId}`)
+          .attr('fill', 'none')
+          .attr('stroke', d3.color(trace.color).darker(0.5).toString())
+          .attr('stroke-width', 1)
+          .attr('opacity', 0.5)
+      }
+      peakPath.datum(peakPoints).attr('d', lineGenerator)
+    } else {
+      tracesGroup.select(`.trace-peak-${safeId}`).remove()
     }
 
-    // Draw average trace
-    if (props.showAverage && history.avg.length > 0) {
-      const avgPoints = powerToPoints(history.avg)
-      tracesGroup.append('path')
-        .datum(avgPoints)
-        .attr('d', lineGenerator)
-        .attr('fill', 'none')
-        .attr('stroke', d3.color(trace.color).brighter(0.3).toString())
-        .attr('stroke-width', 1.5)
-        .attr('stroke-dasharray', '4,2')
-        .attr('opacity', 0.7)
-    }
+    // Average trace
+    if (props.showAverage && workerData?.avg) {
+      const avgPoints = powerToPoints(workerData.avg, hz_lo, hz_hi)
+      let avgPath = tracesGroup.select(`.trace-avg-${safeId}`)
 
-    // Draw current trace
-    if (props.showCurrent) {
-      const currentPoints = powerToPoints(power)
-      tracesGroup.append('path')
-        .datum(currentPoints)
-        .attr('d', lineGenerator)
-        .attr('fill', 'none')
-        .attr('stroke', trace.color)
-        .attr('stroke-width', 1)
+      if (avgPath.empty()) {
+        avgPath = tracesGroup.append('path')
+          .attr('class', `trace-avg-${safeId}`)
+          .attr('fill', 'none')
+          .attr('stroke', d3.color(trace.color).brighter(0.3).toString())
+          .attr('stroke-width', 1.5)
+          .attr('stroke-dasharray', '4,2')
+          .attr('opacity', 0.7)
+      }
+      avgPath.datum(avgPoints).attr('d', lineGenerator)
+    } else {
+      tracesGroup.select(`.trace-avg-${safeId}`).remove()
     }
   })
 
-  // Legend (only if multiple traces) - update existing legend group
+  // Update legend
+  updateLegend(traces)
+}
+
+function updateLegend(traces) {
+  const svg = d3.select(svgRef.value)
   const legendGroup = svg.select('.legend')
   legendGroup.selectAll('*').remove()
-  if (getTracesForDraw().length > 1) {
 
-    getTracesForDraw().forEach((trace, idx) => {
+  if (traces.length > 1) {
+    traces.forEach((trace, idx) => {
       const legendItem = legendGroup.append('g')
         .attr('transform', `translate(0, ${idx * 18})`)
-
       legendItem.append('line')
-        .attr('x1', -30)
-        .attr('y1', 0)
-        .attr('x2', -10)
-        .attr('y2', 0)
-        .attr('stroke', trace.color)
-        .attr('stroke-width', 2)
-
+        .attr('x1', -30).attr('y1', 0).attr('x2', -10).attr('y2', 0)
+        .attr('stroke', trace.color).attr('stroke-width', 2)
       legendItem.append('text')
-        .attr('x', -35)
-        .attr('y', 4)
-        .attr('text-anchor', 'end')
-        .attr('fill', '#999')
-        .style('font-size', '10px')
-        .text(trace.name)
+        .attr('x', -35).attr('y', 4).attr('text-anchor', 'end')
+        .attr('fill', '#999').style('font-size', '10px').text(trace.name)
     })
   }
+}
 
-  // Set up mouse event handlers for cursor tracking
+function setupMouseHandlers() {
+  const svg = d3.select(svgRef.value)
   const mouseOverlay = svg.select('.mouse-overlay')
   const cursorLineV = svg.select('.cursor-line-v')
   const cursorLineH = svg.select('.cursor-line-h')
   const cursorDot = svg.select('.cursor-dot')
 
-  // Helper to find power at frequency from the primary trace
   function getPowerAtFreq(freqHz) {
     const trace = getTracesForDraw()[0]
     if (!trace?.scan?.power?.length) return null
-
     const { hz_lo, hz_hi, power } = trace.scan
     if (freqHz < hz_lo || freqHz > hz_hi) return null
-
     const idx = Math.round(((freqHz - hz_lo) / (hz_hi - hz_lo)) * (power.length - 1))
     if (idx < 0 || idx >= power.length) return null
     return power[idx]
@@ -664,17 +564,15 @@ function draw() {
   mouseOverlay
     .on('mousemove', (event) => {
       const [mx, my] = d3.pointer(event)
-      const freqHz = xScale.invert(mx)
+      const freqHz = chartCache.xScale.invert(mx)
       const freqMHz = freqHz / 1e6
       const powerDbm = getPowerAtFreq(freqHz)
 
       if (powerDbm !== null) {
-        const powerY = yScale(powerDbm)
-
+        const powerY = chartCache.yScale(powerDbm)
         cursorLineV.attr('x1', mx).attr('x2', mx).attr('opacity', 0.6)
         cursorLineH.attr('y1', powerY).attr('y2', powerY).attr('opacity', 0.6)
         cursorDot.attr('cx', mx).attr('cy', powerY).attr('opacity', 1)
-
         cursorInfo.value = {
           x: mx + chartCache.margin.left,
           y: powerY + chartCache.margin.top,
@@ -691,50 +589,55 @@ function draw() {
     })
 }
 
+// Main draw function
+function draw() {
+  buildChartStructure()
+  updateTraces()
+}
+
 // Resize handling
 let resizeObserver = null
 
 function setupResizeObserver() {
   if (container.value) {
     resizeObserver = new ResizeObserver(() => {
+      // Force rebuild on resize
+      chartCache.width = 0
       draw()
     })
     resizeObserver.observe(container.value)
   }
 }
 
-// Event bus handler for redraw signals
+// Event bus handler
 function handleRedrawSignal(bandName) {
   if (bandName === props.bandName && props.getScanData) {
     currentScanData = props.getScanData(bandName)
-    draw()
+    updateTraces()  // Fast path - just update traces
   }
 }
 
-// Cleanup function for event bus subscription
 let unsubscribeBus = null
 
-// Only watch props in legacy mode (not event bus mode)
-watch(() => [props.scan, props.traces, props.showCurrent, props.showAverage, props.showPeak], () => {
-  if (!props.scanBus) {
-    draw()
-  }
-}, { deep: true })
-
-// Also redraw when display mode changes in event bus mode
+// Watch for display mode changes
 watch(() => [props.showCurrent, props.showAverage, props.showPeak], () => {
-  if (props.scanBus) {
-    draw()
-  }
+  updateTraces()
 })
 
+// Watch for prop changes (traces always trigger redraw for historical playback)
+watch(() => [props.scan, props.traces], () => {
+  // Force chart rebuild when traces change (may have different frequency range)
+  chartCache.startHz = 0
+  chartCache.stopHz = 0
+  draw()
+}, { deep: true })
+
 onMounted(() => {
+  initWorker()
   setupResizeObserver()
 
-  // Subscribe to event bus if in event bus mode (VueUse API)
   if (props.scanBus && props.bandName) {
     unsubscribeBus = props.scanBus.on(handleRedrawSignal)
-    // Initial data fetch
     if (props.getScanData) {
       currentScanData = props.getScanData(props.bandName)
     }
@@ -744,21 +647,25 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
-  if (resizeObserver) {
-    resizeObserver.disconnect()
-  }
-
-  // Unsubscribe from event bus (VueUse returns cleanup function)
-  if (unsubscribeBus) {
-    unsubscribeBus()
-  }
+  if (resizeObserver) resizeObserver.disconnect()
+  if (unsubscribeBus) unsubscribeBus()
+  if (traceWorker) traceWorker.terminate()
 })
 
-// Expose reset function for parent components
+// Expose reset functions
+function resetPeak(traceId) {
+  if (traceWorker) {
+    traceWorker.postMessage({ type: 'resetPeak', traceId })
+  }
+  if (workerResults[traceId]) {
+    delete workerResults[traceId].peak
+  }
+}
+
 defineExpose({
   resetPeak,
   resetAllPeaks: () => {
-    Object.keys(traceHistory.value).forEach(id => resetPeak(id))
+    Object.keys(workerResults).forEach(id => resetPeak(id))
   }
 })
 </script>
@@ -767,7 +674,6 @@ defineExpose({
   <div ref="container" class="d3-spectrum-chart w-full relative">
     <svg ref="svgRef" class="w-full rounded" :style="{ height: `${height}px` }"></svg>
 
-    <!-- Cursor tooltip -->
     <div
       v-if="cursorInfo"
       class="absolute pointer-events-none bg-gray-900/90 border border-cyan-500/50 rounded px-2 py-1 text-xs"

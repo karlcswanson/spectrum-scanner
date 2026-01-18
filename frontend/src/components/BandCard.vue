@@ -1,7 +1,8 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import D3SpectrumChart from './D3SpectrumChart.vue'
-import { formatFreqRange } from '@lib'
+import TimeScrubber from './TimeScrubber.vue'
+import { formatFreqRange, isScanHistoryAvailable, fetchTimeline, fetchScanAtTime, fetchDecimatedScans, buildDecimatedCache, findClosestInCache } from '@lib'
 
 const props = defineProps({
   band: { type: Object, required: true },
@@ -10,6 +11,9 @@ const props = defineProps({
   getScanInfo: { type: Function, required: true },
   scanUpdateCount: { type: Number, default: 0 },
   onExport: { type: Function, default: null },
+  // Enable timeline scrubber (requires local SQLite or API)
+  showTimeline: { type: Boolean, default: true },
+  timelineHours: { type: Number, default: 6 },
 })
 
 // Trace display modes
@@ -19,6 +23,33 @@ const showPeak = ref(false)
 
 // Chart ref for peak reset
 const chartRef = ref(null)
+
+// Historical playback state
+const isLive = ref(true)
+const historicalScan = ref(null)
+
+// Timeline data (fetched from local API)
+const timeline = ref([])
+const decimatedCache = ref(new Map())
+
+// Check if timeline feature is available
+const timelineAvailable = computed(() => props.showTimeline && isScanHistoryAvailable())
+
+// Are we showing live data right now?
+const showingLive = computed(() => {
+  return isLive.value && !!props.getScanData(props.band.name)
+})
+
+// Current time being displayed (for scrubber positioning)
+const currentDisplayTime = computed(() => {
+  if (showingLive.value) {
+    return null // Live mode - scrubber at "now"
+  }
+  if (historicalScan.value?.timestamp) {
+    return new Date(historicalScan.value.timestamp)
+  }
+  return null
+})
 
 // Format frequency range for display
 function formatBandRange() {
@@ -34,6 +65,28 @@ function getBandForChart() {
   }
 }
 
+// Build traces for chart (live + historical)
+const chartTraces = computed(() => {
+  const traces = []
+
+  // Historical trace (yellow, when scrubbing)
+  if (!isLive.value && historicalScan.value) {
+    traces.push({
+      id: `${props.band.name}-historical`,
+      name: 'Historical',
+      scan: {
+        hz_lo: historicalScan.value.hz_lo,
+        hz_hi: historicalScan.value.hz_hi,
+        step: historicalScan.value.step,
+        power: historicalScan.value.power,
+      },
+      color: '#fbbf24', // yellow
+    })
+  }
+
+  return traces
+})
+
 function resetPeakHold() {
   if (chartRef.value) {
     chartRef.value.resetAllPeaks()
@@ -46,7 +99,84 @@ function handleExport() {
   }
 }
 
+// Current time range (for refetching)
+const currentTimeRange = ref({ hours: props.timelineHours })
+
+// Load timeline and decimated cache
+async function loadTimeline(options = null) {
+  if (!timelineAvailable.value) return
+
+  const rangeOpts = options || currentTimeRange.value
+  const hours = rangeOpts.hours || props.timelineHours
+
+  // Fetch timeline entries
+  const entries = await fetchTimeline(props.band.name, hours)
+  timeline.value = entries
+
+  // Fetch decimated scans for fast preview during scrubbing
+  const decimated = await fetchDecimatedScans(props.band.name, hours)
+  decimatedCache.value = buildDecimatedCache(decimated)
+}
+
+// Handle time range change from scrubber
+async function handleRangeChange(rangeOpts) {
+  currentTimeRange.value = rangeOpts
+  await loadTimeline(rangeOpts)
+}
+
+// Preview handler (while dragging) - use decimated cache for speed
+function handleTimePreview(time) {
+  isLive.value = false
+  const scan = findClosestInCache(decimatedCache.value, time)
+  if (scan) {
+    historicalScan.value = {
+      hz_lo: scan.hz_lo,
+      hz_hi: scan.hz_hi,
+      step: scan.step,
+      power: scan.power,
+      timestamp: scan.timestamp,
+    }
+  }
+}
+
+// Select handler (on release) - fetch full resolution scan
+async function handleTimeSelect(time) {
+  isLive.value = false
+  const scan = await fetchScanAtTime(props.band.name, time)
+  if (scan) {
+    historicalScan.value = {
+      hz_lo: scan.hz_lo,
+      hz_hi: scan.hz_hi,
+      step: scan.step,
+      power: scan.power,
+      timestamp: scan.timestamp,
+    }
+  }
+}
+
+function handleLive() {
+  isLive.value = true
+  historicalScan.value = null
+}
+
 const hasScanData = () => !!props.getScanData(props.band.name)
+
+// Load timeline on mount
+onMounted(() => {
+  loadTimeline()
+})
+
+// Reload timeline when band changes
+watch(() => props.band.name, () => {
+  loadTimeline()
+})
+
+// Refresh timeline when new scans arrive (if in live mode)
+watch(() => props.scanUpdateCount, () => {
+  if (isLive.value && timelineAvailable.value) {
+    loadTimeline()
+  }
+})
 </script>
 
 <template>
@@ -57,6 +187,9 @@ const hasScanData = () => !!props.getScanData(props.band.name)
           {{ band.name }}
           <span class="text-gray-500 font-normal text-sm ml-2">
             ({{ formatBandRange() }})
+          </span>
+          <span v-if="!isLive" class="text-yellow-400 text-xs ml-2">
+            Historical
           </span>
         </h2>
         <p class="text-xs text-gray-500" :data-v="scanUpdateCount">
@@ -108,10 +241,29 @@ const hasScanData = () => !!props.getScanData(props.band.name)
       :scan-bus="scanBus"
       :get-scan-data="getScanData"
       :band="getBandForChart()"
+      :traces="chartTraces"
       :height="300"
-      :show-current="showCurrent"
+      :show-current="showCurrent && isLive"
       :show-average="showAverage"
       :show-peak="showPeak"
+    />
+
+    <!-- Timeline scrubber for historical playback -->
+    <TimeScrubber
+      v-if="timelineAvailable"
+      :scanner-id="'local'"
+      :band-name="band.name"
+      :timeline="timeline"
+      :max-hours="timelineHours"
+      :height="50"
+      :showing-live="showingLive"
+      :current-time="currentDisplayTime"
+      :tick="scanUpdateCount"
+      class="mt-3"
+      @preview="handleTimePreview"
+      @select="handleTimeSelect"
+      @live="handleLive"
+      @range-change="handleRangeChange"
     />
   </div>
 </template>

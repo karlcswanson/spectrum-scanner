@@ -9,12 +9,14 @@ import (
 	"path/filepath"
 	goruntime "runtime"
 	"sync"
+	"time"
 
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"scanner/internal/api"
 	"scanner/internal/backend/pluto"
 	"scanner/internal/config"
+	"scanner/internal/db"
 	"scanner/internal/models"
 	"scanner/internal/mqtt"
 	"scanner/internal/runner"
@@ -31,6 +33,9 @@ type App struct {
 	webServer      *api.Server
 	httpServer     *http.Server
 	standaloneMQTT *mqtt.Client // MQTT client when running without a runner (before Pluto connects)
+
+	// SQLite store for scan history (timeline scrubber)
+	store *db.Store
 
 	mu         sync.RWMutex
 	configPath string
@@ -68,54 +73,35 @@ func NewApp() *App {
 	return &App{}
 }
 
-// getConfigDir returns the appropriate config directory for the platform
-func getConfigDir() string {
-	// Try user config directory first
-	configDir, err := os.UserConfigDir()
-	if err == nil {
-		appDir := filepath.Join(configDir, "Spectrum Scanner")
-		if err := os.MkdirAll(appDir, 0755); err == nil {
-			return appDir
-		}
-	}
-
-	// Fallback to home directory
-	homeDir, err := os.UserHomeDir()
-	if err == nil {
-		appDir := filepath.Join(homeDir, ".spectrum-scanner")
-		if err := os.MkdirAll(appDir, 0755); err == nil {
-			return appDir
-		}
-	}
-
-	// Last resort: current directory
-	return "."
-}
-
 // startup is called when the app starts
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 
-	// Determine config path in user's config directory
-	configDir := getConfigDir()
-	a.configPath = filepath.Join(configDir, "config.yaml")
-
-	// Load configuration (similar to CLI scanner)
+	// Load configuration (checks env vars, ./config.yaml > system config > defaults)
+	opts := config.DefaultOptions()
 	var err error
-	if _, err = os.Stat(a.configPath); err == nil {
-		a.config, err = config.LoadFromFile(a.configPath)
-		if err != nil {
-			log.Printf("Warning: Failed to load config: %v", err)
-			a.config = config.DefaultConfig()
-		} else {
-			log.Printf("Loaded config from %s", a.configPath)
-		}
-	} else {
+	a.config, a.configPath, err = config.LoadWithOptions(opts)
+	if err != nil {
+		log.Printf("Warning: Failed to load config: %v", err)
 		a.config = config.DefaultConfig()
-		log.Printf("Using default configuration (will save to %s)", a.configPath)
+	} else if a.configPath != "" {
+		log.Printf("Loaded config from %s", a.configPath)
+	} else {
+		log.Printf("Using default configuration")
 	}
 
 	log.Printf("Desktop app started - %s (%s)", a.config.Name, a.config.DeviceID)
+
+	// Initialize SQLite store for scan history
+	dbPath := config.AppConfigDir() + "/scans.db"
+	a.store, err = db.NewStore(dbPath)
+	if err != nil {
+		log.Printf("Warning: Failed to initialize scan history database: %v", err)
+	} else {
+		log.Printf("Scan history database: %s", dbPath)
+		// Start periodic cleanup (keep 24 hours by default)
+		go a.runCleanupLoop(24)
+	}
 
 	// Start MQTT and web server independently of Pluto connection
 	// These should run even if the tuner isn't available
@@ -242,7 +228,27 @@ func (a *App) shutdown(ctx context.Context) {
 	if a.runner != nil {
 		a.runner.Close()
 	}
+	if a.store != nil {
+		a.store.Close()
+	}
 	log.Println("Desktop app shutdown")
+}
+
+// runCleanupLoop periodically cleans up old scans
+func (a *App) runCleanupLoop(retentionHours int) {
+	ticker := time.NewTicker(1 * time.Hour)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			if a.store != nil {
+				a.store.Cleanup(retentionHours)
+			}
+		case <-a.ctx.Done():
+			return
+		}
+	}
 }
 
 // Connect connects to the Pluto device
@@ -373,6 +379,7 @@ func (a *App) StopScanning() {
 func (a *App) forwardScans() {
 	a.mu.RLock()
 	r := a.runner
+	store := a.store
 	a.mu.RUnlock()
 
 	if r == nil || r.Engine == nil {
@@ -392,6 +399,13 @@ func (a *App) forwardScans() {
 			Timestamp: scan.Timestamp.Format("2006-01-02T15:04:05Z07:00"),
 		}
 		wailsRuntime.EventsEmit(a.ctx, "scan", event)
+
+		// Store scan in SQLite for timeline scrubber
+		if store != nil {
+			if err := store.StoreScan(&scan); err != nil {
+				log.Printf("Warning: failed to store scan: %v", err)
+			}
+		}
 	}
 }
 
@@ -756,6 +770,11 @@ func (a *App) startWebServer() error {
 	// Create API server
 	a.webServer = api.NewServer(engine, a.config, mqttClient)
 
+	// Wire up SQLite store for scan history endpoints
+	if a.store != nil {
+		a.webServer.SetStore(a.store)
+	}
+
 	// Wire up config save callback so API changes persist to YAML
 	configPath := a.configPath
 	a.webServer.SetConfigSaveFunc(func() error {
@@ -870,4 +889,138 @@ func (a *App) GetConfigPath() string {
 		return a.configPath
 	}
 	return absPath
+}
+
+// ============================================================================
+// Scan History / Timeline Scrubber (Wails bindings)
+// ============================================================================
+
+// TimelineEntry for frontend
+type TimelineEntry struct {
+	ID        int64  `json:"id"`
+	Timestamp string `json:"timestamp"`
+	Band      string `json:"band"`
+}
+
+// DecimatedScan for scrubber preview
+type DecimatedScan struct {
+	ID        int64     `json:"id"`
+	Timestamp string    `json:"timestamp"`
+	Band      string    `json:"band"`
+	HzLo      float64   `json:"hz_lo"`
+	HzHi      float64   `json:"hz_hi"`
+	Step      float64   `json:"step"`
+	Power     []float64 `json:"power"`
+}
+
+// GetTimeline returns timeline entries for a band
+func (a *App) GetTimeline(band string, hours int) []TimelineEntry {
+	a.mu.RLock()
+	store := a.store
+	a.mu.RUnlock()
+
+	if store == nil {
+		return []TimelineEntry{}
+	}
+
+	entries, err := store.GetTimeline(band, hours)
+	if err != nil {
+		log.Printf("Error getting timeline: %v", err)
+		return []TimelineEntry{}
+	}
+
+	// Convert to frontend format
+	result := make([]TimelineEntry, len(entries))
+	for i, e := range entries {
+		result[i] = TimelineEntry{
+			ID:        e.ID,
+			Timestamp: e.Timestamp.Format(time.RFC3339),
+			Band:      e.Band,
+		}
+	}
+	return result
+}
+
+// GetScanAtTime returns the scan closest to the given time
+func (a *App) GetScanAtTime(band string, timeStr string) *ScanEvent {
+	a.mu.RLock()
+	store := a.store
+	a.mu.RUnlock()
+
+	if store == nil {
+		return nil
+	}
+
+	t, err := time.Parse(time.RFC3339, timeStr)
+	if err != nil {
+		log.Printf("Error parsing time: %v", err)
+		return nil
+	}
+
+	scan, err := store.GetScanAtTime(band, t)
+	if err != nil {
+		log.Printf("Error getting scan at time: %v", err)
+		return nil
+	}
+	if scan == nil {
+		return nil
+	}
+
+	return &ScanEvent{
+		Band:      scan.Band,
+		HzLo:      scan.HzLo,
+		HzHi:      scan.HzHi,
+		Step:      scan.Step,
+		Power:     scan.Power,
+		Timestamp: scan.Timestamp.Format(time.RFC3339),
+	}
+}
+
+// GetDecimatedScans returns decimated scans for scrubber preview
+func (a *App) GetDecimatedScans(band string, hours int) []DecimatedScan {
+	a.mu.RLock()
+	store := a.store
+	a.mu.RUnlock()
+
+	if store == nil {
+		return []DecimatedScan{}
+	}
+
+	scans, err := store.GetDecimatedScans(band, hours)
+	if err != nil {
+		log.Printf("Error getting decimated scans: %v", err)
+		return []DecimatedScan{}
+	}
+
+	// Convert to frontend format
+	result := make([]DecimatedScan, len(scans))
+	for i, s := range scans {
+		result[i] = DecimatedScan{
+			ID:        s.ID,
+			Timestamp: s.Timestamp.Format(time.RFC3339),
+			Band:      s.Band,
+			HzLo:      s.HzLo,
+			HzHi:      s.HzHi,
+			Step:      s.Step,
+			Power:     s.Power,
+		}
+	}
+	return result
+}
+
+// GetScanStats returns database statistics
+func (a *App) GetScanStats() map[string]interface{} {
+	a.mu.RLock()
+	store := a.store
+	a.mu.RUnlock()
+
+	if store == nil {
+		return map[string]interface{}{"error": "store not initialized"}
+	}
+
+	stats, err := store.GetStats()
+	if err != nil {
+		return map[string]interface{}{"error": err.Error()}
+	}
+	return stats
 }

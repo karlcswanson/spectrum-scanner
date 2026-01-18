@@ -1,5 +1,51 @@
 export namespace main {
 	
+	export class DecimatedScan {
+	    id: number;
+	    timestamp: string;
+	    band: string;
+	    hz_lo: number;
+	    hz_hi: number;
+	    step: number;
+	    power: number[];
+	
+	    static createFrom(source: any = {}) {
+	        return new DecimatedScan(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.timestamp = source["timestamp"];
+	        this.band = source["band"];
+	        this.hz_lo = source["hz_lo"];
+	        this.hz_hi = source["hz_hi"];
+	        this.step = source["step"];
+	        this.power = source["power"];
+	    }
+	}
+	export class ScanEvent {
+	    band: string;
+	    hz_lo: number;
+	    hz_hi: number;
+	    step: number;
+	    power: number[];
+	    timestamp: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ScanEvent(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.band = source["band"];
+	        this.hz_lo = source["hz_lo"];
+	        this.hz_hi = source["hz_hi"];
+	        this.step = source["step"];
+	        this.power = source["power"];
+	        this.timestamp = source["timestamp"];
+	    }
+	}
 	export class ServerStatus {
 	    mqtt_enabled: boolean;
 	    mqtt_connected: boolean;
@@ -36,6 +82,22 @@ export namespace main {
 	        this.scanning = source["scanning"];
 	        this.current_band = source["current_band"];
 	        this.connected = source["connected"];
+	    }
+	}
+	export class TimelineEntry {
+	    id: number;
+	    timestamp: string;
+	    band: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new TimelineEntry(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.timestamp = source["timestamp"];
+	        this.band = source["band"];
 	    }
 	}
 

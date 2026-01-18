@@ -1,4 +1,4 @@
-.PHONY: build build-arm run dev deploy deploy-service clean tidy test build-frontend desktop desktop-deps desktop-mac desktop-windows desktop-linux desktop-dev
+.PHONY: build build-arm run dev deploy deploy-service clean tidy test build-frontend desktop desktop-deps desktop-mac desktop-windows desktop-linux desktop-dev help
 
 # Default target
 all: build
@@ -54,16 +54,7 @@ desktop-dev: desktop-deps
 dev:
 	go run ./cmd/scanner \
 		-listen :8080 \
-		-addr https://192.168.2.1 \
-		-config ../config.yaml
-
-# Run with auto-start (for testing)
-dev-auto:
-	go run ./cmd/scanner \
-		-listen :8080 \
-		-addr https://192.168.2.1 \
-		-config ../config.yaml \
-		-auto-start
+		-addr https://192.168.2.1
 
 # Run locally built binary
 run: build
@@ -81,7 +72,7 @@ deploy-service: deploy
 	@echo '#!/bin/sh /etc/rc.common' > /tmp/spectrum-scanner.init
 	@echo 'START=99' >> /tmp/spectrum-scanner.init
 	@echo 'STOP=10' >> /tmp/spectrum-scanner.init
-	@echo 'start() { echo "Starting spectrum-scanner..."; /usr/bin/spectrum-scanner -listen :8080 -addr https://localhost -auto-start & }' >> /tmp/spectrum-scanner.init
+	@echo 'start() { echo "Starting spectrum-scanner..."; /usr/bin/spectrum-scanner -listen :8080 -addr https://localhost & }' >> /tmp/spectrum-scanner.init
 	@echo 'stop() { echo "Stopping spectrum-scanner..."; killall spectrum-scanner 2>/dev/null; }' >> /tmp/spectrum-scanner.init
 	@echo 'restart() { stop; sleep 1; start; }' >> /tmp/spectrum-scanner.init
 	scp -O /tmp/spectrum-scanner.init root@192.168.2.1:/etc/init.d/spectrum-scanner
@@ -128,7 +119,6 @@ help:
 	@echo "Development:"
 	@echo "  make build          - Build for local machine"
 	@echo "  make dev            - Run locally, connect to Pluto at 192.168.2.1"
-	@echo "  make dev-auto       - Run locally with auto-start scanning"
 	@echo "  make test           - Run tests"
 	@echo ""
 	@echo "Frontend:"

@@ -42,6 +42,10 @@ export function GetConfigPath() {
   return window['go']['main']['App']['GetConfigPath']();
 }
 
+export function GetDecimatedScans(arg1, arg2) {
+  return window['go']['main']['App']['GetDecimatedScans'](arg1, arg2);
+}
+
 export function GetGain() {
   return window['go']['main']['App']['GetGain']();
 }
@@ -54,12 +58,24 @@ export function GetPlatform() {
   return window['go']['main']['App']['GetPlatform']();
 }
 
+export function GetScanAtTime(arg1, arg2) {
+  return window['go']['main']['App']['GetScanAtTime'](arg1, arg2);
+}
+
+export function GetScanStats() {
+  return window['go']['main']['App']['GetScanStats']();
+}
+
 export function GetServerStatus() {
   return window['go']['main']['App']['GetServerStatus']();
 }
 
 export function GetStatus() {
   return window['go']['main']['App']['GetStatus']();
+}
+
+export function GetTimeline(arg1, arg2) {
+  return window['go']['main']['App']['GetTimeline'](arg1, arg2);
 }
 
 export function GetWebConfig() {

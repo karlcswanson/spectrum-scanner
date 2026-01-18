@@ -122,3 +122,135 @@ func LoadOrCreate(path string) (*models.Config, error) {
 
 	return LoadFromFile(path)
 }
+
+// AppName is the application name used for config directories
+const AppName = "Spectrum Scanner"
+
+// AppConfigDir returns the system config directory for the app
+// macOS: ~/Library/Application Support/Spectrum Scanner
+// Linux: ~/.config/Spectrum Scanner
+// Windows: %AppData%/Spectrum Scanner
+func AppConfigDir() string {
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		return "."
+	}
+	appDir := filepath.Join(configDir, AppName)
+	os.MkdirAll(appDir, 0755)
+	return appDir
+}
+
+// DiscoverConfigPath finds the config file path using priority:
+// 1. Explicit path (if provided)
+// 2. ./config.yaml (local directory)
+// 3. System config directory
+// Returns the path and whether a config file was found
+func DiscoverConfigPath(explicit string) (path string, found bool) {
+	// Explicit path takes priority
+	if explicit != "" {
+		if _, err := os.Stat(explicit); err == nil {
+			return explicit, true
+		}
+		return explicit, false
+	}
+
+	// Check local directory
+	if _, err := os.Stat("config.yaml"); err == nil {
+		return "config.yaml", true
+	}
+
+	// Check system config directory
+	systemPath := filepath.Join(AppConfigDir(), "config.yaml")
+	if _, err := os.Stat(systemPath); err == nil {
+		return systemPath, true
+	}
+
+	// Return system path as default location (for saving new config)
+	return systemPath, false
+}
+
+// Load discovers and loads configuration
+// Priority: explicit path > ./config.yaml > system config > defaults
+func Load(explicit string) (*models.Config, string, error) {
+	path, found := DiscoverConfigPath(explicit)
+
+	if found {
+		cfg, err := LoadFromFile(path)
+		if err != nil {
+			return nil, path, err
+		}
+		return cfg, path, nil
+	}
+
+	// No config found, use defaults
+	return DefaultConfig(), path, nil
+}
+
+// Options holds runtime options that can come from flags or env vars
+type Options struct {
+	ConfigFile  string // Explicit config file path
+	ListenAddr  string // HTTP listen address
+	BackendType string // Backend type: pluto, owon
+	BackendAddr string // Backend address (IP or URL)
+}
+
+// DefaultOptions returns options with sensible defaults
+func DefaultOptions() Options {
+	return Options{
+		ListenAddr: ":8080",
+	}
+}
+
+// ParseEnv reads environment variables into options
+func (o *Options) ParseEnv() {
+	if v := os.Getenv("SCANNER_CONFIG"); v != "" && o.ConfigFile == "" {
+		o.ConfigFile = v
+	}
+	if v := os.Getenv("SCANNER_LISTEN"); v != "" && o.ListenAddr == "" {
+		o.ListenAddr = v
+	}
+	if v := os.Getenv("SCANNER_BACKEND"); v != "" && o.BackendType == "" {
+		o.BackendType = v
+	}
+	if v := os.Getenv("SCANNER_ADDR"); v != "" && o.BackendAddr == "" {
+		o.BackendAddr = v
+	}
+}
+
+// ApplyToConfig applies option overrides to the config
+func (o *Options) ApplyToConfig(cfg *models.Config) {
+	if o.BackendType != "" {
+		if cfg.Backend == nil {
+			cfg.Backend = &models.BackendConfig{}
+		}
+		cfg.Backend.Type = o.BackendType
+	}
+	if o.BackendAddr != "" {
+		if cfg.Backend == nil {
+			cfg.Backend = &models.BackendConfig{}
+		}
+		// Detect if it's a URL or IP address
+		if strings.HasPrefix(o.BackendAddr, "http") {
+			cfg.Backend.URL = o.BackendAddr
+		} else {
+			cfg.Backend.Address = o.BackendAddr
+		}
+	}
+}
+
+// LoadWithOptions loads config and applies runtime options
+func LoadWithOptions(opts Options) (*models.Config, string, error) {
+	// Apply env vars (flags take precedence, so only fill empty values)
+	opts.ParseEnv()
+
+	// Load config file
+	cfg, path, err := Load(opts.ConfigFile)
+	if err != nil {
+		return nil, path, err
+	}
+
+	// Apply overrides
+	opts.ApplyToConfig(cfg)
+
+	return cfg, path, nil
+}
