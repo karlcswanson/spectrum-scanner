@@ -37,7 +37,7 @@ go build -o calibrate ./cmd/calibrate
 | `-pluto` | `https://192.168.2.1` | Pluto maia-httpd URL |
 | `-output` | `calibration.yaml` | Output file for calibration data |
 | `-level` | `-28.0` | Reference signal level in dBm |
-| `-gain` | `40.0` | Pluto RX gain during calibration |
+| `-gain` | `30.0` | Pluto RX gain during calibration |
 | `-start` | `470.0` | Start frequency in MHz |
 | `-stop` | `600.0` | Stop frequency in MHz |
 | `-step` | `10.0` | Frequency step in MHz |

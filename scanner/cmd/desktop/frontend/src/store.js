@@ -67,7 +67,7 @@ export const useDesktopStore = defineStore('desktop', () => {
   })
   const enabledBands = computed(() => bands.value.filter(b => b.enabled))
   const settings = computed(() => ({
-    rx_gain: config.value?.rx_gain || 40,
+    rx_gain: config.value?.rx_gain || 30,
     rx_gain_mode: config.value?.rx_gain_mode || 'manual',
   }))
 

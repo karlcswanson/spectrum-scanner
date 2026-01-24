@@ -68,7 +68,7 @@ func main() {
 	plutoURL := flag.String("pluto", "https://192.168.2.1", "Pluto maia-httpd URL")
 	outputFile := flag.String("output", "calibration.yaml", "Output file for calibration data")
 	referenceDBm := flag.Float64("level", -28.0, "Reference level in dBm")
-	rxGain := flag.Float64("gain", 40.0, "RX gain to use during calibration")
+	rxGain := flag.Float64("gain", 30.0, "RX gain to use during calibration")
 	startMHz := flag.Float64("start", 470.0, "Start frequency in MHz")
 	stopMHz := flag.Float64("stop", 600.0, "Stop frequency in MHz")
 	stepMHz := flag.Float64("step", 10.0, "Frequency step in MHz")
