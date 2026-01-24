@@ -408,3 +408,22 @@ func (s *Server) handleGetScanStats(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(stats)
 }
+
+// ============================================================================
+// Calibration Handlers
+// ============================================================================
+
+func (s *Server) handleGetCalibration(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	if s.config.Calibration == nil {
+		// Return empty calibration with explanation
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"calibration": nil,
+			"message":     "No calibration data configured. Add calibration section to config.yaml",
+		})
+		return
+	}
+
+	json.NewEncoder(w).Encode(s.config.Calibration)
+}

@@ -98,3 +98,9 @@ type BackendInfo struct {
 	Serial       string
 	Firmware     string
 }
+
+// Calibratable is an optional interface for backends that support calibration
+type Calibratable interface {
+	SetCalibration(cal *models.Calibration)
+	GetCalibration() *models.Calibration
+}

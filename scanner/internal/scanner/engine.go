@@ -34,11 +34,31 @@ type Engine struct {
 
 // NewEngine creates a new sweep engine with the given backend.
 func NewEngine(backend Backend, config *models.Config, mqttClient *mqtt.Client) *Engine {
-	return &Engine{
+	e := &Engine{
 		backend:     backend,
 		config:      config,
 		mqtt:        mqttClient,
 		subscribers: make([]chan models.ScanLine, 0),
+	}
+
+	// Apply calibration if backend supports it and config has calibration data
+	e.applyCalibration()
+
+	return e
+}
+
+// applyCalibration passes calibration data to the backend if it supports it
+func (e *Engine) applyCalibration() {
+	if e.config.Calibration == nil {
+		log.Printf("Engine: No calibration data in config")
+		return
+	}
+
+	if cal, ok := e.backend.(Calibratable); ok {
+		log.Printf("Engine: Passing calibration to backend (%d points)", len(e.config.Calibration.Points))
+		cal.SetCalibration(e.config.Calibration)
+	} else {
+		log.Printf("Engine: Backend does not support calibration")
 	}
 }
 
@@ -178,8 +198,11 @@ func (e *Engine) Stop() {
 // UpdateConfig updates the engine configuration
 func (e *Engine) UpdateConfig(config *models.Config) {
 	e.mu.Lock()
-	defer e.mu.Unlock()
 	e.config = config
+	e.mu.Unlock()
+
+	// Reapply calibration in case it changed
+	e.applyCalibration()
 }
 
 // GetConfig returns the current configuration

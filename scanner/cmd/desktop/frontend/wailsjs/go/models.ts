@@ -149,6 +149,58 @@ export namespace models {
 	        this.enabled = source["enabled"];
 	    }
 	}
+	export class CalibrationPoint {
+	    frequency_mhz: number;
+	    measured_dbm: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new CalibrationPoint(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.frequency_mhz = source["frequency_mhz"];
+	        this.measured_dbm = source["measured_dbm"];
+	    }
+	}
+	export class Calibration {
+	    reference_dbm: number;
+	    points: CalibrationPoint[];
+	    // Go type: time
+	    timestamp?: any;
+	    rx_gain: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new Calibration(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.reference_dbm = source["reference_dbm"];
+	        this.points = this.convertValues(source["points"], CalibrationPoint);
+	        this.timestamp = this.convertValues(source["timestamp"], null);
+	        this.rx_gain = source["rx_gain"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
 	export class WebConfig {
 	    enabled: boolean;
 	    port: number;
@@ -202,6 +254,7 @@ export namespace models {
 	    backend?: BackendConfig;
 	    mqtt?: MQTTConfig;
 	    web?: WebConfig;
+	    calibration?: Calibration;
 	
 	    static createFrom(source: any = {}) {
 	        return new Config(source);
@@ -221,6 +274,7 @@ export namespace models {
 	        this.backend = this.convertValues(source["backend"], BackendConfig);
 	        this.mqtt = this.convertValues(source["mqtt"], MQTTConfig);
 	        this.web = this.convertValues(source["web"], WebConfig);
+	        this.calibration = this.convertValues(source["calibration"], Calibration);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

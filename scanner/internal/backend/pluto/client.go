@@ -45,6 +45,9 @@ type Client struct {
 	// Current configuration
 	currentBand models.Band
 	settings    scanner.SweepSettings
+
+	// Calibration data for amplitude correction
+	calibration *models.Calibration
 }
 
 // Ad9361Settings represents AD9361 transceiver settings
@@ -244,10 +247,30 @@ func (c *Client) Sweep(ctx context.Context) (models.ScanLine, error) {
 			return models.ScanLine{}, err
 		}
 
-		// Apply calibration offset
+		// Apply base calibration offset (converts raw FFT dB to approximate dBm)
 		calibrationOffset := -ad9361.RxGain - 90.0
 		for i := range powers {
 			powers[i] += calibrationOffset
+		}
+
+		// Apply frequency-dependent calibration correction if available
+		// This refines the base offset using measured reference points
+		c.mu.Lock()
+		cal := c.calibration
+		c.mu.Unlock()
+
+		if cal != nil && cal.IsValid() {
+			segmentStartHz := float64(centerFreq) - float64(segmentBandwidth)/2
+			// Log first segment only to avoid spam
+			if centerFreq == segments[0] {
+				midCorrection := cal.CorrectionAt(float64(centerFreq))
+				log.Printf("Pluto: Applying calibration correction: %.2f dB at %.1f MHz", midCorrection, float64(centerFreq)/1e6)
+			}
+			for i := range powers {
+				binFreqHz := segmentStartHz + float64(i)*binHz
+				correction := cal.CorrectionAt(binFreqHz)
+				powers[i] += correction
+			}
 		}
 
 		// Copy cropped segment to output
@@ -323,7 +346,7 @@ func (c *Client) collectSegment(ctx context.Context, dwellMs int) ([]float64, er
 		}
 		conn.SetReadDeadline(time.Now().Add(readTimeout))
 
-		powers, err := readFFTFrame(conn)
+		powers, err := readFFTFrameLinear(conn)
 		if err != nil {
 			if firstRead {
 				firstRead = false
@@ -343,14 +366,20 @@ func (c *Client) collectSegment(ctx context.Context, dwellMs int) ([]float64, er
 		frames = frames[1:]
 	}
 
-	// Average frames
+	// Average frames in LINEAR domain (correct for power measurements)
 	averaged := make([]float64, FFTSize)
 	for i := 0; i < FFTSize; i++ {
 		sum := 0.0
 		for _, frame := range frames {
 			sum += frame[i]
 		}
-		averaged[i] = sum / float64(len(frames))
+		linearAvg := sum / float64(len(frames))
+		// Now convert to dB
+		if linearAvg > 0 {
+			averaged[i] = 10 * math.Log10(linearAvg)
+		} else {
+			averaged[i] = -120
+		}
 	}
 
 	return averaged, nil
@@ -465,7 +494,8 @@ func (c *Client) connectWaterfall(ctx context.Context) (*websocket.Conn, error) 
 	return conn, nil
 }
 
-func readFFTFrame(conn *websocket.Conn) ([]float64, error) {
+// readFFTFrameLinear reads raw FFT frame and returns LINEAR power values (not dB)
+func readFFTFrameLinear(conn *websocket.Conn) ([]float64, error) {
 	_, data, err := conn.ReadMessage()
 	if err != nil {
 		return nil, err
@@ -484,10 +514,11 @@ func readFFTFrame(conn *websocket.Conn) ([]float64, error) {
 		if err := binary.Read(reader, binary.LittleEndian, &val); err != nil {
 			return nil, err
 		}
+		// Keep as linear power value
 		if val > 0 {
-			powers[i] = 10 * math.Log10(float64(val))
+			powers[i] = float64(val)
 		} else {
-			powers[i] = -120
+			powers[i] = 1e-12 // noise floor in linear
 		}
 	}
 
@@ -507,4 +538,22 @@ func (c *Client) GetCapabilities() scanner.Capabilities {
 		MaxGainDB:            73,
 		TracePoints:          FFTSize,
 	}
+}
+
+// SetCalibration sets the calibration data for amplitude correction
+func (c *Client) SetCalibration(cal *models.Calibration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.calibration = cal
+	if cal != nil && cal.IsValid() {
+		log.Printf("Pluto: Calibration loaded with %d points (ref: %.1f dBm, gain: %.1f dB)",
+			len(cal.Points), cal.ReferenceDBm, cal.RxGain)
+	}
+}
+
+// GetCalibration returns the current calibration data
+func (c *Client) GetCalibration() *models.Calibration {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.calibration
 }

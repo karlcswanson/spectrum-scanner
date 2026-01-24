@@ -59,6 +59,7 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("GET /api/gain", s.handleGetGain)
 	s.mux.HandleFunc("PUT /api/gain", s.handlePutGain)
 	s.mux.HandleFunc("PUT /api/bandwidth", s.handlePutBandwidth)
+	s.mux.HandleFunc("GET /api/calibration", s.handleGetCalibration)
 
 	// Scan history endpoints (for timeline scrubber)
 	s.mux.HandleFunc("GET /api/scans/timeline", s.handleGetTimeline)

@@ -1,6 +1,9 @@
 package models
 
-import "time"
+import (
+	"sort"
+	"time"
+)
 
 // Band defines a frequency range to scan
 type Band struct {
@@ -72,6 +75,78 @@ type WebConfig struct {
 	Host    string `json:"host" yaml:"host"` // defaults to "" (all interfaces)
 }
 
+// CalibrationPoint represents a single frequency/power measurement from calibration
+type CalibrationPoint struct {
+	FrequencyMHz float64 `json:"frequency_mhz" yaml:"frequency_mhz"`
+	MeasuredDBm  float64 `json:"measured_dbm" yaml:"measured_dbm"`
+}
+
+// Calibration holds calibration data for the scanner
+type Calibration struct {
+	// ReferenceDBm is the known power level of the calibration source
+	ReferenceDBm float64 `json:"reference_dbm" yaml:"reference_dbm"`
+
+	// Points are the measured values at different frequencies during calibration
+	Points []CalibrationPoint `json:"points" yaml:"points"`
+
+	// Timestamp when calibration was performed
+	Timestamp time.Time `json:"timestamp,omitempty" yaml:"timestamp,omitempty"`
+
+	// RxGain that was used during calibration (for reference)
+	RxGain float64 `json:"rx_gain" yaml:"rx_gain"`
+}
+
+// CorrectionAt returns the correction factor (in dB) for a given frequency in Hz.
+// The correction should be ADDED to measured values to get calibrated values.
+// Uses linear interpolation between calibration points.
+func (c *Calibration) CorrectionAt(freqHz float64) float64 {
+	if c == nil || len(c.Points) == 0 {
+		return 0
+	}
+
+	freqMHz := freqHz / 1_000_000
+
+	// Sort points by frequency
+	points := make([]CalibrationPoint, len(c.Points))
+	copy(points, c.Points)
+	sort.Slice(points, func(i, j int) bool {
+		return points[i].FrequencyMHz < points[j].FrequencyMHz
+	})
+
+	// Calculate correction for each point: reference - measured
+	// If reference is -28 dBm and we measured -31, correction is +3 dB
+	corrections := make([]float64, len(points))
+	for i, p := range points {
+		corrections[i] = c.ReferenceDBm - p.MeasuredDBm
+	}
+
+	// Below first point: use first correction
+	if freqMHz <= points[0].FrequencyMHz {
+		return corrections[0]
+	}
+
+	// Above last point: use last correction
+	if freqMHz >= points[len(points)-1].FrequencyMHz {
+		return corrections[len(points)-1]
+	}
+
+	// Find surrounding points and interpolate
+	for i := 0; i < len(points)-1; i++ {
+		if freqMHz >= points[i].FrequencyMHz && freqMHz <= points[i+1].FrequencyMHz {
+			// Linear interpolation
+			t := (freqMHz - points[i].FrequencyMHz) / (points[i+1].FrequencyMHz - points[i].FrequencyMHz)
+			return corrections[i] + t*(corrections[i+1]-corrections[i])
+		}
+	}
+
+	return 0
+}
+
+// IsValid returns true if calibration data exists and is usable
+func (c *Calibration) IsValid() bool {
+	return c != nil && len(c.Points) > 0
+}
+
 // BackendConfig holds configuration for the scanner backend/hardware
 type BackendConfig struct {
 	// Type specifies which backend to use: "pluto", "owon", "rtlsdr", "rfexplorer", "tti"
@@ -113,6 +188,7 @@ type Config struct {
 	Backend     *BackendConfig `json:"backend,omitempty" yaml:"backend,omitempty"` // Hardware backend configuration
 	MQTT        *MQTTConfig    `json:"mqtt,omitempty" yaml:"mqtt,omitempty"`       // Optional MQTT publishing
 	Web         *WebConfig     `json:"web,omitempty" yaml:"web,omitempty"`         // Optional local web server
+	Calibration *Calibration   `json:"calibration,omitempty" yaml:"calibration,omitempty"`
 }
 
 // NormalizeBands converts MHz to Hz for all bands
