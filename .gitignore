@@ -52,3 +52,4 @@ scanner/root@*
 # Local scanner config (contains credentials)
 config.yaml
 !config.yaml.example
+/scanner/calibration.yaml
