@@ -85,7 +85,7 @@ deploy-service: deploy
 	@echo 'restart() { stop; sleep 1; start; }' >> /tmp/spectrum-scanner.init
 	scp -O /tmp/spectrum-scanner.init root@192.168.2.1:/etc/init.d/spectrum-scanner
 	ssh root@192.168.2.1 'chmod +x /etc/init.d/spectrum-scanner'
-	@rm /tmp/spectrum-scanner.init
+	@rm -f /tmp/spectrum-scanner.init
 	@echo "Init script created. Enable with: ssh root@192.168.2.1 '/etc/init.d/spectrum-scanner enable'"
 
 # Start service on Pluto
