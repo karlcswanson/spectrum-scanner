@@ -1,6 +1,6 @@
 # Spectrum Scanner
 
-Go-based spectrum scanner that interfaces with ADALM-Pluto SDR via maia-sdr. Provides both a standalone CLI/web server and a Wails desktop application.
+Go-based spectrum scanner supporting multiple backends (ADALM-Pluto, OWON, tinySA Ultra). Provides both a standalone CLI/web server and a Wails desktop application.
 
 ## Architecture
 
@@ -11,8 +11,8 @@ scanner/
 │   └── desktop/      # Wails desktop application
 ├── internal/
 │   ├── api/          # HTTP API server + embedded frontend
+│   ├── backend/      # Hardware backends (pluto, owon, tinysa)
 │   ├── db/           # SQLite scan history storage
-│   ├── maia/         # maia-sdr client
 │   ├── models/       # Shared data models
 │   ├── mqtt/         # MQTT client for central server
 │   └── scanner/      # Core scanning engine
@@ -190,7 +190,7 @@ mqtt:
 ./scanner [flags]
   -listen string   HTTP listen address (default ":8080")
   -addr string     Backend address (IP or URL)
-  -backend string  Backend type: pluto, owon
+  -backend string  Backend type: pluto, owon, tinysa
   -config string   Config file path (explicit)
 ```
 

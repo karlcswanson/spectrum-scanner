@@ -1,6 +1,6 @@
 # Spectrum Scanner
 
-A wideband RF spectrum scanner supporting multiple backends (ADALM-Pluto, OWON spectrum analyzers), designed for live event frequency coordination.
+A wideband RF spectrum scanner supporting multiple backends (ADALM-Pluto, OWON spectrum analyzers, tinySA Ultra), designed for live event frequency coordination.
 
 ## Overview
 
@@ -9,6 +9,7 @@ This project provides a sweep-based spectrum scanner that can use different hard
 **Supported Backends:**
 - **ADALM-Pluto** - Uses [maia-sdr](https://maia-sdr.org)'s FPGA-accelerated signal processing
 - **OWON HSA1000 series** - Via SCPI over TCP
+- **tinySA Ultra** - Via USB serial
 
 ## Architecture (Pluto Backend)
 
@@ -86,7 +87,7 @@ Usage: spectrum-scanner [options]
 
 Options:
   -listen string    HTTP listen address (default ":8080")
-  -backend string   Backend type: pluto, owon (overrides config)
+  -backend string   Backend type: pluto, owon, tinysa (overrides config)
   -addr string      Backend address - IP or URL (overrides config)
   -config string    Config file path (YAML or JSON)
   -auto-start       Automatically start scanning on startup
@@ -103,6 +104,9 @@ go run ./cmd/scanner -backend pluto -addr https://192.168.2.1 -config config.yam
 
 # OWON spectrum analyzer
 go run ./cmd/scanner -backend owon -addr 10.10.125.155 -config config.yaml
+
+# tinySA Ultra
+go run ./cmd/scanner -backend tinysa -addr /dev/tty.usbmodem4001 -config config.yaml
 
 # Custom listen port
 go run ./cmd/scanner -listen :9000 -config config.yaml
@@ -156,6 +160,12 @@ backend:
   # rbw: 10000                    # Resolution bandwidth (Hz), 0 = auto
   # vbw: 0                        # Video bandwidth (Hz), 0 = auto
   # attenuation_db: 10            # Input attenuation (0-40 dB)
+
+  # For tinySA Ultra:
+  # type: tinysa
+  # address: "/dev/tty.usbmodem4001"  # Serial port
+  # rbw: 10000                    # Resolution bandwidth (Hz): 3000, 10000, 30000, 100000, 300000, 600000
+  # attenuation_db: 0             # Input attenuation (0-31 dB)
 
 # Frequency bands to scan
 bands:
@@ -243,7 +253,8 @@ spectrum-scanner/
 │   ├── api/                  # HTTP server, handlers, WebSocket
 │   ├── backend/              # Hardware backends
 │   │   ├── owon/             # OWON spectrum analyzer
-│   │   └── pluto/            # ADALM-Pluto via maia-sdr
+│   │   ├── pluto/            # ADALM-Pluto via maia-sdr
+│   │   └── tinysa/           # tinySA Ultra via USB serial
 │   ├── config/               # Configuration management
 │   ├── models/               # Data structures
 │   ├── mqtt/                 # MQTT publishing
@@ -269,6 +280,15 @@ Connects to OWON spectrum analyzers via SCPI over TCP.
 
 - Default port: 1015
 - Supports configurable RBW, VBW, and attenuation
+
+### tinySA Ultra
+
+Connects to tinySA Ultra via USB serial at 576000 baud.
+
+- Frequency range: 100 kHz - 5.3 GHz
+- 450 points per sweep
+- Supports configurable RBW and attenuation
+- Automatic chunking for high-resolution scans
 
 ## License
 
