@@ -1,4 +1,4 @@
-.PHONY: build build-arm run dev deploy deploy-service clean tidy test build-frontend desktop desktop-deps desktop-mac desktop-windows desktop-linux desktop-dev help
+.PHONY: build build-arm run dev deploy deploy-service clean tidy test build-frontend desktop desktop-deps desktop-mac desktop-windows desktop-linux desktop-dev calibrate help
 
 # Default target
 all: build
@@ -12,17 +12,25 @@ build-frontend:
 	@echo "Frontend built and copied to internal/api/web/"
 
 # Build for local development (macOS/Linux)
-build:
+build: build-frontend
 	go build -o bin/scanner ./cmd/scanner
 
 # Cross-compile for ADALM Pluto (ARM)
-build-arm:
+build-arm: build-frontend
 	GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 \
 		go build -ldflags="-s -w" -o bin/scanner-arm ./cmd/scanner
 
+# Build calibration tool
+calibrate:
+	go build -o bin/calibrate ./cmd/calibrate
+
 # Build everything: frontend + ARM binary (for deployment)
-build-all: build-frontend build-arm
+build-all: build-arm
 	@echo "Built frontend and ARM binary"
+
+# Build all local tools
+build-local: build calibrate
+	@echo "Built local binaries"
 
 # ============== Desktop App (Wails) ==============
 
@@ -111,13 +119,17 @@ test:
 # Clean build artifacts
 clean:
 	rm -rf bin/
+	rm -rf cmd/desktop/build/bin/
+	rm -rf internal/api/web/assets/
 
 # Show help
 help:
 	@echo "Spectrum Scanner Build Commands:"
 	@echo ""
 	@echo "Development:"
-	@echo "  make build          - Build for local machine"
+	@echo "  make build          - Build scanner for local machine"
+	@echo "  make calibrate      - Build calibration tool"
+	@echo "  make build-local    - Build all local tools (scanner + calibrate)"
 	@echo "  make dev            - Run locally, connect to Pluto at 192.168.2.1"
 	@echo "  make test           - Run tests"
 	@echo ""

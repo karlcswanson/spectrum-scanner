@@ -21,6 +21,7 @@ scanner/cmd/calibrate/calibrate
 scanner/cmd/desktop/build/
 scanner/cmd/desktop/frontend/dist/
 scanner/cmd/desktop/frontend/node_modules/
+scanner/cmd/desktop/frontend/package.json.md5
 
 # Embedded web assets (generated from frontend build)
 scanner/internal/api/web/assets/
