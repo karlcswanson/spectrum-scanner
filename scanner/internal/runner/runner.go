@@ -8,6 +8,7 @@ import (
 
 	"scanner/internal/backend/owon"
 	"scanner/internal/backend/pluto"
+	"scanner/internal/backend/tinysa"
 	"scanner/internal/models"
 	"scanner/internal/mqtt"
 	"scanner/internal/scanner"
@@ -146,6 +147,18 @@ func CreateBackend(cfg *models.Config) (scanner.Backend, error) {
 			port = owon.DefaultPort
 		}
 		return owon.NewClient(cfg.Backend.Address, port, cfg.Name), nil
+
+	case "tinysa":
+		// tinySA Ultra via serial
+		tinysaCfg := tinysa.DefaultConfig()
+		if cfg.Backend != nil && cfg.Backend.Port != 0 {
+			tinysaCfg.Port = fmt.Sprintf("/dev/ttyUSB%d", cfg.Backend.Port)
+		}
+		if cfg.Backend != nil && cfg.Backend.Address != "" {
+			// Allow specifying full serial port path via address
+			tinysaCfg.Port = cfg.Backend.Address
+		}
+		return tinysa.NewBackend(tinysaCfg), nil
 
 	case "rtlsdr":
 		return nil, fmt.Errorf("RTL-SDR backend not yet implemented")

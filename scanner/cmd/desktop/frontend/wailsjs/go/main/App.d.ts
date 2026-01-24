@@ -5,7 +5,11 @@ import {main} from '../models';
 
 export function Connect(arg1:string):Promise<void>;
 
+export function DetectDevice():Promise<string>;
+
 export function DetectPluto():Promise<string>;
+
+export function DetectTinySA():Promise<string>;
 
 export function DisableMQTT():Promise<void>;
 

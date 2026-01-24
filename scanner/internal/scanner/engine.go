@@ -263,6 +263,11 @@ func (e *Engine) runLoop(ctx context.Context) {
 				RxGain:      config.RxGain,
 				RxGainMode:  config.RxGainMode,
 			}
+			if config.Backend != nil {
+				settings.RBW = config.Backend.RBW
+				settings.VBW = config.Backend.VBW
+				settings.AttenuationDB = config.Backend.AttenuationDB
+			}
 
 			if err := e.backend.Configure(band, settings); err != nil {
 				log.Printf("Error configuring band %s: %v", band.Name, err)
@@ -298,6 +303,11 @@ func (e *Engine) ScanOnce(ctx context.Context, band models.Band) (models.ScanLin
 		DwellTimeMs: config.DwellTimeMs,
 		RxGain:      config.RxGain,
 		RxGainMode:  config.RxGainMode,
+	}
+	if config.Backend != nil {
+		settings.RBW = config.Backend.RBW
+		settings.VBW = config.Backend.VBW
+		settings.AttenuationDB = config.Backend.AttenuationDB
 	}
 
 	if err := e.backend.Configure(band, settings); err != nil {

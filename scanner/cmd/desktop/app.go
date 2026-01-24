@@ -15,6 +15,7 @@ import (
 
 	"scanner/internal/api"
 	"scanner/internal/backend/pluto"
+	"scanner/internal/backend/tinysa"
 	"scanner/internal/config"
 	"scanner/internal/db"
 	"scanner/internal/models"
@@ -131,11 +132,11 @@ func (a *App) startup(ctx context.Context) {
 
 // onDomReady is called when the frontend is ready
 func (a *App) onDomReady(ctx context.Context) {
-	// Auto-connect to Pluto on startup
+	// Auto-connect to backend on startup
 	go a.autoConnect()
 }
 
-// autoConnect attempts to connect to Pluto and optionally start scanning
+// autoConnect attempts to connect to the configured backend and optionally start scanning
 func (a *App) autoConnect() {
 	// Small delay to let MQTT/web server goroutines start first
 	// This prevents lock contention at startup
@@ -144,7 +145,11 @@ func (a *App) autoConnect() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	log.Println("Auto-connect: attempting to connect to Pluto...")
+	backendType := "pluto"
+	if a.config.Backend != nil && a.config.Backend.Type != "" {
+		backendType = a.config.Backend.Type
+	}
+	log.Printf("Auto-connect: attempting to connect to %s backend...", backendType)
 
 	// Don't auto-start MQTT in runner - we handle it separately via standalone client
 	opts := runner.Options{
@@ -251,7 +256,7 @@ func (a *App) runCleanupLoop(retentionHours int) {
 	}
 }
 
-// Connect connects to the Pluto device
+// Connect connects to the configured backend device
 func (a *App) Connect(address string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -262,19 +267,37 @@ func (a *App) Connect(address string) error {
 		a.runner = nil
 	}
 
-	// Default address
-	if address == "" {
-		address = "https://192.168.2.1"
-	}
-
-	// Update config with address
+	// Initialize backend config if needed
 	if a.config.Backend == nil {
 		a.config.Backend = &models.BackendConfig{}
 	}
-	a.config.Backend.Type = "pluto"
-	a.config.Backend.URL = address
 
-	log.Printf("Connecting to Pluto at %s...", address)
+	// Use configured backend type, defaulting to pluto
+	backendType := a.config.Backend.Type
+	if backendType == "" {
+		backendType = "pluto"
+		a.config.Backend.Type = backendType
+	}
+
+	// Set address based on backend type
+	switch backendType {
+	case "pluto":
+		if address == "" {
+			address = "https://192.168.2.1"
+		}
+		a.config.Backend.URL = address
+	case "tinysa":
+		if address == "" {
+			address = "/dev/tty.usbmodem4001"
+		}
+		a.config.Backend.Address = address
+	case "owon":
+		if address != "" {
+			a.config.Backend.Address = address
+		}
+	}
+
+	log.Printf("Connecting to %s backend at %s...", backendType, address)
 
 	// Use runner to create and connect (but don't auto-start MQTT here, user controls that)
 	opts := runner.Options{
@@ -288,7 +311,7 @@ func (a *App) Connect(address string) error {
 
 	if !r.Backend.IsConnected() {
 		r.Close()
-		return fmt.Errorf("failed to connect to Pluto at %s", address)
+		return fmt.Errorf("failed to connect to %s at %s", backendType, address)
 	}
 
 	a.runner = r
@@ -329,7 +352,7 @@ func (a *App) Connect(address string) error {
 	return nil
 }
 
-// Disconnect disconnects from the Pluto device
+// Disconnect disconnects from the backend device
 func (a *App) Disconnect() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -345,7 +368,7 @@ func (a *App) Disconnect() {
 		Connected:   false,
 	})
 
-	log.Println("Disconnected from Pluto")
+	log.Println("Disconnected from backend")
 }
 
 // StartScanning starts the spectrum scan
@@ -534,6 +557,45 @@ func (a *App) DetectPluto() string {
 	}
 
 	return ""
+}
+
+// DetectTinySA tries to find a connected tinySA device
+func (a *App) DetectTinySA() string {
+	// Common serial ports on macOS
+	ports := []string{
+		"/dev/tty.usbmodem4001",
+		"/dev/tty.usbmodem3001",
+		"/dev/tty.usbmodem2001",
+		"/dev/tty.usbmodem1001",
+	}
+
+	for _, port := range ports {
+		cfg := tinysa.Config{Port: port, BaudRate: 576000}
+		device, err := tinysa.Open(cfg)
+		if err == nil {
+			device.Close()
+			return port
+		}
+	}
+
+	return ""
+}
+
+// DetectDevice tries to find a connected device based on configured backend type
+func (a *App) DetectDevice() string {
+	backendType := "pluto"
+	if a.config.Backend != nil && a.config.Backend.Type != "" {
+		backendType = a.config.Backend.Type
+	}
+
+	switch backendType {
+	case "pluto":
+		return a.DetectPluto()
+	case "tinysa":
+		return a.DetectTinySA()
+	default:
+		return ""
+	}
 }
 
 // GetPlatform returns the current OS

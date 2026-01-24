@@ -142,6 +142,43 @@ export const useDesktopStore = defineStore('desktop', () => {
     }
   }
 
+  async function detectDevice() {
+    if (!wails) return ''
+    try {
+      return await wails.DetectDevice()
+    } catch (err) {
+      console.error('Failed to detect device:', err)
+      return ''
+    }
+  }
+
+  // Get backend type from config
+  function getBackendType() {
+    return config.value?.backend?.type || 'pluto'
+  }
+
+  // Get display name for backend type
+  function getBackendDisplayName() {
+    const type = getBackendType()
+    switch (type) {
+      case 'pluto': return 'ADALM-Pluto'
+      case 'tinysa': return 'tinySA Ultra'
+      case 'owon': return 'OWON HSA'
+      default: return type
+    }
+  }
+
+  // Get default address for backend type
+  function getDefaultAddress() {
+    const type = getBackendType()
+    switch (type) {
+      case 'pluto': return 'https://192.168.2.1'
+      case 'tinysa': return '/dev/tty.usbmodem4001'
+      case 'owon': return '192.168.1.100'
+      default: return ''
+    }
+  }
+
   async function fetchConfig() {
     if (!wails) return
     try {
@@ -381,6 +418,10 @@ export const useDesktopStore = defineStore('desktop', () => {
     connect,
     disconnect,
     detectPluto,
+    detectDevice,
+    getBackendType,
+    getBackendDisplayName,
+    getDefaultAddress,
     fetchConfig,
     fetchStatus,
     startScanning,

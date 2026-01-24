@@ -6,8 +6,16 @@ export function Connect(arg1) {
   return window['go']['main']['App']['Connect'](arg1);
 }
 
+export function DetectDevice() {
+  return window['go']['main']['App']['DetectDevice']();
+}
+
 export function DetectPluto() {
   return window['go']['main']['App']['DetectPluto']();
+}
+
+export function DetectTinySA() {
+  return window['go']['main']['App']['DetectTinySA']();
 }
 
 export function DisableMQTT() {

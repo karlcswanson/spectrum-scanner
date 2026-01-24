@@ -19,7 +19,7 @@ const showError = computed(() => {
 })
 
 // Connection state
-const plutoAddress = ref('https://192.168.2.1')
+const deviceAddress = ref('')
 const connecting = ref(false)
 const showSettings = ref(false)
 const settingsTab = ref('scanner') // 'scanner' or 'server'
@@ -53,16 +53,15 @@ onMounted(async () => {
 
   store.init()
 
-  // Try to auto-detect Pluto
-  const detected = await store.detectPluto()
-  if (detected) {
-    plutoAddress.value = detected
-  }
+  // Wait for config to load, then set default address based on backend type
+  setTimeout(() => {
+    deviceAddress.value = store.getDefaultAddress()
+  }, 100)
 })
 
 async function handleConnect() {
   connecting.value = true
-  await store.connect(plutoAddress.value)
+  await store.connect(deviceAddress.value)
   connecting.value = false
 }
 
@@ -395,20 +394,22 @@ async function saveAllConfig() {
       <!-- Connection screen (when not connected) -->
       <div v-if="!store.connected" class="max-w-md mx-auto mt-20">
         <div class="bg-gray-800 rounded-lg p-8">
-          <h2 class="text-xl font-semibold text-center mb-6">Connect to ADALM-Pluto</h2>
+          <h2 class="text-xl font-semibold text-center mb-6">Connect to {{ store.getBackendDisplayName() }}</h2>
 
           <div class="space-y-4">
             <div>
               <label class="block text-sm text-gray-400 mb-2">Device Address</label>
               <input
-                v-model="plutoAddress"
+                v-model="deviceAddress"
                 type="text"
-                placeholder="https://192.168.2.1"
+                :placeholder="store.getDefaultAddress()"
                 class="w-full px-4 py-2 bg-gray-900 border border-gray-600 rounded text-white"
                 :disabled="connecting"
               />
               <p class="text-xs text-gray-500 mt-1">
-                Default USB: 192.168.2.1
+                {{ store.getBackendType() === 'tinysa' ? 'Serial port (e.g. /dev/tty.usbmodem4001)' :
+                   store.getBackendType() === 'owon' ? 'IP address of OWON HSA' :
+                   'Default USB: 192.168.2.1' }}
               </p>
             </div>
 
