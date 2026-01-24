@@ -58,4 +58,3 @@ mqtt:
   # Display info
   name: "Dev Scanner"      # Human-readable name (e.g., "Studio A Scanner")
   location: "Lititz PA"    # Physical location (e.g., "Studio A", "Main Stage")
-  # topic_prefix: "spectrum"  # Default: "spectrum"

@@ -3,6 +3,7 @@
 
 # Development notes
 claude_notes.md
+CLAUDE.md
 
 # Reference projects (large, not part of main codebase)
 reference/
@@ -11,6 +12,10 @@ reference/
 scanner/bin/
 scanner/scanner
 scanner/scanner-arm
+scanner/calibrate
+scanner/desktop
+scanner/cmd/desktop/desktop
+scanner/cmd/calibrate/calibrate
 
 # Desktop app build outputs
 scanner/cmd/desktop/build/

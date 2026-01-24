@@ -10,7 +10,7 @@ mode: Average  # Average or PeakDetect
 
 # Gain settings
 # Use manual mode for consistent sweeps across the spectrum
-rx_gain: 40           # RX gain in dB (0-73)
+rx_gain: 30           # RX gain in dB (0-73)
 rx_gain_mode: Manual  # manual, slow_attack, or fast_attack
 
 # Frequency bands to scan
