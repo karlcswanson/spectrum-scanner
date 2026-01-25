@@ -22,6 +22,7 @@ func DefaultConfig() *models.Config {
 		Mode:        "Average",
 		RxGain:      30,       // 30 dB provides linear response
 		RxGainMode:  "manual", // manual gain for consistent sweeps
+		AutoStart:   true,     // Start scanning on launch
 		Bands: []models.Band{
 			{
 				Name:    "Business Radio",

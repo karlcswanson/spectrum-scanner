@@ -8,7 +8,7 @@ services:
       - "1883:1883"
       - "9001:9001"
     volumes:
-      - ./config/mosquitto/mosquitto.conf:/etc/mosquitto/mosquitto.conf
+      - ./mosquitto/mosquitto.conf:/etc/mosquitto/mosquitto.conf
       - mosquitto_data:/mosquitto/data
       - mosquitto_log:/mosquitto/log
     depends_on:
@@ -18,7 +18,7 @@ services:
   # Django Backend (REST API for historical data + MQTT auth)
   server:
     build:
-      context: ./server
+      context: .
       dockerfile: Dockerfile
     ports:
       - "8000:8000"
@@ -31,7 +31,7 @@ services:
       - MQTT_BRIDGE_USERNAME=spectrum-bridge
       - MQTT_BRIDGE_PASSWORD=bridge-secret-token-change-me
     volumes:
-      - ./server:/app
+      - .:/app
       - server_data:/app/data
     command: >
       sh -c "python manage.py migrate &&
@@ -40,7 +40,7 @@ services:
   # MQTT Bridge (stores scans to database)
   mqtt-bridge:
     build:
-      context: ./server
+      context: .
       dockerfile: Dockerfile
     environment:
       - MQTT_BROKER_HOST=mosquitto
@@ -49,7 +49,7 @@ services:
       - MQTT_BRIDGE_USERNAME=spectrum-bridge
       - MQTT_BRIDGE_PASSWORD=bridge-secret-token-change-me
     volumes:
-      - ./server:/app
+      - .:/app
       - server_data:/app/data
     depends_on:
       - mosquitto
@@ -65,7 +65,7 @@ services:
     environment:
       - DOCKER_ENV=true
     volumes:
-      - ./frontend:/app
+      - ../frontend:/app
       - frontend_modules:/app/node_modules
     command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
     depends_on:

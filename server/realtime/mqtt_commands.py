@@ -69,3 +69,27 @@ def start_scanner(scanner_id: str) -> bool:
 def stop_scanner(scanner_id: str) -> bool:
     """Send stop command to a scanner."""
     return publish_command(scanner_id, 'stop')
+
+
+def update_bands(scanner_id: str, bands: list) -> bool:
+    """Send band configuration update to a scanner.
+
+    Args:
+        scanner_id: UUID of the target scanner
+        bands: List of band configs [{"name": "UHF", "enabled": true, ...}, ...]
+    """
+    return publish_command(scanner_id, 'bands', bands)
+
+
+def update_gain(scanner_id: str, rx_gain: float, rx_gain_mode: str = None) -> bool:
+    """Send gain update to a scanner.
+
+    Args:
+        scanner_id: UUID of the target scanner
+        rx_gain: RX gain in dB
+        rx_gain_mode: Gain mode (manual, slow_attack, fast_attack)
+    """
+    payload = {'rx_gain': rx_gain}
+    if rx_gain_mode:
+        payload['rx_gain_mode'] = rx_gain_mode
+    return publish_command(scanner_id, 'gain', payload)

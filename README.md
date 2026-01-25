@@ -52,11 +52,11 @@ spectrum-scanner/
 │   ├── cmd/desktop/      # Wails desktop application
 │   ├── cmd/calibrate/    # Pluto calibration tool
 │   └── internal/         # Backend implementations
-├── server/               # Django central server
+├── server/               # Django central server + deployment
 │   ├── api/              # REST API
-│   └── realtime/         # MQTT bridge + WebSocket
-├── frontend/             # Vue.js frontend (shared)
-└── config/               # Production deployment configs
+│   ├── realtime/         # MQTT bridge
+│   └── docker-compose.*  # Docker deployment
+└── frontend/             # Vue.js frontend (shared)
 ```
 
 ## Quick Start
@@ -88,9 +88,10 @@ make desktop-dev
 ### Central Server
 
 ```bash
-# Development
 cd server
-docker-compose up -d
+
+# Development
+docker compose up -d
 
 # Production
 docker compose -f docker-compose.prod.yml up -d --build

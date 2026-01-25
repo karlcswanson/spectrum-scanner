@@ -24,10 +24,10 @@ Central server for aggregating and visualizing spectrum scan data from multiple 
 │  └──────┬───────┘                                                  │
 │         │                                                          │
 │         ▼                                                          │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────────┐  │
-│  │ MQTT Bridge  │──│   Django     │──│   Django Channels        │  │
-│  │              │  │   REST API   │  │   (WebSocket)            │  │
-│  └──────────────┘  └──────────────┘  └──────────────────────────┘  │
+│  ┌──────────────┐  ┌──────────────┐                                │
+│  │ MQTT Bridge  │──│   Django     │                                │
+│  │              │  │   REST API   │                                │
+│  └──────────────┘  └──────────────┘                                │
 │         │                  │                      │                │
 │         └──────────────────┼──────────────────────┘                │
 │                            ▼                                       │
@@ -59,11 +59,6 @@ Central server for aggregating and visualizing spectrum scan data from multiple 
 - `GET /api/scanners/{id}/timeline/` - Scan timestamps for scrubber
 - `GET /api/scans/at_time/` - Get scan closest to timestamp
 
-### Django Channels (`realtime/`)
-- WebSocket endpoint at `/ws/scans/`
-- Subscribe/unsubscribe to individual scanner streams
-- Real-time scan data forwarding
-
 ### Database Models (`core/models.py`)
 - `Scanner` - Scanner devices and their status
 - `Band` - Frequency bands per scanner
@@ -83,8 +78,8 @@ spectrum/scanners/{scanner_id}/config  - Scanner configuration (retained)
 
 ### Prerequisites
 - Python 3.11+
-- MQTT Broker (Mosquitto)
-- Redis (for Django Channels)
+- Docker and Docker Compose (recommended)
+- Or: MQTT Broker (Mosquitto) for manual setup
 
 ### Development Setup
 
@@ -114,8 +109,8 @@ python manage.py mqtt_bridge
 ### Docker Development
 
 ```bash
-# From project root
-docker-compose up -d
+cd server
+docker compose up -d
 ```
 
 Services:
@@ -142,9 +137,31 @@ cp .env.example .env
 # 3. Build and start
 docker compose -f docker-compose.prod.yml up -d --build
 
-# 4. Check logs
+# 4. Create admin user (first run only)
+docker compose -f docker-compose.prod.yml exec server python manage.py createsuperuser
+
+# 5. Check logs
 docker compose -f docker-compose.prod.yml logs -f
 ```
+
+#### First Run Setup
+
+After starting the server, create an admin user and configure scanners:
+
+1. **Create superuser** (see step 4 above)
+2. **Access admin panel** at `https://your-domain/admin/`
+3. **Add scanners** - create Scanner entries with:
+   - UUID (auto-generated or custom)
+   - Auth token (for MQTT authentication)
+   - Enabled flag
+4. **Configure scanner** - copy the UUID and token to the scanner's `config.yaml`:
+   ```yaml
+   mqtt:
+     enabled: true
+     broker: "tcp://your-domain:1883"
+     id: "scanner-uuid-from-admin"
+     token: "auth-token-from-admin"
+   ```
 
 #### Production Services
 
@@ -170,7 +187,7 @@ Browsers ──────► Caddy:443 ─────┬────► /mqtt
 
 #### Environment Variables
 
-Create a `.env` file in the project root:
+Create a `.env` file in the server directory:
 
 ```env
 # Required
@@ -247,7 +264,6 @@ docker compose -f docker-compose.prod.yml exec server \
 | `SECRET_KEY` | Django secret key | (generated) |
 | `ALLOWED_HOSTS` | Comma-separated hosts | `localhost,127.0.0.1` |
 | `DATABASE_URL` | Database connection URL | SQLite |
-| `REDIS_URL` | Redis connection URL | `redis://localhost:6379` |
 | `MQTT_BROKER_HOST` | MQTT broker hostname | `localhost` |
 | `MQTT_BROKER_PORT` | MQTT broker port | `1883` |
 

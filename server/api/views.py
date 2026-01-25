@@ -70,6 +70,51 @@ class ScannerViewSet(viewsets.ModelViewSet):
             status=status.HTTP_503_SERVICE_UNAVAILABLE
         )
 
+    @action(detail=True, methods=['post'])
+    def push_bands(self, request, pk=None):
+        """Push band configuration to scanner via MQTT.
+
+        POST data: [{"name": "UHF", "enabled": true, "start_hz": 470000000, "stop_hz": 608000000}, ...]
+        """
+        from realtime.mqtt_commands import update_bands
+        scanner = self.get_object()
+        bands = request.data
+        if not isinstance(bands, list):
+            return Response(
+                {'error': 'Expected list of band configs'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        success = update_bands(str(scanner.id), bands)
+        if success:
+            return Response({'status': 'bands pushed', 'scanner': scanner.id})
+        return Response(
+            {'error': 'Failed to push bands'},
+            status=status.HTTP_503_SERVICE_UNAVAILABLE
+        )
+
+    @action(detail=True, methods=['post'])
+    def push_gain(self, request, pk=None):
+        """Push gain settings to scanner via MQTT.
+
+        POST data: {"rx_gain": 40, "rx_gain_mode": "manual"}
+        """
+        from realtime.mqtt_commands import update_gain
+        scanner = self.get_object()
+        rx_gain = request.data.get('rx_gain')
+        rx_gain_mode = request.data.get('rx_gain_mode')
+        if rx_gain is None:
+            return Response(
+                {'error': 'rx_gain required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        success = update_gain(str(scanner.id), float(rx_gain), rx_gain_mode)
+        if success:
+            return Response({'status': 'gain pushed', 'scanner': scanner.id})
+        return Response(
+            {'error': 'Failed to push gain'},
+            status=status.HTTP_503_SERVICE_UNAVAILABLE
+        )
+
     @action(detail=True, methods=['get'])
     def latest_scan(self, request, pk=None):
         """Get the most recent scan from this scanner."""
@@ -411,6 +456,10 @@ def mqtt_acl(request):
             return HttpResponse(status=200)
         # Bridge can publish to timeline topics (to notify frontend of stored scans)
         if is_publish and topic.startswith(f"{topic_prefix}/scanners/") and topic.endswith("/timeline"):
+            logger.debug(f"MQTT ACL: bridge service publish to {topic} allowed")
+            return HttpResponse(status=200)
+        # Bridge can publish to command topics (to control scanners from API)
+        if is_publish and topic.startswith(f"{topic_prefix}/commands/"):
             logger.debug(f"MQTT ACL: bridge service publish to {topic} allowed")
             return HttpResponse(status=200)
         logger.warning(f"MQTT ACL: bridge service access to {topic} (acc={acc}) denied")

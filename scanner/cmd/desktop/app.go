@@ -197,6 +197,14 @@ func (a *App) autoConnect() {
 		}
 	})
 
+	// Set up config change callback for remote config updates (e.g., band enable/disable via MQTT)
+	a.runner.Engine.SetConfigChangeCallback(func(cfg *models.Config) {
+		wailsRuntime.EventsEmit(a.ctx, "config-changed", cfg)
+		if a.webServer != nil {
+			a.webServer.WSHub().BroadcastConfig(cfg)
+		}
+	})
+
 	log.Printf("Auto-connected to %s: %s", r.Backend.Type(), r.Backend.Name())
 
 	// Connect standalone MQTT to the engine so scans get published
@@ -217,6 +225,7 @@ func (a *App) autoConnect() {
 	wailsRuntime.EventsEmit(a.ctx, "server-status", a.getServerStatusLocked())
 
 	// Auto-start scanning if configured
+	log.Printf("Auto-start config: %v", a.config.AutoStart)
 	if a.config.AutoStart {
 		log.Println("Auto-starting scanning...")
 		go a.forwardScans()
@@ -349,12 +358,29 @@ func (a *App) Connect(address string) error {
 		}
 	})
 
+	// Set up config change callback for remote config updates
+	a.runner.Engine.SetConfigChangeCallback(func(cfg *models.Config) {
+		wailsRuntime.EventsEmit(a.ctx, "config-changed", cfg)
+		if a.webServer != nil {
+			a.webServer.WSHub().BroadcastConfig(cfg)
+		}
+	})
+
 	// Emit connected status
 	wailsRuntime.EventsEmit(a.ctx, "status", StatusEvent{
 		Scanning:    false,
 		CurrentBand: "",
 		Connected:   true,
 	})
+
+	// Auto-start scanning if configured
+	if a.config.AutoStart {
+		log.Println("Auto-starting scanning after connect...")
+		go a.forwardScans()
+		if err := a.runner.Engine.Start(); err != nil {
+			log.Printf("Auto-start scanning failed: %v", err)
+		}
+	}
 
 	return nil
 }

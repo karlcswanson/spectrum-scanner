@@ -67,11 +67,14 @@ export const useStandaloneStore = defineStore('standalone', () => {
     ws.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data)
-        // Handle typed messages: { type: "scan" | "status", data: {...} }
+        // Handle typed messages: { type: "scan" | "status" | "config", data: {...} }
         if (msg.type === 'scan') {
           handleScanData(msg.data)
         } else if (msg.type === 'status') {
           handleStatusUpdate(msg.data)
+        } else if (msg.type === 'config') {
+          // Config pushed from server (e.g., remote MQTT command)
+          config.value = msg.data
         } else {
           // Legacy format (raw scan data)
           handleScanData(msg)

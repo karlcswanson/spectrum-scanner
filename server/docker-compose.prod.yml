@@ -14,7 +14,7 @@ services:
     environment:
       - DOMAIN=${DOMAIN:-localhost}
     volumes:
-      - ./config/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - frontend_dist:/srv/frontend:ro
       - django_static:/srv/static:ro
       - caddy_data:/data
@@ -33,7 +33,7 @@ services:
       - "1883:1883"
       # WebSocket exposed through Caddy, not directly
     volumes:
-      - ./config/mosquitto.prod.conf:/etc/mosquitto/mosquitto.conf:ro
+      - ./mosquitto.prod.conf:/etc/mosquitto/mosquitto.conf:ro
       - mosquitto_data:/mosquitto/data
       - mosquitto_log:/mosquitto/log
     depends_on:
@@ -43,7 +43,7 @@ services:
   # Django Backend (REST API + MQTT auth)
   server:
     build:
-      context: ./server
+      context: .
       dockerfile: Dockerfile.prod
     restart: unless-stopped
     environment:
@@ -65,7 +65,7 @@ services:
       - server_data:/app/data
       - django_static:/app/staticfiles
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/scanners/')"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/')"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -78,7 +78,7 @@ services:
   # MQTT Bridge (stores scans to database)
   mqtt-bridge:
     build:
-      context: ./server
+      context: .
       dockerfile: Dockerfile.prod
     restart: unless-stopped
     environment:
@@ -103,7 +103,7 @@ services:
   # Frontend build (runs once, copies static files to volume)
   frontend:
     build:
-      context: ./frontend
+      context: ../frontend
       dockerfile: Dockerfile
     volumes:
       - frontend_dist:/srv/frontend

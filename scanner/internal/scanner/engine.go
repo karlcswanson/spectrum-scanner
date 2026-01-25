@@ -13,6 +13,9 @@ import (
 // StatusChangeFunc is called when scanning status changes
 type StatusChangeFunc func(scanning bool, currentBand string)
 
+// ConfigChangeFunc is called when configuration changes (e.g., bands enabled/disabled via MQTT)
+type ConfigChangeFunc func(config *models.Config)
+
 // Engine orchestrates frequency sweeping across bands using any Backend.
 type Engine struct {
 	backend Backend
@@ -30,6 +33,9 @@ type Engine struct {
 
 	// Status change callback (for WebSocket broadcasts)
 	onStatusChange StatusChangeFunc
+
+	// Config change callback (for notifying frontends of remote config changes)
+	onConfigChange ConfigChangeFunc
 }
 
 // NewEngine creates a new sweep engine with the given backend.
@@ -99,10 +105,24 @@ func (e *Engine) SetStatusChangeCallback(fn StatusChangeFunc) {
 	e.onStatusChange = fn
 }
 
+// SetConfigChangeCallback sets a function to be called when config changes remotely
+func (e *Engine) SetConfigChangeCallback(fn ConfigChangeFunc) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.onConfigChange = fn
+}
+
 // notifyStatusChange calls the status change callback if set
 func (e *Engine) notifyStatusChange(scanning bool, currentBand string) {
 	if e.onStatusChange != nil {
 		e.onStatusChange(scanning, currentBand)
+	}
+}
+
+// notifyConfigChange calls the config change callback if set
+func (e *Engine) notifyConfigChange() {
+	if e.onConfigChange != nil {
+		e.onConfigChange(e.config)
 	}
 }
 
@@ -195,7 +215,7 @@ func (e *Engine) Stop() {
 	e.notifyStatusChange(false, "")
 }
 
-// UpdateConfig updates the engine configuration
+// UpdateConfig updates the engine configuration and notifies all frontends
 func (e *Engine) UpdateConfig(config *models.Config) {
 	e.mu.Lock()
 	e.config = config
@@ -203,6 +223,14 @@ func (e *Engine) UpdateConfig(config *models.Config) {
 
 	// Reapply calibration in case it changed
 	e.applyCalibration()
+
+	// Publish updated config to MQTT so central server sees the change
+	if e.mqtt != nil && e.mqtt.IsConnected() {
+		e.mqtt.PublishConfig()
+	}
+
+	// Notify local frontends (Wails, WebSocket)
+	e.notifyConfigChange()
 }
 
 // GetConfig returns the current configuration
@@ -338,7 +366,6 @@ func (e *Engine) HandleStop() {
 // HandleBands implements mqtt.CommandHandler - updates band configuration
 func (e *Engine) HandleBands(bands []mqtt.BandConfig) error {
 	e.mu.Lock()
-	defer e.mu.Unlock()
 
 	// Update band enabled states
 	for _, newBand := range bands {
@@ -355,6 +382,11 @@ func (e *Engine) HandleBands(bands []mqtt.BandConfig) error {
 	if e.mqtt != nil && e.mqtt.IsConnected() {
 		e.mqtt.PublishConfig()
 	}
+
+	e.mu.Unlock()
+
+	// Notify frontends of config change (outside lock to avoid deadlock)
+	e.notifyConfigChange()
 
 	return nil
 }
@@ -380,6 +412,9 @@ func (e *Engine) HandleGain(gain float64, mode string) error {
 	if e.mqtt != nil && e.mqtt.IsConnected() {
 		e.mqtt.PublishConfig()
 	}
+
+	// Notify frontends of config change
+	e.notifyConfigChange()
 
 	return nil
 }

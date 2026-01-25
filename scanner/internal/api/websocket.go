@@ -81,6 +81,14 @@ func (h *WSHub) BroadcastStatus(scanning bool, currentBand string) {
 	})
 }
 
+// BroadcastConfig sends a config update to all clients
+func (h *WSHub) BroadcastConfig(config interface{}) {
+	h.Broadcast(WSMessage{
+		Type: "config",
+		Data: config,
+	})
+}
+
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {

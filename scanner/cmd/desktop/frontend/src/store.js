@@ -96,6 +96,11 @@ export const useDesktopStore = defineStore('desktop', () => {
       serverStatus.value = data
     })
 
+    // Listen for config changes from Go backend (e.g., remote MQTT commands)
+    window.runtime.EventsOn('config-changed', (data) => {
+      config.value = data
+    })
+
     // Fetch initial config
     fetchConfig()
     fetchStatus()
@@ -111,6 +116,7 @@ export const useDesktopStore = defineStore('desktop', () => {
     window.runtime.EventsOff('scan')
     window.runtime.EventsOff('status')
     window.runtime.EventsOff('server-status')
+    window.runtime.EventsOff('config-changed')
   }
 
   // Wails API calls
