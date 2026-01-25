@@ -8,6 +8,11 @@ import MultiScannerChart from '../components/MultiScannerChart.vue'
 
 const store = useScannersStore()
 
+// Online scanners for quick links
+const onlineScanners = computed(() =>
+  store.scannerList.filter(s => s.online)
+)
+
 // Track which bands are selected for overlay comparison
 // Key format: "scannerId:bandName"
 const selectedBands = ref(new Set())
@@ -106,12 +111,19 @@ function toggleSelection(key) {
 function clearSelection() {
   selectedBands.value = new Set()
 }
+
+function scrollToScanner(scannerId) {
+  const el = document.getElementById(`scanner-${scannerId}`)
+  if (el) {
+    el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+}
 </script>
 
 <template>
   <div>
     <!-- Header with connection status -->
-    <div class="flex items-center justify-between mb-6">
+    <div class="flex items-center justify-between mb-4">
       <h1 class="text-2xl font-bold">Dashboard</h1>
       <div class="flex items-center gap-4">
         <!-- Selection info -->
@@ -151,6 +163,19 @@ function clearSelection() {
       </div>
     </div>
 
+    <!-- Online scanners quick links -->
+    <div v-if="onlineScanners.length" class="flex items-center gap-2 mb-6">
+      <span class="text-gray-500 text-sm">Online:</span>
+      <button
+        v-for="scanner in onlineScanners"
+        :key="scanner.id"
+        @click="scrollToScanner(scanner.id)"
+        class="px-2 py-1 text-sm rounded bg-green-600/20 text-green-400 hover:bg-green-600/30 hover:text-green-300 cursor-pointer"
+      >
+        {{ scanner.name || scanner.id.slice(0, 8) }}
+      </button>
+    </div>
+
     <!-- No scanners message -->
     <div
       v-if="store.scannerList.length === 0"
@@ -188,7 +213,7 @@ function clearSelection() {
 
     <!-- Scanner sections -->
     <div class="space-y-6">
-      <div v-for="{ scanner, bands } in scannerBands" :key="scanner.id">
+      <div v-for="{ scanner, bands } in scannerBands" :key="scanner.id" :id="`scanner-${scanner.id}`">
         <!-- Scanner header with inline controls -->
         <ScannerHeader :scanner="scanner" class="mb-4" />
 

@@ -54,3 +54,4 @@ scanner/root@*
 config.yaml
 !config.yaml.example
 /scanner/calibration.yaml
+tools/
