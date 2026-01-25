@@ -3,6 +3,7 @@
  * Provides consistent error tracking across all frontends
  */
 import { ref, computed } from 'vue'
+import { logger } from './logger.js'
 
 /**
  * Create an error handler with auto-expiring error messages
@@ -48,7 +49,7 @@ export function useError(displayDurationMs = 10000) {
     } catch (err) {
       const message = err?.message || String(err)
       setError(`${context}: ${message}`)
-      console.error(`${context} failed:`, err)
+      logger.error(`${context} failed:`, err)
       return undefined
     }
   }

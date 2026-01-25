@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import mqtt from 'mqtt'
 import { SCRUBBER_HOURS } from '../constants'
+import { logger } from '../lib'
 
 export const useScannersStore = defineStore('scanners', () => {
   const scanners = ref({})
@@ -66,7 +67,7 @@ export const useScannersStore = defineStore('scanners', () => {
       if (!response.ok) throw new Error('Failed to fetch MQTT credentials')
       return await response.json()
     } catch (error) {
-      console.error('Failed to fetch MQTT credentials:', error)
+      logger.error('Failed to fetch MQTT credentials:', error)
       return null
     }
   }
@@ -80,12 +81,12 @@ export const useScannersStore = defineStore('scanners', () => {
     // Fetch credentials from Django
     const credentials = await fetchMqttCredentials()
     if (!credentials) {
-      console.error('Could not get MQTT credentials')
+      logger.error('Could not get MQTT credentials')
       return
     }
 
     const mqttUrl = getMqttUrl()
-    console.log('Connecting to MQTT:', mqttUrl)
+    logger.debug('Connecting to MQTT:', mqttUrl)
 
     client = mqtt.connect(mqttUrl, {
       clientId: `spectrum-frontend-${Math.random().toString(16).substring(2, 10)}`,
@@ -97,7 +98,7 @@ export const useScannersStore = defineStore('scanners', () => {
     })
 
     client.on('connect', () => {
-      console.log('MQTT connected')
+      logger.debug('MQTT connected')
       connected.value = true
 
       // Start the global tick timer
@@ -110,7 +111,7 @@ export const useScannersStore = defineStore('scanners', () => {
       client.subscribe(`${TOPIC_PREFIX}/scanners/+/scan`, { qos: 0 })
       client.subscribe(`${TOPIC_PREFIX}/scanners/+/timeline`, { qos: 0 })
 
-      console.log('Subscribed to scanner topics')
+      logger.debug('Subscribed to scanner topics')
     })
 
     client.on('message', (topic, payload) => {
@@ -133,22 +134,22 @@ export const useScannersStore = defineStore('scanners', () => {
           }
         }
       } catch (error) {
-        console.error('Failed to parse MQTT message:', error)
+        logger.error('Failed to parse MQTT message:', error)
       }
     })
 
     client.on('close', () => {
-      console.log('MQTT disconnected')
+      logger.debug('MQTT disconnected')
       connected.value = false
     })
 
     client.on('error', (error) => {
-      console.error('MQTT error:', error)
+      logger.error('MQTT error:', error)
       lastError.value = { message: `MQTT: ${error.message || error}`, timestamp: Date.now() }
     })
 
     client.on('reconnect', () => {
-      console.log('MQTT reconnecting...')
+      logger.debug('MQTT reconnecting...')
       lastError.value = { message: 'MQTT reconnecting...', timestamp: Date.now() }
     })
   }
@@ -167,31 +168,31 @@ export const useScannersStore = defineStore('scanners', () => {
   // Send start command to a scanner
   function sendStartCommand(scannerId) {
     if (!client || !client.connected) {
-      console.error('MQTT not connected')
+      logger.warn('MQTT not connected')
       return false
     }
     const topic = `${TOPIC_PREFIX}/commands/${scannerId}/start`
     client.publish(topic, JSON.stringify({}), { qos: 1 })
-    console.log('Sent start command to', scannerId)
+    logger.debug('Sent start command to', scannerId)
     return true
   }
 
   // Send stop command to a scanner
   function sendStopCommand(scannerId) {
     if (!client || !client.connected) {
-      console.error('MQTT not connected')
+      logger.warn('MQTT not connected')
       return false
     }
     const topic = `${TOPIC_PREFIX}/commands/${scannerId}/stop`
     client.publish(topic, JSON.stringify({}), { qos: 1 })
-    console.log('Sent stop command to', scannerId)
+    logger.debug('Sent stop command to', scannerId)
     return true
   }
 
   // Send band configuration to a scanner
   function sendBandsCommand(scannerId, bands) {
     if (!client || !client.connected) {
-      console.error('MQTT not connected')
+      logger.warn('MQTT not connected')
       return false
     }
     const topic = `${TOPIC_PREFIX}/commands/${scannerId}/bands`
@@ -203,20 +204,20 @@ export const useScannersStore = defineStore('scanners', () => {
       enabled: b.enabled,
     }))
     client.publish(topic, JSON.stringify(payload), { qos: 1 })
-    console.log('Sent bands command to', scannerId, payload)
+    logger.debug('Sent bands command to', scannerId, payload)
     return true
   }
 
   // Send gain settings to a scanner
   function sendGainCommand(scannerId, rxGain, rxGainMode) {
     if (!client || !client.connected) {
-      console.error('MQTT not connected')
+      logger.warn('MQTT not connected')
       return false
     }
     const topic = `${TOPIC_PREFIX}/commands/${scannerId}/gain`
     const payload = { rx_gain: rxGain, rx_gain_mode: rxGainMode }
     client.publish(topic, JSON.stringify(payload), { qos: 1 })
-    console.log('Sent gain command to', scannerId, payload)
+    logger.debug('Sent gain command to', scannerId, payload)
     return true
   }
 
@@ -225,13 +226,11 @@ export const useScannersStore = defineStore('scanners', () => {
   function subscribe(scannerId) {
     if (!scannerId) return
     subscriptions.value.add(scannerId)
-    console.log('Tracking scanner:', scannerId)
   }
 
   function unsubscribe(scannerId) {
     if (!scannerId) return
     subscriptions.value.delete(scannerId)
-    console.log('Untracking scanner:', scannerId)
   }
 
   function handleScan(scannerId, data) {
@@ -289,7 +288,7 @@ export const useScannersStore = defineStore('scanners', () => {
   }
 
   function handleConfig(scannerId, data) {
-    console.log('handleConfig:', scannerId, 'bands:', data.bands)
+    logger.debug('handleConfig:', scannerId, 'bands:', data.bands)
     scanners.value[scannerId] = {
       ...scanners.value[scannerId],
       id: scannerId,
@@ -449,7 +448,7 @@ export const useScannersStore = defineStore('scanners', () => {
       }
       return scanCache.value[key]
     } catch (err) {
-      console.error(`Error loading cache for ${scannerId}/${bandName}:`, err)
+      logger.error(`Error loading cache for ${scannerId}/${bandName}:`, err)
       scanCache.value[key] = []
       return []
     }
@@ -502,7 +501,7 @@ export const useScannersStore = defineStore('scanners', () => {
       }
       return decimatedCache.value[key]
     } catch (err) {
-      console.error(`Error loading decimated cache for ${scannerId}/${bandName}:`, err)
+      logger.error(`Error loading decimated cache for ${scannerId}/${bandName}:`, err)
       decimatedCache.value[key] = []
       return []
     }
@@ -570,7 +569,7 @@ export const useScannersStore = defineStore('scanners', () => {
         }
       })
     } catch (error) {
-      console.error('Failed to fetch scanners:', error)
+      logger.error('Failed to fetch scanners:', error)
     }
   }
 
@@ -593,7 +592,7 @@ export const useScannersStore = defineStore('scanners', () => {
   function exportScanCSV(scannerId, bandName) {
     const scan = bandScans.value[scannerId]?.[bandName]
     if (!scan) {
-      console.error('No scan data for', scannerId, bandName)
+      logger.warn('No scan data for', scannerId, bandName)
       return
     }
 
@@ -611,7 +610,7 @@ export const useScannersStore = defineStore('scanners', () => {
     a.click()
 
     URL.revokeObjectURL(url)
-    console.log('Exported:', filename)
+    logger.debug('Exported:', filename)
   }
 
   // Helper for API calls with error tracking
@@ -663,7 +662,7 @@ export const useScannersStore = defineStore('scanners', () => {
 
       return data
     } catch (error) {
-      console.error('Failed to fetch timeline:', error)
+      logger.error('Failed to fetch timeline:', error)
       setApiError(`Timeline: ${error.message}`)
       return []
     }
@@ -709,7 +708,7 @@ export const useScannersStore = defineStore('scanners', () => {
       clearApiError()
       return await response.json()
     } catch (error) {
-      console.error('Failed to fetch history:', error)
+      logger.error('Failed to fetch history:', error)
       setApiError(`History: ${error.message}`)
       return []
     }
@@ -729,7 +728,7 @@ export const useScannersStore = defineStore('scanners', () => {
       clearApiError()
       return await response.json()
     } catch (error) {
-      console.error('Failed to fetch scan at time:', error)
+      logger.error('Failed to fetch scan at time:', error)
       setApiError(`Scan: ${error.message}`)
       return null
     }

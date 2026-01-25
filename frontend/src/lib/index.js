@@ -14,3 +14,6 @@ export { useScanData, scanBus } from './useScanData.js'
 
 // Scan history API (for timeline scrubber)
 export * from './scanApi.js'
+
+// Logging utility
+export { logger } from './logger.js'

@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import * as d3 from 'd3'
+import { logger } from '@lib'
 
 const props = defineProps({
   scannerId: {
@@ -150,7 +151,7 @@ function applyCustomRange() {
   const end = new Date(`${customEndDate.value}T${customEndTime.value}`)
 
   if (isNaN(start.getTime()) || isNaN(end.getTime())) {
-    console.error('Invalid date range')
+    logger.error('Invalid date range')
     return
   }
 

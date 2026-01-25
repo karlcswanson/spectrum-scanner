@@ -6,7 +6,7 @@ all: build
 # Build Vue frontend for standalone scanner
 build-frontend:
 	cd ../frontend && npm run build:standalone
-	rm -rf internal/api/web/*
+	rm -rf internal/api/web/assets internal/api/web/index.html
 	cp -r ../frontend/dist-standalone/* internal/api/web/
 	mv internal/api/web/standalone.html internal/api/web/index.html
 	@echo "Frontend built and copied to internal/api/web/"
@@ -121,6 +121,7 @@ clean:
 	rm -rf bin/
 	rm -rf cmd/desktop/build/bin/
 	rm -rf internal/api/web/assets/
+	rm -f internal/api/web/index.html
 
 # Show help
 help:

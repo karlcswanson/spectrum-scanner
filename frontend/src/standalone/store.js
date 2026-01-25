@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { useScanData, scanBus } from '@lib'
+import { useScanData, scanBus, logger } from '@lib'
 
 // Re-export for components that import from store
 export { scanBus }
@@ -52,11 +52,11 @@ export const useStandaloneStore = defineStore('standalone', () => {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const wsUrl = `${protocol}//${window.location.host}/ws/stream`
 
-    console.log('Connecting to WebSocket:', wsUrl)
+    logger.debug('Connecting to WebSocket:', wsUrl)
     ws = new WebSocket(wsUrl)
 
     ws.onopen = () => {
-      console.log('WebSocket connected')
+      logger.debug('WebSocket connected')
       connected.value = true
       lastError.value = null
       // Fetch initial config
@@ -77,19 +77,19 @@ export const useStandaloneStore = defineStore('standalone', () => {
           handleScanData(msg)
         }
       } catch (err) {
-        console.error('Failed to parse WebSocket message:', err)
+        logger.error('Failed to parse WebSocket message:', err)
       }
     }
 
     ws.onclose = () => {
-      console.log('WebSocket disconnected')
+      logger.debug('WebSocket disconnected')
       connected.value = false
       // Reconnect after delay
       reconnectTimeout = setTimeout(connect, 2000)
     }
 
-    ws.onerror = (err) => {
-      console.error('WebSocket error:', err)
+    ws.onerror = () => {
+      logger.error('WebSocket connection error')
       lastError.value = { message: 'WebSocket connection error', timestamp: Date.now() }
     }
   }
@@ -125,7 +125,6 @@ export const useStandaloneStore = defineStore('standalone', () => {
       if (!response.ok) throw new Error(`HTTP ${response.status}`)
       config.value = await response.json()
     } catch (err) {
-      console.error('Failed to fetch config:', err)
       lastError.value = { message: `Config: ${err.message}`, timestamp: Date.now() }
     }
   }
@@ -136,7 +135,7 @@ export const useStandaloneStore = defineStore('standalone', () => {
       if (!response.ok) throw new Error(`HTTP ${response.status}`)
       status.value = await response.json()
     } catch (err) {
-      console.error('Failed to fetch status:', err)
+      // Status fetch errors are non-critical
     }
   }
 
@@ -146,7 +145,6 @@ export const useStandaloneStore = defineStore('standalone', () => {
       if (!response.ok) throw new Error(`HTTP ${response.status}`)
       await fetchStatus()
     } catch (err) {
-      console.error('Failed to start scanning:', err)
       lastError.value = { message: `Start: ${err.message}`, timestamp: Date.now() }
     }
   }
@@ -157,7 +155,6 @@ export const useStandaloneStore = defineStore('standalone', () => {
       if (!response.ok) throw new Error(`HTTP ${response.status}`)
       await fetchStatus()
     } catch (err) {
-      console.error('Failed to stop scanning:', err)
       lastError.value = { message: `Stop: ${err.message}`, timestamp: Date.now() }
     }
   }
@@ -172,7 +169,6 @@ export const useStandaloneStore = defineStore('standalone', () => {
       if (!response.ok) throw new Error(`HTTP ${response.status}`)
       await fetchConfig()
     } catch (err) {
-      console.error('Failed to update bands:', err)
       lastError.value = { message: `Bands: ${err.message}`, timestamp: Date.now() }
     }
   }
@@ -187,7 +183,6 @@ export const useStandaloneStore = defineStore('standalone', () => {
       if (!response.ok) throw new Error(`HTTP ${response.status}`)
       await fetchConfig()
     } catch (err) {
-      console.error('Failed to update gain:', err)
       lastError.value = { message: `Gain: ${err.message}`, timestamp: Date.now() }
     }
   }
@@ -202,7 +197,6 @@ export const useStandaloneStore = defineStore('standalone', () => {
       if (!response.ok) throw new Error(`HTTP ${response.status}`)
       await fetchConfig()
     } catch (err) {
-      console.error('Failed to update name:', err)
       lastError.value = { message: `Name: ${err.message}`, timestamp: Date.now() }
     }
   }

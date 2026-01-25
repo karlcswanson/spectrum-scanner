@@ -4,6 +4,7 @@ import * as d3 from 'd3'
 // Import worker using Vite's ?worker&inline syntax for Wails compatibility
 // This embeds the worker as a blob URL instead of a separate file
 import TraceWorker from '../lib/traceWorker.js?worker&inline'
+import { logger } from '@lib'
 
 const props = defineProps({
   // Array of traces to display: [{ id, name, scan, color }]
@@ -91,7 +92,7 @@ function initWorker() {
         }
       }
     } catch (err) {
-      console.warn('Failed to initialize trace worker:', err)
+      logger.warn('Failed to initialize trace worker:', err)
       traceWorker = null
     }
   }

@@ -15,14 +15,15 @@ Central server for aggregating and visualizing spectrum scan data from multiple 
          └───────────────────────┼───────────────────────┘
                                  │
                                  ▼
-                    ┌────────────────────────┐
-                    │     MQTT Broker        │
-                    │     (Mosquitto)        │
-                    └────────────┬───────────┘
-                                 │
-                                 ▼
 ┌────────────────────────────────────────────────────────────────────┐
 │                        Spectrum Server                             │
+│                                                                    │
+│  ┌──────────────┐                                                  │
+│  │  Mosquitto   │◀─── Scanners connect here (port 1883)            │
+│  │ MQTT Broker  │                                                  │
+│  └──────┬───────┘                                                  │
+│         │                                                          │
+│         ▼                                                          │
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────────┐  │
 │  │ MQTT Bridge  │──│   Django     │──│   Django Channels        │  │
 │  │              │  │   REST API   │  │   (WebSocket)            │  │
@@ -32,8 +33,6 @@ Central server for aggregating and visualizing spectrum scan data from multiple 
 │                            ▼                                       │
 │                   ┌──────────────┐                                 │
 │                   │   Database   │                                 │
-│                   │   (SQLite/   │                                 │
-│                   │   PostgreSQL)│                                 │
 │                   └──────────────┘                                 │
 └────────────────────────────────────────────────────────────────────┘
                                  │
@@ -239,82 +238,6 @@ To backup:
 docker compose -f docker-compose.prod.yml exec server \
   cp /app/data/db.sqlite3 /app/data/db.sqlite3.backup
 ```
-
-### Manual Production Deployment (without Docker)
-
-If you prefer to deploy without Docker:
-
-1. **Database**: Configure PostgreSQL
-   ```python
-   # Set environment variables or edit config/settings.py
-   DB_ENGINE=django.db.backends.postgresql
-   DB_NAME=spectrum
-   DB_USER=spectrum
-   DB_PASSWORD=your-password
-   DB_HOST=localhost
-   ```
-
-2. **Static Files**: Build frontend and collect
-   ```bash
-   cd frontend && npm run build
-   cd ../server && python manage.py collectstatic
-   ```
-
-3. **WSGI Server**: Use Gunicorn
-   ```bash
-   gunicorn --bind 0.0.0.0:8000 --workers 4 config.wsgi:application
-   ```
-
-4. **Process Manager**: Use systemd
-   ```ini
-   # /etc/systemd/system/spectrum-server.service
-   [Unit]
-   Description=Spectrum Server
-   After=network.target
-
-   [Service]
-   User=spectrum
-   WorkingDirectory=/opt/spectrum/server
-   ExecStart=/opt/spectrum/venv/bin/gunicorn --bind 127.0.0.1:8000 --workers 4 config.wsgi:application
-   Restart=always
-
-   [Install]
-   WantedBy=multi-user.target
-   ```
-
-   ```ini
-   # /etc/systemd/system/spectrum-mqtt.service
-   [Unit]
-   Description=Spectrum MQTT Bridge
-   After=network.target mosquitto.service
-
-   [Service]
-   User=spectrum
-   WorkingDirectory=/opt/spectrum/server
-   ExecStart=/opt/spectrum/venv/bin/python manage.py mqtt_bridge
-   Restart=always
-
-   [Install]
-   WantedBy=multi-user.target
-   ```
-
-5. **Reverse Proxy**: Caddy (recommended) or Nginx
-   ```
-   # /etc/caddy/Caddyfile
-   spectrum.example.com {
-       handle /api/* {
-           reverse_proxy localhost:8000
-       }
-       handle /mqtt {
-           reverse_proxy localhost:9001
-       }
-       handle {
-           root * /opt/spectrum/frontend/dist
-           try_files {path} /index.html
-           file_server
-       }
-   }
-   ```
 
 ## Environment Variables
 

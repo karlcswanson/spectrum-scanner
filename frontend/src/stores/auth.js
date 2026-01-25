@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
+import { logger } from '@lib'
 
 // Get CSRF token from cookie
 function getCsrfToken() {
@@ -38,7 +39,7 @@ export const useAuthStore = defineStore('auth', () => {
         user.value = null
       }
     } catch (err) {
-      console.error('Auth check failed:', err)
+      logger.error('Auth check failed:', err)
       user.value = null
     } finally {
       loading.value = false
@@ -74,7 +75,7 @@ export const useAuthStore = defineStore('auth', () => {
         return false
       }
     } catch (err) {
-      console.error('Login failed:', err)
+      logger.error('Login failed:', err)
       error.value = 'Network error'
       return false
     } finally {
@@ -96,7 +97,7 @@ export const useAuthStore = defineStore('auth', () => {
         credentials: 'include',
       })
     } catch (err) {
-      console.error('Logout failed:', err)
+      logger.error('Logout failed:', err)
     }
     user.value = null
   }

@@ -2,6 +2,7 @@
  * Scan History API abstraction
  * Works with Django backend, Go :8080 server, and Wails bindings
  */
+import { logger } from './logger.js'
 
 // API base URL (configurable via env)
 const API_BASE = import.meta.env.VITE_API_BASE || ''
@@ -26,7 +27,7 @@ export async function fetchTimeline(band, hours = 24) {
   } else {
     const res = await fetch(`${API_BASE}/api/scans/timeline?band=${encodeURIComponent(band)}&hours=${hours}`)
     if (!res.ok) {
-      console.error('Failed to fetch timeline:', res.status)
+      logger.error('Failed to fetch timeline:', res.status)
       return []
     }
     entries = await res.json()
@@ -55,7 +56,7 @@ export async function fetchScanAtTime(band, time) {
   const res = await fetch(`${API_BASE}/api/scans/at-time?band=${encodeURIComponent(band)}&time=${encodeURIComponent(timeStr)}`)
   if (!res.ok) {
     if (res.status === 404) return null
-    console.error('Failed to fetch scan at time:', res.status)
+    logger.error('Failed to fetch scan at time:', res.status)
     return null
   }
   return res.json()
@@ -75,7 +76,7 @@ export async function fetchDecimatedScans(band, hours = 6) {
 
   const res = await fetch(`${API_BASE}/api/scans/decimated?band=${encodeURIComponent(band)}&hours=${hours}`)
   if (!res.ok) {
-    console.error('Failed to fetch decimated scans:', res.status)
+    logger.error('Failed to fetch decimated scans:', res.status)
     return []
   }
   return res.json()
@@ -92,7 +93,7 @@ export async function fetchScanStats() {
 
   const res = await fetch(`${API_BASE}/api/scans/stats`)
   if (!res.ok) {
-    console.error('Failed to fetch scan stats:', res.status)
+    logger.error('Failed to fetch scan stats:', res.status)
     return {}
   }
   return res.json()

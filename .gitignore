@@ -25,6 +25,7 @@ scanner/cmd/desktop/frontend/package.json.md5
 
 # Embedded web assets (generated from frontend build)
 scanner/internal/api/web/assets/
+scanner/internal/api/web/index.html
 
 # Frontend
 frontend/node_modules/

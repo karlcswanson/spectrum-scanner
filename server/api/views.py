@@ -7,7 +7,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.http import HttpResponse
 from rest_framework import viewsets, status
 from rest_framework.decorators import action, api_view, permission_classes
-from rest_framework.permissions import AllowAny, BasePermission, SAFE_METHODS
+from rest_framework.permissions import AllowAny, IsAuthenticated, BasePermission, SAFE_METHODS
 from rest_framework.response import Response
 
 from django.contrib.auth import authenticate, login, logout
@@ -42,7 +42,7 @@ class ScannerViewSet(viewsets.ModelViewSet):
 
     queryset = Scanner.objects.all()
     serializer_class = ScannerSerializer
-    permission_classes = [ReadOnlyIfShareSession]
+    permission_classes = [IsAuthenticated, ReadOnlyIfShareSession]
 
     @action(detail=True, methods=['post'])
     def start(self, request, pk=None):
@@ -195,7 +195,7 @@ class BandViewSet(viewsets.ModelViewSet):
 
     queryset = Band.objects.all()
     serializer_class = BandSerializer
-    permission_classes = [ReadOnlyIfShareSession]
+    permission_classes = [IsAuthenticated, ReadOnlyIfShareSession]
 
 
 class ScanViewSet(viewsets.ModelViewSet):
@@ -203,7 +203,7 @@ class ScanViewSet(viewsets.ModelViewSet):
 
     queryset = Scan.objects.select_related('scanner', 'band').all()
     serializer_class = ScanSerializer
-    permission_classes = [ReadOnlyIfShareSession]
+    permission_classes = [IsAuthenticated, ReadOnlyIfShareSession]
 
     def get_queryset(self):
         queryset = super().get_queryset()
