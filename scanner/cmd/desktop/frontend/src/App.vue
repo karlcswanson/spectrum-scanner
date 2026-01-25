@@ -12,6 +12,7 @@ let nowInterval = null
 
 onUnmounted(() => {
   if (nowInterval) clearInterval(nowInterval)
+  store.cleanup()
 })
 
 const showError = computed(() => {
@@ -52,12 +53,14 @@ onMounted(async () => {
   }, 1000)
 
   store.init()
-
-  // Wait for config to load, then set default address based on backend type
-  setTimeout(() => {
-    deviceAddress.value = store.getDefaultAddress()
-  }, 100)
 })
+
+// Set default address once config loads
+watch(() => store.config, (cfg) => {
+  if (cfg && !deviceAddress.value) {
+    deviceAddress.value = store.getDefaultAddress()
+  }
+}, { immediate: true })
 
 async function handleConnect() {
   connecting.value = true
@@ -81,12 +84,9 @@ async function handleExport(bandName) {
   const wails = window.go?.main?.App
   if (wails?.SaveCSV) {
     try {
-      const savedPath = await wails.SaveCSV(csv, filename)
-      if (savedPath) {
-        console.log('Saved CSV to:', savedPath)
-      }
+      await wails.SaveCSV(csv, filename)
     } catch (err) {
-      console.error('Failed to save CSV:', err)
+      // CSV save errors handled by native dialog
     }
   }
 }

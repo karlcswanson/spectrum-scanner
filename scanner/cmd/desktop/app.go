@@ -24,6 +24,13 @@ import (
 	"scanner/internal/scanner"
 )
 
+// Default device addresses
+const (
+	defaultPlutoAddress  = "https://192.168.2.1"
+	defaultTinySAPort    = "/dev/tty.usbmodem4001"
+	defaultWebServerPort = 8080
+)
+
 // App struct holds the desktop application state
 type App struct {
 	ctx    context.Context
@@ -283,12 +290,12 @@ func (a *App) Connect(address string) error {
 	switch backendType {
 	case "pluto":
 		if address == "" {
-			address = "https://192.168.2.1"
+			address = defaultPlutoAddress
 		}
 		a.config.Backend.URL = address
 	case "tinysa":
 		if address == "" {
-			address = "/dev/tty.usbmodem4001"
+			address = defaultTinySAPort
 		}
 		a.config.Backend.Address = address
 	case "owon":
@@ -539,16 +546,24 @@ func (a *App) SetName(name string) error {
 	return nil
 }
 
+// Pluto detection addresses (tried in order)
+var plutoDetectAddresses = []string{
+	defaultPlutoAddress,   // Default USB
+	"https://pluto.local", // mDNS
+	"https://192.168.3.1", // Alternate
+}
+
+// tinySA detection ports (tried in order)
+var tinysaDetectPorts = []string{
+	defaultTinySAPort,
+	"/dev/tty.usbmodem3001",
+	"/dev/tty.usbmodem2001",
+	"/dev/tty.usbmodem1001",
+}
+
 // DetectPluto tries to find a connected Pluto device
 func (a *App) DetectPluto() string {
-	// Common addresses to try
-	addresses := []string{
-		"https://192.168.2.1", // Default USB
-		"https://pluto.local", // mDNS
-		"https://192.168.3.1", // Alternate
-	}
-
-	for _, addr := range addresses {
+	for _, addr := range plutoDetectAddresses {
 		client := pluto.NewClient(addr, "detect")
 		if err := client.Connect(); err == nil {
 			client.Close()
@@ -561,15 +576,7 @@ func (a *App) DetectPluto() string {
 
 // DetectTinySA tries to find a connected tinySA device
 func (a *App) DetectTinySA() string {
-	// Common serial ports on macOS
-	ports := []string{
-		"/dev/tty.usbmodem4001",
-		"/dev/tty.usbmodem3001",
-		"/dev/tty.usbmodem2001",
-		"/dev/tty.usbmodem1001",
-	}
-
-	for _, port := range ports {
+	for _, port := range tinysaDetectPorts {
 		cfg := tinysa.Config{Port: port, BaudRate: 576000}
 		device, err := tinysa.Open(cfg)
 		if err == nil {
@@ -663,7 +670,7 @@ func (a *App) GetWebConfig() *models.WebConfig {
 	if a.config.Web == nil {
 		return &models.WebConfig{
 			Enabled: false,
-			Port:    8080,
+			Port:    defaultWebServerPort,
 		}
 	}
 	return a.config.Web
@@ -702,7 +709,7 @@ func (a *App) SetWebConfig(enabled bool, port int) error {
 	if port > 0 {
 		a.config.Web.Port = port
 	} else {
-		a.config.Web.Port = 8080
+		a.config.Web.Port = defaultWebServerPort
 	}
 
 	return nil
@@ -806,12 +813,12 @@ func (a *App) EnableWebServer() error {
 // startWebServer starts the web server (must be called with lock held)
 func (a *App) startWebServer() error {
 	if a.config.Web == nil {
-		a.config.Web = &models.WebConfig{Port: 8080}
+		a.config.Web = &models.WebConfig{Port: defaultWebServerPort}
 	}
 
 	port := a.config.Web.Port
 	if port == 0 {
-		port = 8080
+		port = defaultWebServerPort
 	}
 
 	// Stop existing server

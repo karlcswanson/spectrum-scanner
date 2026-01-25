@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 )
@@ -95,18 +96,10 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	clientAddr := r.RemoteAddr
 	log.Printf("WebSocket client connected: %s", clientAddr)
 
-	// If engine not ready, send offline status and wait for it
-	if s.engine == nil {
+	// Wait for engine to be ready (poll every 500ms)
+	for s.engine == nil {
 		s.wsHub.BroadcastStatus(false, "")
-		log.Printf("WebSocket client %s waiting for scanner to connect...", clientAddr)
-		// Keep connection open but don't subscribe yet - hub will broadcast when ready
-		for {
-			_, _, err := conn.ReadMessage()
-			if err != nil {
-				log.Printf("WebSocket client disconnected (waiting): %s", clientAddr)
-				return
-			}
-		}
+		time.Sleep(500 * time.Millisecond)
 	}
 
 	// Subscribe to scan results from the sweep engine

@@ -74,7 +74,6 @@ export const useDesktopStore = defineStore('desktop', () => {
   // Initialize Wails event listeners
   function init() {
     if (!window.runtime) {
-      console.warn('Wails runtime not available')
       return
     }
 
@@ -106,6 +105,14 @@ export const useDesktopStore = defineStore('desktop', () => {
     fetchConfigPath()
   }
 
+  // Cleanup Wails event listeners
+  function cleanup() {
+    if (!window.runtime) return
+    window.runtime.EventsOff('scan')
+    window.runtime.EventsOff('status')
+    window.runtime.EventsOff('server-status')
+  }
+
   // Wails API calls
   async function connect(address = '') {
     if (!wails) {
@@ -118,7 +125,6 @@ export const useDesktopStore = defineStore('desktop', () => {
       await fetchConfig()
       await fetchStatus()
     } catch (err) {
-      console.error('Failed to connect:', err)
       lastError.value = { message: `Connect: ${err}`, timestamp: Date.now() }
     }
   }
@@ -128,7 +134,7 @@ export const useDesktopStore = defineStore('desktop', () => {
     try {
       await wails.Disconnect()
     } catch (err) {
-      console.error('Failed to disconnect:', err)
+      // Disconnect errors are non-critical
     }
   }
 
@@ -137,7 +143,6 @@ export const useDesktopStore = defineStore('desktop', () => {
     try {
       return await wails.DetectPluto()
     } catch (err) {
-      console.error('Failed to detect Pluto:', err)
       return ''
     }
   }
@@ -147,7 +152,6 @@ export const useDesktopStore = defineStore('desktop', () => {
     try {
       return await wails.DetectDevice()
     } catch (err) {
-      console.error('Failed to detect device:', err)
       return ''
     }
   }
@@ -184,7 +188,7 @@ export const useDesktopStore = defineStore('desktop', () => {
     try {
       config.value = await wails.GetConfig()
     } catch (err) {
-      console.error('Failed to fetch config:', err)
+      // Config fetch errors are non-critical during init
     }
   }
 
@@ -194,7 +198,7 @@ export const useDesktopStore = defineStore('desktop', () => {
       const s = await wails.GetStatus()
       status.value = s
     } catch (err) {
-      console.error('Failed to fetch status:', err)
+      // Status fetch errors are non-critical
     }
   }
 
@@ -203,7 +207,6 @@ export const useDesktopStore = defineStore('desktop', () => {
     try {
       await wails.StartScanning()
     } catch (err) {
-      console.error('Failed to start scanning:', err)
       lastError.value = { message: `Start: ${err}`, timestamp: Date.now() }
     }
   }
@@ -213,20 +216,19 @@ export const useDesktopStore = defineStore('desktop', () => {
     try {
       await wails.StopScanning()
     } catch (err) {
-      console.error('Failed to stop scanning:', err)
       lastError.value = { message: `Stop: ${err}`, timestamp: Date.now() }
     }
   }
 
   async function toggleBand(bandName) {
-    if (!wails || !config.value) return
+    if (!wails || !config.value?.bands) return
     const band = config.value.bands.find(b => b.name === bandName)
     if (band) {
       try {
         await wails.SetBandEnabled(bandName, !band.enabled)
         await fetchConfig()
       } catch (err) {
-        console.error('Failed to toggle band:', err)
+        // Band toggle errors are non-critical
       }
     }
   }
@@ -237,7 +239,6 @@ export const useDesktopStore = defineStore('desktop', () => {
       await wails.SetGain(rxGain, rxGainMode)
       await fetchConfig()
     } catch (err) {
-      console.error('Failed to update gain:', err)
       lastError.value = { message: `Gain: ${err}`, timestamp: Date.now() }
     }
   }
@@ -248,7 +249,6 @@ export const useDesktopStore = defineStore('desktop', () => {
       await wails.SetName(name)
       await fetchConfig()
     } catch (err) {
-      console.error('Failed to update name:', err)
       lastError.value = { message: `Name: ${err}`, timestamp: Date.now() }
     }
   }
@@ -262,7 +262,7 @@ export const useDesktopStore = defineStore('desktop', () => {
     try {
       serverStatus.value = await wails.GetServerStatus()
     } catch (err) {
-      console.error('Failed to fetch server status:', err)
+      // Server status fetch errors are non-critical
     }
   }
 
@@ -279,7 +279,7 @@ export const useDesktopStore = defineStore('desktop', () => {
         location: cfg.location || '',
       }
     } catch (err) {
-      console.error('Failed to fetch MQTT config:', err)
+      // MQTT config fetch errors are non-critical
     }
   }
 
@@ -292,7 +292,7 @@ export const useDesktopStore = defineStore('desktop', () => {
         port: cfg.port || 8080,
       }
     } catch (err) {
-      console.error('Failed to fetch web config:', err)
+      // Web config fetch errors are non-critical
     }
   }
 
@@ -301,7 +301,7 @@ export const useDesktopStore = defineStore('desktop', () => {
     try {
       configPath.value = await wails.GetConfigPath()
     } catch (err) {
-      console.error('Failed to fetch config path:', err)
+      // Config path fetch errors are non-critical
     }
   }
 
@@ -317,7 +317,6 @@ export const useDesktopStore = defineStore('desktop', () => {
       )
       mqttConfig.value = cfg
     } catch (err) {
-      console.error('Failed to set MQTT config:', err)
       lastError.value = { message: `MQTT config: ${err}`, timestamp: Date.now() }
     }
   }
@@ -328,7 +327,6 @@ export const useDesktopStore = defineStore('desktop', () => {
       await wails.SetWebConfig(cfg.enabled, cfg.port)
       webConfig.value = cfg
     } catch (err) {
-      console.error('Failed to set web config:', err)
       lastError.value = { message: `Web config: ${err}`, timestamp: Date.now() }
     }
   }
@@ -339,7 +337,6 @@ export const useDesktopStore = defineStore('desktop', () => {
       await wails.EnableMQTT()
       await fetchServerStatus()
     } catch (err) {
-      console.error('Failed to enable MQTT:', err)
       lastError.value = { message: `Enable MQTT: ${err}`, timestamp: Date.now() }
     }
   }
@@ -350,7 +347,6 @@ export const useDesktopStore = defineStore('desktop', () => {
       await wails.DisableMQTT()
       await fetchServerStatus()
     } catch (err) {
-      console.error('Failed to disable MQTT:', err)
       lastError.value = { message: `Disable MQTT: ${err}`, timestamp: Date.now() }
     }
   }
@@ -361,7 +357,6 @@ export const useDesktopStore = defineStore('desktop', () => {
       await wails.EnableWebServer()
       await fetchServerStatus()
     } catch (err) {
-      console.error('Failed to enable web server:', err)
       lastError.value = { message: `Enable web: ${err}`, timestamp: Date.now() }
     }
   }
@@ -372,7 +367,6 @@ export const useDesktopStore = defineStore('desktop', () => {
       await wails.DisableWebServer()
       await fetchServerStatus()
     } catch (err) {
-      console.error('Failed to disable web server:', err)
       lastError.value = { message: `Disable web: ${err}`, timestamp: Date.now() }
     }
   }
@@ -382,7 +376,6 @@ export const useDesktopStore = defineStore('desktop', () => {
     try {
       await wails.SaveConfig()
     } catch (err) {
-      console.error('Failed to save config:', err)
       lastError.value = { message: `Save config: ${err}`, timestamp: Date.now() }
     }
   }
@@ -415,6 +408,7 @@ export const useDesktopStore = defineStore('desktop', () => {
 
     // Actions
     init,
+    cleanup,
     connect,
     disconnect,
     detectPluto,
