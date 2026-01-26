@@ -123,6 +123,8 @@ backend:
 | `rx_gain` | RX gain 0-73 dB (default: 40) |
 | `rx_gain_mode` | `manual`, `slow_attack`, `fast_attack` |
 
+**Calibration:** The Pluto's amplitude readings can be calibrated against a known reference signal. See [cmd/calibrate/README.md](cmd/calibrate/README.md) for the calibration procedure.
+
 ### OWON HSA1000
 
 Connects via SCPI over TCP.

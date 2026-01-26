@@ -2,48 +2,6 @@
 
 Central server for aggregating and visualizing spectrum scan data from multiple ADALM-Pluto scanners.
 
-## Architecture
-
-```
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│  Pluto Scanner  │     │  Pluto Scanner  │     │  Pluto Scanner  │
-│   (Studio A)    │     │   (Main Stage)  │     │   (FOH)         │
-└────────┬────────┘     └────────┬────────┘     └────────┬────────┘
-         │                       │                       │
-         │ MQTT                  │ MQTT                  │ MQTT
-         │                       │                       │
-         └───────────────────────┼───────────────────────┘
-                                 │
-                                 ▼
-┌────────────────────────────────────────────────────────────────────┐
-│                        Spectrum Server                             │
-│                                                                    │
-│  ┌──────────────┐                                                  │
-│  │  Mosquitto   │◀─── Scanners connect here (port 1883)            │
-│  │ MQTT Broker  │                                                  │
-│  └──────┬───────┘                                                  │
-│         │                                                          │
-│         ▼                                                          │
-│  ┌──────────────┐  ┌──────────────┐                                │
-│  │ MQTT Bridge  │──│   Django     │                                │
-│  │              │  │   REST API   │                                │
-│  └──────────────┘  └──────────────┘                                │
-│         │                  │                      │                │
-│         └──────────────────┼──────────────────────┘                │
-│                            ▼                                       │
-│                   ┌──────────────┐                                 │
-│                   │   Database   │                                 │
-│                   └──────────────┘                                 │
-└────────────────────────────────────────────────────────────────────┘
-                                 │
-                                 │ WebSocket
-                                 ▼
-                    ┌────────────────────────┐
-                    │     Vue Frontend       │
-                    │   (Browser Clients)    │
-                    └────────────────────────┘
-```
-
 ## Components
 
 ### MQTT Bridge (`realtime/mqtt_bridge.py`)
@@ -172,18 +130,6 @@ After starting the server, create an admin user and configure scanners:
 | `mosquitto` | MQTT broker | 1883 (scanners) |
 | `mqtt-bridge` | Saves scans to database | internal |
 | `frontend` | Vue static files | internal |
-
-#### Production Architecture
-
-```
-Scanners ──────► Mosquitto:1883 ──────► mqtt-bridge ──► Database
-                      │
-                      │ WebSocket
-                      ▼
-Browsers ──────► Caddy:443 ─────┬────► /mqtt (Mosquitto:9001)
-   (HTTPS)                      ├────► /api/* (Django:8000)
-                                └────► /* (Vue static files)
-```
 
 #### Environment Variables
 

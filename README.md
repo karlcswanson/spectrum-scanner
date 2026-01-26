@@ -1,12 +1,14 @@
 # Spectrum Scanner
 
-A wideband RF spectrum scanner for live event frequency coordination. Supports multiple hardware backends and deployment modes.
+An RF spectrum scanner for live event frequency coordination. Supports multiple hardware backends and deployment modes.
 
 ## Use Cases
 
-- **Rehearsal Studios**: Monitor frequencies across adjacent studios
-- **Stadium RF Coordination**: Pre-scan venues for road techs
-- **Large Events**: Distributed scanners across event areas
+- **Standalone Operation** - Run the desktop app for local scans
+- **Site Survey** - Scan venues before load-in; remote teams can view live scans to prep show files or advise on-site crews
+- **Live Monitoring** - Real-time visibility during shows to catch interference early
+- **Multi-Zone Coverage** - Compare scan data from multiple scanners across large events, festival grounds, or rehearsal studios
+- **Scan History** - Scrub back through recorded scans to analyze RF changes over time
 
 ## Supported Hardware
 
@@ -18,29 +20,38 @@ A wideband RF spectrum scanner for live event frequency coordination. Supports m
 
 ## Architecture
 
-```
-┌────────────────────────────────────────────────────────────────┐
-│                     Spectrum Scanner                           │
-│                                                                │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐  │
-│  │   Scanner    │  │   Scanner    │  │      Scanner         │  │
-│  │  (Pluto)     │  │   (OWON)     │  │    (tinySA)          │  │
-│  └──────┬───────┘  └──────┬───────┘  └──────────┬───────────┘  │
-│         │                 │                      │             │
-│         └─────────────────┼──────────────────────┘             │
-│                           │ MQTT                               │
-│                           ▼                                    │
-│              ┌────────────────────────┐                        │
-│              │    Central Server      │                        │
-│              │  (Django + Mosquitto)  │                        │
-│              └────────────────────────┘                        │
-│                           │                                    │
-│                           ▼                                    │
-│              ┌────────────────────────┐                        │
-│              │     Vue Frontend       │                        │
-│              │   (Browser Clients)    │                        │
-│              └────────────────────────┘                        │
-└────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+    subgraph MS["Main Stage"]
+        S1[Scanner]
+    end
+
+    subgraph BC["Broadcast Compound"]
+        S2[Scanner]
+    end
+
+    subgraph FOH["FOH"]
+        S3[Scanner]
+    end
+
+    LC[Local Client]
+
+    subgraph Server["spectrum-server"]
+        MQ[Mosquitto<br/>MQTT Broker]
+        BR[MQTT Bridge]
+        DB[(Database)]
+        DJ[Django<br/>REST API]
+    end
+
+    V[Browser Client]
+
+    S3 --- LC
+    S1 & S2 & S3 ---|MQTT| MQ
+    MQ --- BR
+    BR --- DB
+    DJ --- DB
+    DJ ---|REST| V
+    MQ ---|WebSocket| V
 ```
 
 ## Project Structure
@@ -107,12 +118,12 @@ docker compose -f docker-compose.prod.yml up -d --build
 
 ## Default Frequency Bands
 
-| Band | Frequency Range | Use Case |
-|------|-----------------|----------|
+| Band | Frequency Range | Use Case           |
+|------|-----------------|--------------------|
 | UHF | 470 - 608 MHz | Wireless mics, IEMs |
-| Business Radio | 450 - 470 MHz | Two-way radios |
-| DECT | 1920 - 1930 MHz | Intercoms |
-| WiFi 2.4 | 2400 - 2500 MHz | WiFi networks |
+| Business Radio | 450 - 470 MHz | Two-way radios     |
+| DECT | 1920 - 1930 MHz | Intercom           |
+| WiFi 2.4 | 2400 - 2500 MHz | WiFi, Intercom     |
 
 ## License
 
