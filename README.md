@@ -5,7 +5,7 @@ An RF spectrum scanner for live event frequency coordination. Supports multiple 
 ## Use Cases
 
 - **Standalone Operation** - Run the desktop app for local scans
-- **Site Survey** - Scan venues before load-in; remote teams can view live scans to prep show files or advise on-site crews
+- **Site Survey** - Scan venues before load-in; remotely view live and historical scan data from multiple locations
 - **Live Monitoring** - Real-time visibility during shows to catch interference early
 - **Multi-Zone Coverage** - Compare scan data from multiple scanners across large events, festival grounds, or rehearsal studios
 - **Scan History** - Scrub back through recorded scans to analyze RF changes over time
