@@ -2,6 +2,9 @@
 
 Multi-band RF spectrum scanner for live event frequency coordination. Supports multiple hardware backends and deployment modes.
 
+## Demo
+https://github.com/user-attachments/assets/11c4eb5d-948d-4720-abb7-279548c8aace
+
 ## Screenshots
 ![Overview](docs/img/overview.png)
 ![Login](docs/img/login.png)
