@@ -193,11 +193,11 @@ func (s *Store) StoreScan(scan *models.ScanLine) error {
 }
 
 // GetTimeline returns timeline entries for a band within the time range
-func (s *Store) GetTimeline(band string, hours int) ([]TimelineEntry, error) {
+func (s *Store) GetTimeline(band string, hours float64) ([]TimelineEntry, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	since := time.Now().Add(-time.Duration(hours) * time.Hour)
+	since := time.Now().Add(-time.Duration(hours * float64(time.Hour)))
 
 	rows, err := s.timelineStmt.Query(band, since)
 	if err != nil {
@@ -261,11 +261,11 @@ func (s *Store) GetScanAtTime(band string, t time.Time) (*models.ScanLine, error
 
 // GetDecimatedScans returns decimated scans for scrubber preview
 // Returns one scan per minute (or closest available) with decimated power
-func (s *Store) GetDecimatedScans(band string, hours int) ([]DecimatedScan, error) {
+func (s *Store) GetDecimatedScans(band string, hours float64) ([]DecimatedScan, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	since := time.Now().Add(-time.Duration(hours) * time.Hour)
+	since := time.Now().Add(-time.Duration(hours * float64(time.Hour)))
 
 	// Get one scan per minute using GROUP BY on minute boundary
 	rows, err := s.db.Query(`

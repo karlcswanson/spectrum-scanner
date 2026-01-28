@@ -1,4 +1,4 @@
-.PHONY: build build-arm run dev deploy deploy-service clean tidy test build-frontend desktop desktop-deps desktop-mac desktop-windows desktop-linux desktop-dev calibrate help
+.PHONY: build build-arm build-glinet run dev deploy deploy-service clean tidy test build-frontend desktop desktop-deps desktop-mac desktop-windows desktop-linux desktop-dev calibrate help
 
 # Default target
 all: build
@@ -19,6 +19,11 @@ build: build-frontend
 build-arm: build-frontend
 	GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 \
 		go build -ldflags="-s -w" -o bin/scanner-arm ./cmd/scanner
+
+# Cross-compile for GL.iNet Spitz AX / ARM64 routers
+build-glinet: build-frontend
+	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 \
+		go build -ldflags="-s -w" -o bin/scanner-glinet ./cmd/scanner
 
 # Build calibration tool
 calibrate:
@@ -146,7 +151,8 @@ help:
 	@echo "  make desktop-dev    - Run in development mode"
 	@echo ""
 	@echo "Deployment:"
-	@echo "  make build-arm      - Cross-compile for Pluto (ARM)"
+	@echo "  make build-arm      - Cross-compile for Pluto (ARMv7)"
+	@echo "  make build-glinet   - Cross-compile for GL.iNet Spitz AX (ARM64)"
 	@echo "  make deploy         - Deploy binary to Pluto via SSH"
 	@echo "  make deploy-service - Deploy with init script for auto-start"
 	@echo ""

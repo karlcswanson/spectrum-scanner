@@ -1009,7 +1009,7 @@ type DecimatedScan struct {
 }
 
 // GetTimeline returns timeline entries for a band
-func (a *App) GetTimeline(band string, hours int) []TimelineEntry {
+func (a *App) GetTimeline(band string, hours float64) []TimelineEntry {
 	a.mu.RLock()
 	store := a.store
 	a.mu.RUnlock()
@@ -1072,7 +1072,7 @@ func (a *App) GetScanAtTime(band string, timeStr string) *ScanEvent {
 }
 
 // GetDecimatedScans returns decimated scans for scrubber preview
-func (a *App) GetDecimatedScans(band string, hours int) []DecimatedScan {
+func (a *App) GetDecimatedScans(band string, hours float64) []DecimatedScan {
 	a.mu.RLock()
 	store := a.store
 	a.mu.RUnlock()

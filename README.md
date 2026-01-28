@@ -1,6 +1,10 @@
 # Spectrum Scanner
 
-An RF spectrum scanner for live event frequency coordination. Supports multiple hardware backends and deployment modes.
+Multi-band RF spectrum scanner for live event frequency coordination. Supports multiple hardware backends and deployment modes.
+
+## Screenshots
+![Overview](docs/img/overview.png)
+![Login](docs/img/login.png)
 
 ## Use Cases
 
@@ -13,10 +17,10 @@ An RF spectrum scanner for live event frequency coordination. Supports multiple 
 ## Supported Hardware
 
 | Backend | Description | Connection |
-|---------|-------------|------------|
-| **ADALM-Pluto** | FPGA-accelerated via [maia-sdr](https://maia-sdr.org) | USB network |
+|---------|-------------|-----------|
+| **ADALM-Pluto** | FPGA-accelerated via [maia-sdr](https://maia-sdr.org) | USB |
 | **OWON HSA1000** | Spectrum analyzer via SCPI | TCP/IP |
-| **tinySA Ultra** | Portable analyzer | USB serial |
+| **tinySA Ultra** | Portable analyzer | USB |
 
 ## Architecture
 

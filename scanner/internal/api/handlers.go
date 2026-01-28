@@ -310,9 +310,9 @@ func (s *Server) handleGetTimeline(w http.ResponseWriter, r *http.Request) {
 	}
 
 	hoursStr := r.URL.Query().Get("hours")
-	hours := 24 // default
+	hours := 24.0 // default
 	if hoursStr != "" {
-		fmt.Sscanf(hoursStr, "%d", &hours)
+		fmt.Sscanf(hoursStr, "%f", &hours)
 	}
 
 	entries, err := s.store.GetTimeline(band, hours)
@@ -378,9 +378,9 @@ func (s *Server) handleGetDecimatedScans(w http.ResponseWriter, r *http.Request)
 	}
 
 	hoursStr := r.URL.Query().Get("hours")
-	hours := 6 // default for scrubber preview
+	hours := 6.0 // default for scrubber preview
 	if hoursStr != "" {
-		fmt.Sscanf(hoursStr, "%d", &hours)
+		fmt.Sscanf(hoursStr, "%f", &hours)
 	}
 
 	scans, err := s.store.GetDecimatedScans(band, hours)
