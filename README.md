@@ -1,6 +1,9 @@
 # Spectrum Scanner
 
-Multi-band RF spectrum scanner for live event frequency coordination. Supports multiple hardware backends and deployment modes.
+![Built with Claude](https://img.shields.io/badge/Built_with-Claude-D97757?style=for-the-badge&logo=claude&logoColor=white)
+
+
+Multi-band RF spectrum monitor for frequency coordination. Supports multiple hardware backends and deployment modes.
 
 ## Demo
 https://github.com/user-attachments/assets/11c4eb5d-948d-4720-abb7-279548c8aace
@@ -9,13 +12,15 @@ https://github.com/user-attachments/assets/11c4eb5d-948d-4720-abb7-279548c8aace
 ![Overview](docs/img/overview.png)
 ![Login](docs/img/login.png)
 
-## Use Cases
+## Features
 
-- **Standalone Operation** - Run the desktop app for local scans
-- **Site Survey** - Scan venues before load-in; remotely view live and historical scan data from multiple locations
-- **Live Monitoring** - Real-time visibility during shows to catch interference early
-- **Multi-Zone Coverage** - Compare scan data from multiple scanners across large events, festival grounds, or rehearsal studios
-- **Scan History** - Scrub back through recorded scans to analyze RF changes over time
+* **Multi-band Scanning** - The ADALM-Pluto has a frequency range of 70 MHz - 6 GHz when setup in AD9364 mode. It has been tested across the LMR, UHF, DECT, and 2.4 GHz bands.
+* **Standalone Desktop App** - For Mac / Windows.
+* **Embedded Client** - Run headless via Raspberry Pi / GL-Inet Routers.
+* **Central Server** *(optional)* - Compare and download scans from a fleet of scanners. The server can be hosted locally or in the cloud.
+* **Multi-Zone Coverage** - Compare scan data from multiple scanners across large events, festival grounds, or rehearsal studios.
+* **Scan History** - Scrub back and forth to visualize scans over time.
+* **Calibration** - Generate a calibration curve for the Pluto based on TinySA signal generator output.
 
 ## Supported Hardware
 
