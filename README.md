@@ -3,14 +3,7 @@
 ![Built with Claude](https://img.shields.io/badge/Built_with-Claude-D97757?style=for-the-badge&logo=claude&logoColor=white)
 
 
-Multi-band RF spectrum monitor for frequency coordination. Supports multiple hardware backends and deployment modes.
-
-## Demo
-https://github.com/user-attachments/assets/11c4eb5d-948d-4720-abb7-279548c8aace
-
-## Screenshots
-![Overview](docs/img/overview.png)
-![Login](docs/img/login.png)
+Multi-band RF spectrum monitor for frequency coordination.
 
 ## Features
 
@@ -21,6 +14,15 @@ https://github.com/user-attachments/assets/11c4eb5d-948d-4720-abb7-279548c8aace
 * **Multi-Zone Coverage** - Compare scan data from multiple scanners across large events, festival grounds, or rehearsal studios.
 * **Scan History** - Scrub back and forth to visualize scans over time.
 * **Calibration** - Generate a calibration curve for the Pluto based on TinySA signal generator output.
+
+
+## Demo
+https://github.com/user-attachments/assets/11c4eb5d-948d-4720-abb7-279548c8aace
+
+## Screenshots
+![Overview](docs/img/overview.png)
+![Login](docs/img/login.png)
+
 
 ## Supported Hardware
 
