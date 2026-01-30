@@ -291,14 +291,13 @@ export const useScannersStore = defineStore('scanners', () => {
         timelines.value[key] = updated.length > maxEntries ? updated.slice(-maxEntries) : updated
       }
 
-      // Add to scan cache for scrubbing
-      if (!scanCache.value[key]) {
-        scanCache.value[key] = []
+      // Add to decimated cache for scrubbing (used by findScanInDecimatedCache)
+      if (!decimatedCache.value[key]) {
+        decimatedCache.value[key] = []
       }
-      const cacheExists = scanCache.value[key].some(s => s.timestamp === timestampMs)
+      const cacheExists = decimatedCache.value[key].some(s => s.timestamp === timestampMs)
       if (!cacheExists) {
         const cacheEntry = {
-          id: scanId,
           timestamp: timestampMs,
           scan: {
             hz_lo: data.hz_lo,
@@ -308,12 +307,12 @@ export const useScannersStore = defineStore('scanners', () => {
             timestamp: timestamp,
           }
         }
-        scanCache.value[key] = [...scanCache.value[key], cacheEntry]
+        decimatedCache.value[key] = [...decimatedCache.value[key], cacheEntry]
           .sort((a, b) => a.timestamp - b.timestamp)
         // Limit cache size
-        const maxCacheEntries = 100
-        if (scanCache.value[key].length > maxCacheEntries) {
-          scanCache.value[key] = scanCache.value[key].slice(-maxCacheEntries)
+        const maxCacheEntries = 200
+        if (decimatedCache.value[key].length > maxCacheEntries) {
+          decimatedCache.value[key] = decimatedCache.value[key].slice(-maxCacheEntries)
         }
       }
     }
