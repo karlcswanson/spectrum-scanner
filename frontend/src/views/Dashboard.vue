@@ -218,7 +218,7 @@ function scrollToScanner(scannerId) {
         <ScannerHeader :scanner="scanner" class="mb-4" />
 
         <!-- Band charts for this scanner -->
-        <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
+        <div class="grid grid-cols-1 xl:grid-cols-2 min-[1920px]:grid-cols-3 gap-4">
           <BandChart
             v-for="item in bands"
             :key="item.key"
