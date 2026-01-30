@@ -4,9 +4,10 @@ Run periodically via cron or Docker healthcheck.
 
 Usage:
     python manage.py cleanup_scans --hours 6
-    python manage.py cleanup_scans --hours 6 --batch-size 5000
+    python manage.py cleanup_scans --hours 6 --batch-size 1000
 """
 
+import time
 from datetime import timedelta
 
 from django.core.management.base import BaseCommand
@@ -28,8 +29,8 @@ class Command(BaseCommand):
         parser.add_argument(
             "--batch-size",
             type=int,
-            default=5000,
-            help="Delete in batches of this size to avoid locking (default: 5000)",
+            default=1000,
+            help="Delete in batches of this size to avoid locking (default: 1000)",
         )
         parser.add_argument(
             "--dry-run",
@@ -74,6 +75,9 @@ class Command(BaseCommand):
             deleted_count, _ = Scan.objects.filter(id__in=ids_to_delete).delete()
             deleted_total += deleted_count
             self.stdout.write(f"  Deleted {deleted_total}/{total_count}...")
+
+            # Sleep to reduce lock contention with SQLite
+            time.sleep(0.5)
 
         self.stdout.write(
             self.style.SUCCESS(f"Deleted {deleted_total} scans older than {hours} hours")

@@ -31,7 +31,7 @@ class MQTTBridge:
     # Cleanup settings
     CLEANUP_INTERVAL_SECONDS = 3600  # Run cleanup every hour
     CLEANUP_RETENTION_HOURS = 6      # Delete scans older than 6 hours
-    CLEANUP_BATCH_SIZE = 5000        # Delete in batches to avoid locking
+    CLEANUP_BATCH_SIZE = 1000        # Delete in batches to avoid locking
 
     def __init__(self):
         self.client = mqtt.Client(
@@ -307,6 +307,9 @@ class MQTTBridge:
                 # Delete batch
                 deleted_count, _ = Scan.objects.filter(id__in=ids_to_delete).delete()
                 total_deleted += deleted_count
+
+                # Sleep between batches to reduce lock contention with SQLite
+                time.sleep(0.5)
 
             if total_deleted > 0:
                 logger.info(f"Cleanup: deleted {total_deleted} scans older than {self.CLEANUP_RETENTION_HOURS} hours")
