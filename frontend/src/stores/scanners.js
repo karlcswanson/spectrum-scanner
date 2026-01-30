@@ -271,6 +271,51 @@ export const useScannersStore = defineStore('scanners', () => {
           enabled: true,
         })
       }
+
+      // Add to timeline and cache for scrubber (so live scans are immediately available)
+      const key = `${scannerId}:${data.band}`
+      const timestamp = data.timestamp || new Date().toISOString()
+      const timestampMs = new Date(timestamp).getTime()
+      const scanId = `live-${timestampMs}` // Generate ID for live scans
+
+      // Add to timeline if not already there
+      if (!timelines.value[key]) {
+        timelines.value[key] = []
+      }
+      const timelineEntry = { id: scanId, timestamp, band__name: data.band }
+      const exists = timelines.value[key].some(t => t.timestamp === timestamp)
+      if (!exists) {
+        const updated = [...timelines.value[key], timelineEntry]
+          .sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp))
+        const maxEntries = 10000
+        timelines.value[key] = updated.length > maxEntries ? updated.slice(-maxEntries) : updated
+      }
+
+      // Add to scan cache for scrubbing
+      if (!scanCache.value[key]) {
+        scanCache.value[key] = []
+      }
+      const cacheExists = scanCache.value[key].some(s => s.timestamp === timestampMs)
+      if (!cacheExists) {
+        const cacheEntry = {
+          id: scanId,
+          timestamp: timestampMs,
+          scan: {
+            hz_lo: data.hz_lo,
+            hz_hi: data.hz_hi,
+            step: data.step,
+            power: data.power,
+            timestamp: timestamp,
+          }
+        }
+        scanCache.value[key] = [...scanCache.value[key], cacheEntry]
+          .sort((a, b) => a.timestamp - b.timestamp)
+        // Limit cache size
+        const maxCacheEntries = 100
+        if (scanCache.value[key].length > maxCacheEntries) {
+          scanCache.value[key] = scanCache.value[key].slice(-maxCacheEntries)
+        }
+      }
     }
   }
 
