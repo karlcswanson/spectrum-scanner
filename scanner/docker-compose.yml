@@ -1,0 +1,15 @@
+services:
+  scanner:
+    build:
+      context: ../
+      dockerfile: scanner/Dockerfile
+    # Host network needed to reach Pluto on USB ethernet (192.168.2.1)
+    network_mode: host
+    volumes:
+      - ./config.yaml:/app/config.yaml
+      - scanner-data:/app/data
+    restart: unless-stopped
+    command: ["-listen", ":8080", "-config", "/app/config.yaml"]
+
+volumes:
+  scanner-data:
