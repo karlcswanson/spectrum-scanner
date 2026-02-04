@@ -9,7 +9,7 @@ services:
       - ./config.yaml:/app/config.yaml
       - scanner-data:/app/data
     restart: unless-stopped
-    command: ["-listen", ":8080", "-config", "/app/config.yaml"]
+    command: ["-listen", ":8080", "-config", "/app/config.yaml", "-no-store"]
 
 volumes:
   scanner-data:
