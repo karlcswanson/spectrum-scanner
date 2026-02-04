@@ -530,6 +530,13 @@ watch(() => props.tick, () => {
   }
 })
 
+// Redraw when timeline data changes (new scans come in)
+watch(() => props.timeline.length, () => {
+  if (!isDragging.value) {
+    scheduleDraw()
+  }
+})
+
 // Redraw when selected time or live state changes
 watch(() => [selectedTime.value, isLive.value], () => {
   if (!isDragging.value) {

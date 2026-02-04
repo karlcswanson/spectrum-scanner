@@ -15,10 +15,12 @@ import (
 func main() {
 	// Command line flags (env vars are also checked by config.LoadWithOptions)
 	opts := config.DefaultOptions()
+	var noStore bool
 	flag.StringVar(&opts.ListenAddr, "listen", opts.ListenAddr, "HTTP listen address")
 	flag.StringVar(&opts.BackendType, "backend", "", "Backend type: pluto, owon (overrides config)")
 	flag.StringVar(&opts.BackendAddr, "addr", "", "Backend address (IP or URL, overrides config)")
 	flag.StringVar(&opts.ConfigFile, "config", "", "Config file path (optional)")
+	flag.BoolVar(&noStore, "no-store", false, "Disable local scan history storage")
 	flag.Parse()
 
 	// Load config with options (handles env vars and applies overrides)
@@ -74,21 +76,25 @@ func main() {
 
 	// Initialize SQLite store for scan history (timeline scrubber)
 	var store *db.Store
-	dbPath := config.AppConfigDir() + "/scans.db"
-	store, err = db.NewStore(dbPath)
-	if err != nil {
-		log.Printf("Warning: Failed to initialize scan history database: %v", err)
+	if noStore {
+		log.Println("Local scan history storage disabled (-no-store)")
 	} else {
-		log.Printf("Scan history database: %s", dbPath)
-		defer store.Close()
-		// Start periodic cleanup (keep 24 hours)
-		go func() {
-			ticker := time.NewTicker(1 * time.Hour)
-			defer ticker.Stop()
-			for range ticker.C {
-				store.Cleanup(24)
-			}
-		}()
+		dbPath := config.AppConfigDir() + "/scans.db"
+		store, err = db.NewStore(dbPath)
+		if err != nil {
+			log.Printf("Warning: Failed to initialize scan history database: %v", err)
+		} else {
+			log.Printf("Scan history database: %s", dbPath)
+			defer store.Close()
+			// Start periodic cleanup (keep 24 hours)
+			go func() {
+				ticker := time.NewTicker(1 * time.Hour)
+				defer ticker.Stop()
+				for range ticker.C {
+					store.Cleanup(24)
+				}
+			}()
+		}
 	}
 
 	// Create and start HTTP server

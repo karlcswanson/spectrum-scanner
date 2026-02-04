@@ -29,7 +29,7 @@ async function handleLogout() {
   <div class="min-h-screen">
     <!-- Only show header on non-login pages -->
     <header v-if="route.path !== '/login'" class="bg-gray-800 border-b border-gray-700">
-      <div class="max-w-7xl mx-auto px-4 py-4">
+      <div class="w-full px-4 py-4">
         <div class="flex items-center justify-between">
           <router-link to="/" class="flex items-center gap-3">
             <img src="/logo.png" alt="Micboard" class="h-8" />
@@ -59,7 +59,7 @@ async function handleLogout() {
       </div>
     </header>
 
-    <main :class="route.path !== '/login' ? 'max-w-7xl mx-auto px-4 py-6' : ''">
+    <main :class="route.path !== '/login' ? 'w-full px-4 py-6' : ''">
       <RouterView />
     </main>
   </div>
