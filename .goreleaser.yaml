@@ -32,7 +32,7 @@ universal_binaries:
     replace: true
 
 archives:
-  - builds:
+  - ids:
       - scanner
     name_template: >-
       {{ .ProjectName }}_
