@@ -44,7 +44,11 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Build frontend
+      - name: Install main frontend deps
+        working-directory: frontend
+        run: npm ci
+
+      - name: Build desktop frontend
         working-directory: scanner/cmd/desktop/frontend
         run: npm ci && npm run build
 
