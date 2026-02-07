@@ -23,13 +23,9 @@ jobs:
         working-directory: scanner
         run: go build -v ./cmd/scanner
 
-      - name: Build calibrate
-        working-directory: scanner
-        run: go build -v ./cmd/calibrate
-
       - name: Test
         working-directory: scanner
-        run: go test -v ./...
+        run: go test -v $(go list ./... | grep -v /cmd/desktop)
 
   goreleaser-check:
     runs-on: ubuntu-latest
@@ -46,5 +42,5 @@ jobs:
       - name: Check GoReleaser config
         uses: goreleaser/goreleaser-action@v6
         with:
-          version: latest
+          version: "~> v2"
           args: check

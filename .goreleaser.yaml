@@ -27,13 +27,37 @@ builds:
       - -s -w
     mod_timestamp: "{{ .CommitTimestamp }}"
 
+  - id: desktop
+    dir: scanner
+    main: ./cmd/desktop
+    binary: spectrum-desktop
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+    ldflags:
+      - -s -w
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    tags:
+      - desktop
+
 universal_binaries:
   - id: scanner
+    replace: true
+  - id: desktop
     replace: true
 
 archives:
   - ids:
       - scanner
+      - desktop
     name_template: >-
       {{ .ProjectName }}_
       {{- .Version }}_
