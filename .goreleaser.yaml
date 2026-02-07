@@ -48,11 +48,12 @@ builds:
       - -s -w
 
 archives:
-  - id: default
-    format: tar.gz
-    format_overrides:
-      - goos: windows
-        format: zip
+  - id: nix
+    builds:
+      - scanner
+      - calibrate
+    formats:
+      - tar.gz
     name_template: >-
       {{ .ProjectName }}_
       {{- .Version }}_
@@ -62,6 +63,28 @@ archives:
       - README.md
       - src: scanner/config.example.yaml
         dst: .
+    filter:
+      goos:
+        - linux
+        - darwin
+  - id: windows
+    builds:
+      - scanner
+      - calibrate
+    formats:
+      - zip
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- .Version }}_
+      {{- .Os }}_
+      {{- .Arch }}
+    files:
+      - README.md
+      - src: scanner/config.example.yaml
+        dst: .
+    filter:
+      goos:
+        - windows
 
 checksum:
   name_template: 'checksums.txt'
