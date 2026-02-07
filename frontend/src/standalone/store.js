@@ -32,13 +32,12 @@ export const useStandaloneStore = defineStore('standalone', () => {
   const lastError = ref(null)
 
   // Server mode state (for MQTT and web server control)
+  // status can be: 'disconnected', 'pending', 'connected', 'error'
   const serverStatus = ref({
-    mqtt_enabled: false,
-    mqtt_connected: false,
-    mqtt_broker: '',
-    web_enabled: false,
+    mqtt: 'disconnected',
+    mqtt_error: '',
+    web: 'disconnected',
     web_port: 8080,
-    web_running: false,
   })
 
   // Computed from config
@@ -87,7 +86,11 @@ export const useStandaloneStore = defineStore('standalone', () => {
     ws.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data)
-        // Handle typed messages: { type: "scan" | "status" | "config", data: {...} }
+        // Log non-scan messages for debugging
+        if (msg.type !== 'scan') {
+          console.log('[store] ws message:', msg.type, msg.data)
+        }
+        // Handle typed messages: { type: "scan" | "status" | "config" | "server-status", data: {...} }
         if (msg.type === 'scan') {
           handleScanData(msg.data)
         } else if (msg.type === 'status') {
@@ -95,6 +98,18 @@ export const useStandaloneStore = defineStore('standalone', () => {
         } else if (msg.type === 'config') {
           // Config pushed from server (e.g., remote MQTT command)
           config.value = msg.data
+        } else if (msg.type === 'server-status') {
+          // MQTT/web server status update from Go backend
+          const raw = msg.data
+          console.log('[store] server-status raw: mqtt_status=' + raw.mqtt_status + ', web_running=' + raw.web_running)
+          serverStatus.value = {
+            // Use mqtt_status if available, fallback to mqtt_connected for backwards compat
+            mqtt: raw.mqtt_status || (raw.mqtt_connected ? 'connected' : 'disconnected'),
+            mqtt_error: raw.mqtt_status === 'error' ? 'Connection lost' : '',
+            web: raw.web_running ? 'connected' : 'disconnected',
+            web_port: raw.web_port || 8080,
+          }
+          console.log('[store] serverStatus now: mqtt=' + serverStatus.value.mqtt + ', web=' + serverStatus.value.web)
         } else {
           // Legacy format (raw scan data)
           handleScanData(msg)
@@ -239,7 +254,14 @@ export const useStandaloneStore = defineStore('standalone', () => {
   async function setMQTTConfig(cfg) {
     if (wailsApp?.SetMQTTConfig) {
       try {
-        await wailsApp.SetMQTTConfig(cfg)
+        // Go function expects individual arguments: (enabled, broker, id, token, location)
+        await wailsApp.SetMQTTConfig(
+          cfg.enabled || false,
+          cfg.broker || '',
+          cfg.id || '',
+          cfg.token || '',
+          cfg.location || ''
+        )
       } catch (err) {
         lastError.value = { message: `MQTT Config: ${err.message}`, timestamp: Date.now() }
       }
@@ -249,7 +271,8 @@ export const useStandaloneStore = defineStore('standalone', () => {
   async function setWebConfig(cfg) {
     if (wailsApp?.SetWebConfig) {
       try {
-        await wailsApp.SetWebConfig(cfg)
+        // Go function expects individual arguments: (enabled, port)
+        await wailsApp.SetWebConfig(cfg.enabled || false, cfg.port || 8080)
       } catch (err) {
         lastError.value = { message: `Web Config: ${err.message}`, timestamp: Date.now() }
       }
@@ -258,49 +281,38 @@ export const useStandaloneStore = defineStore('standalone', () => {
 
   async function enableMQTT() {
     if (wailsApp?.EnableMQTT) {
-      try {
-        await wailsApp.EnableMQTT()
-      } catch (err) {
-        lastError.value = { message: `MQTT: ${err.message}`, timestamp: Date.now() }
-      }
+      // Optimistically update config and status
+      if (config.value?.mqtt) config.value.mqtt.enabled = true
+      serverStatus.value = { ...serverStatus.value, mqtt: 'pending' }
+      await wailsApp.EnableMQTT()
+      // Connection status update comes via WebSocket
     }
   }
 
   async function disableMQTT() {
     if (wailsApp?.DisableMQTT) {
-      try {
-        await wailsApp.DisableMQTT()
-      } catch (err) {
-        lastError.value = { message: `MQTT: ${err.message}`, timestamp: Date.now() }
-      }
+      // Optimistically update config (no pending - disable is synchronous)
+      if (config.value?.mqtt) config.value.mqtt.enabled = false
+      await wailsApp.DisableMQTT()
+      // Status update comes via WebSocket
     }
   }
 
   async function enableWebServer() {
     if (wailsApp?.EnableWebServer) {
-      try {
-        await wailsApp.EnableWebServer()
-      } catch (err) {
-        lastError.value = { message: `Web Server: ${err.message}`, timestamp: Date.now() }
-      }
+      // Optimistically update config and status
+      if (config.value?.web) config.value.web.enabled = true
+      serverStatus.value = { ...serverStatus.value, web: 'pending' }
+      await wailsApp.EnableWebServer()
     }
   }
 
   async function disableWebServer() {
     if (wailsApp?.DisableWebServer) {
-      try {
-        await wailsApp.DisableWebServer()
-      } catch (err) {
-        lastError.value = { message: `Web Server: ${err.message}`, timestamp: Date.now() }
-      }
+      // Optimistically update config (no pending - disable is synchronous)
+      if (config.value?.web) config.value.web.enabled = false
+      await wailsApp.DisableWebServer()
     }
-  }
-
-  // Listen for Wails events (server status updates)
-  if (window.runtime) {
-    window.runtime.EventsOn('server-status', (data) => {
-      serverStatus.value = data
-    })
   }
 
   return {

@@ -110,8 +110,8 @@ async function saveWebConfig() {
 }
 
 async function toggleMQTT() {
-  await saveMQTTConfig()
-  if (store.serverStatus?.mqtt_connected) {
+  // Toggle based on config enabled state, not connection status
+  if (store.mqttConfig?.enabled) {
     await store.disableMQTT()
   } else {
     await store.enableMQTT()
@@ -119,8 +119,8 @@ async function toggleMQTT() {
 }
 
 async function toggleWebServer() {
-  await saveWebConfig()
-  if (store.serverStatus?.web_running) {
+  // Toggle based on config enabled state, not connection status
+  if (store.webConfig?.enabled) {
     await store.disableWebServer()
   } else {
     await store.enableWebServer()
@@ -171,9 +171,18 @@ async function toggleWebServer() {
                @click="showSettings = true; settingsTab = 'server'"
                class="flex items-center gap-2 px-3 py-1.5 rounded bg-gray-700 hover:bg-gray-600 transition-colors"
           >
-            <span
+            <!-- Spinner when pending -->
+            <svg v-if="store.serverStatus?.mqtt === 'pending'" class="w-2 h-2 animate-spin text-cyan-400" viewBox="0 0 24 24" fill="none">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+            </svg>
+            <span v-else
               class="w-2 h-2 rounded-full"
-              :class="store.serverStatus?.mqtt_connected ? 'bg-green-500' : 'bg-gray-500'"
+              :class="{
+                'bg-green-500': store.serverStatus?.mqtt === 'connected',
+                'bg-red-500': store.serverStatus?.mqtt === 'error',
+                'bg-gray-500': store.serverStatus?.mqtt === 'disconnected'
+              }"
             ></span>
             <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 text-gray-300" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                  stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -238,14 +247,43 @@ async function toggleWebServer() {
             <div class="bg-gray-900 rounded-lg p-4">
               <div class="flex items-center justify-between mb-4">
                 <h4 class="text-sm font-medium text-gray-300">MQTT (Spectrum Server)</h4>
-                <div class="flex items-center gap-2">
-                  <span
-                    class="w-2 h-2 rounded-full"
-                    :class="store.serverStatus?.mqtt_connected ? 'bg-green-500' : 'bg-gray-500'"
-                  ></span>
-                  <span class="text-xs text-gray-400">
-                    {{ store.serverStatus?.mqtt_connected ? 'Connected' : 'Disconnected' }}
-                  </span>
+                <div class="flex items-center gap-3">
+                  <div class="flex items-center gap-2">
+                    <!-- Spinner when pending -->
+                    <svg v-if="store.serverStatus?.mqtt === 'pending'" class="w-3 h-3 animate-spin text-cyan-400" viewBox="0 0 24 24" fill="none">
+                      <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                      <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                    </svg>
+                    <span v-else
+                      class="w-2 h-2 rounded-full"
+                      :class="{
+                        'bg-green-500': store.serverStatus?.mqtt === 'connected',
+                        'bg-red-500': store.serverStatus?.mqtt === 'error',
+                        'bg-gray-500': store.serverStatus?.mqtt === 'disconnected'
+                      }"
+                    ></span>
+                    <span class="text-xs text-gray-400">
+                      {{ store.serverStatus?.mqtt === 'pending' ? 'Connecting...' :
+                         store.serverStatus?.mqtt === 'connected' ? 'Connected' :
+                         store.serverStatus?.mqtt === 'error' ? 'Error' : 'Disconnected' }}
+                    </span>
+                  </div>
+                  <!-- Enable/Disable toggle switch -->
+                  <button
+                    @click="toggleMQTT"
+                    :disabled="store.serverStatus?.mqtt === 'pending'"
+                    class="relative w-10 h-5 rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-cyan-500/50"
+                    :class="store.serverStatus?.mqtt === 'pending'
+                      ? 'bg-gray-600 cursor-wait'
+                      : store.mqttConfig?.enabled
+                        ? 'bg-cyan-500'
+                        : 'bg-gray-600'"
+                  >
+                    <span
+                      class="absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform"
+                      :class="store.mqttConfig?.enabled ? 'translate-x-5' : 'translate-x-0'"
+                    ></span>
+                  </button>
                 </div>
               </div>
 
@@ -289,13 +327,10 @@ async function toggleWebServer() {
                   />
                 </div>
                 <button
-                  @click="toggleMQTT"
-                  class="w-full py-2 rounded text-sm font-medium transition-colors"
-                  :class="store.serverStatus?.mqtt_connected
-                    ? 'bg-red-500 hover:bg-red-600 text-white'
-                    : 'bg-cyan-500 hover:bg-cyan-600 text-black'"
+                  @click="saveMQTTConfig"
+                  class="w-full py-2 rounded text-sm font-medium transition-colors bg-gray-700 hover:bg-gray-600 text-white"
                 >
-                  {{ store.serverStatus?.mqtt_connected ? 'Disconnect' : 'Connect' }}
+                  Save Settings
                 </button>
               </div>
             </div>
@@ -304,14 +339,43 @@ async function toggleWebServer() {
             <div class="bg-gray-900 rounded-lg p-4">
               <div class="flex items-center justify-between mb-4">
                 <h4 class="text-sm font-medium text-gray-300">Local Web Server</h4>
-                <div class="flex items-center gap-2">
-                  <span
-                    class="w-2 h-2 rounded-full"
-                    :class="store.serverStatus?.web_running ? 'bg-green-500' : 'bg-gray-500'"
-                  ></span>
-                  <span class="text-xs text-gray-400">
-                    {{ store.serverStatus?.web_running ? 'Running' : 'Stopped' }}
-                  </span>
+                <div class="flex items-center gap-3">
+                  <div class="flex items-center gap-2">
+                    <!-- Spinner when pending -->
+                    <svg v-if="store.serverStatus?.web === 'pending'" class="w-3 h-3 animate-spin text-cyan-400" viewBox="0 0 24 24" fill="none">
+                      <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                      <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                    </svg>
+                    <span v-else
+                      class="w-2 h-2 rounded-full"
+                      :class="{
+                        'bg-green-500': store.serverStatus?.web === 'connected',
+                        'bg-red-500': store.serverStatus?.web === 'error',
+                        'bg-gray-500': store.serverStatus?.web === 'disconnected'
+                      }"
+                    ></span>
+                    <span class="text-xs text-gray-400">
+                      {{ store.serverStatus?.web === 'pending' ? 'Starting...' :
+                         store.serverStatus?.web === 'connected' ? 'Running' :
+                         store.serverStatus?.web === 'error' ? 'Error' : 'Stopped' }}
+                    </span>
+                  </div>
+                  <!-- Enable/Disable toggle switch -->
+                  <button
+                    @click="toggleWebServer"
+                    :disabled="store.serverStatus?.web === 'pending'"
+                    class="relative w-10 h-5 rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-cyan-500/50"
+                    :class="store.serverStatus?.web === 'pending'
+                      ? 'bg-gray-600 cursor-wait'
+                      : store.webConfig?.enabled
+                        ? 'bg-cyan-500'
+                        : 'bg-gray-600'"
+                  >
+                    <span
+                      class="absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform"
+                      :class="store.webConfig?.enabled ? 'translate-x-5' : 'translate-x-0'"
+                    ></span>
+                  </button>
                 </div>
               </div>
 
@@ -331,13 +395,10 @@ async function toggleWebServer() {
                   <span class="text-cyan-400">http://localhost:{{ webPort }}</span>
                 </p>
                 <button
-                  @click="toggleWebServer"
-                  class="w-full py-2 rounded text-sm font-medium transition-colors"
-                  :class="store.serverStatus?.web_running
-                    ? 'bg-red-500 hover:bg-red-600 text-white'
-                    : 'bg-cyan-500 hover:bg-cyan-600 text-black'"
+                  @click="saveWebConfig"
+                  class="w-full py-2 rounded text-sm font-medium transition-colors bg-gray-700 hover:bg-gray-600 text-white"
                 >
-                  {{ store.serverStatus?.web_running ? 'Stop Server' : 'Start Server' }}
+                  Save Settings
                 </button>
               </div>
             </div>

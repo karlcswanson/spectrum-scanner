@@ -49,6 +49,7 @@ export namespace main {
 	export class ServerStatus {
 	    mqtt_enabled: boolean;
 	    mqtt_connected: boolean;
+	    mqtt_status: string;
 	    mqtt_broker: string;
 	    web_enabled: boolean;
 	    web_port: number;
@@ -62,6 +63,7 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.mqtt_enabled = source["mqtt_enabled"];
 	        this.mqtt_connected = source["mqtt_connected"];
+	        this.mqtt_status = source["mqtt_status"];
 	        this.mqtt_broker = source["mqtt_broker"];
 	        this.web_enabled = source["web_enabled"];
 	        this.web_port = source["web_port"];

@@ -115,9 +115,7 @@ async function loadTimeline(options = null) {
 
   // Fetch decimated scans for fast preview during scrubbing
   const decimated = await fetchDecimatedScans(props.band.name, hours)
-  console.log('[BandCard] loadTimeline: fetched', decimated.length, 'decimated scans')
   decimatedCache.value = buildDecimatedCache(decimated)
-  console.log('[BandCard] loadTimeline: cache built with', decimatedCache.value.size, 'entries')
 }
 
 // Handle time range change from scrubber
@@ -128,10 +126,8 @@ async function handleRangeChange(rangeOpts) {
 
 // Preview handler (while dragging) - use decimated cache for speed
 function handleTimePreview(time) {
-  console.log('[BandCard] handleTimePreview:', time, 'cache size:', decimatedCache.value.size)
   isLive.value = false
   const scan = findClosestInCache(decimatedCache.value, time)
-  console.log('[BandCard] findClosestInCache result:', scan ? `found with ${scan.power?.length} points` : 'NULL')
   if (scan) {
     historicalScan.value = {
       hz_lo: scan.hz_lo,
@@ -167,7 +163,6 @@ const hasScanData = () => !!props.getScanData(props.band.name)
 
 // Load timeline on mount
 onMounted(() => {
-  console.log('[BandCard] onMounted for band:', props.band.name, 'timelineAvailable:', timelineAvailable.value, 'showTimeline:', props.showTimeline)
   loadTimeline()
 })
 

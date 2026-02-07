@@ -174,7 +174,6 @@ const customRangeDisplay = computed(() => {
 })
 
 function goLive() {
-  console.log('[Scrubber] goLive called, stack:', new Error().stack)
   dragTime.value = null
   emit('live')
 }
@@ -383,7 +382,6 @@ function draw() {
 
   // Update scrubber position and colors
   const scrubberX = selectedTime.value ? xScale(selectedTime.value) : nowX
-  console.log('[Scrubber] draw: selectedTime=', selectedTime.value, 'dragTime=', dragTime.value, 'scrubberX=', scrubberX, 'isLive=', isLive.value)
   const scrubber = chart.select('.scrubber')
     .attr('transform', `translate(${Math.max(0, Math.min(plotWidth, scrubberX))}, 0)`)
     .style('cursor', 'ew-resize')
@@ -448,9 +446,7 @@ function draw() {
         // On release, calculate time from pixel position and emit select
         const x = Math.max(0, Math.min(currentPlotWidth, event.x))
         const time = pixelToTime(x, currentPlotWidth)
-        console.log('[Scrubber] end: x=', x, 'plotWidth=', currentPlotWidth, 'time=', time)
         dragTime.value = time
-        console.log('[Scrubber] end: dragTime set to', dragTime.value)
         emit('select', time)
         // Redraw to update scrubber appearance
         draw()

@@ -20,14 +20,32 @@ type CommandHandler interface {
 	HandleGain(gain float64, mode string) error
 }
 
+// ConnectionStatus represents MQTT connection state
+type ConnectionStatus string
+
+const (
+	StatusConnected    ConnectionStatus = "connected"
+	StatusDisconnected ConnectionStatus = "disconnected"
+	StatusError        ConnectionStatus = "error"
+)
+
+// ConnectionCallback is called when MQTT connection state changes
+type ConnectionCallback func(status ConnectionStatus)
+
 // Client handles MQTT publishing for scan data
 type Client struct {
-	client         pahomqtt.Client
-	config         *models.MQTTConfig
-	scannerConfig  *models.Config
-	topicPrefix    string
-	scannerID      string
-	commandHandler CommandHandler
+	client             pahomqtt.Client
+	config             *models.MQTTConfig
+	scannerConfig      *models.Config
+	topicPrefix        string
+	scannerID          string
+	commandHandler     CommandHandler
+	connectionCallback ConnectionCallback
+}
+
+// SetConnectionCallback sets a callback for connection state changes
+func (c *Client) SetConnectionCallback(cb ConnectionCallback) {
+	c.connectionCallback = cb
 }
 
 // ScanMessage is the minimal MQTT message format for scan data
@@ -113,9 +131,19 @@ func NewClient(mqttConfig *models.MQTTConfig, scannerConfig *models.Config) (*Cl
 			c.PublishConfig()
 			// Subscribe to command topics
 			c.subscribeToCommands()
+			// Publish online status
+			c.PublishStatus(true, false, "")
+			// Notify callback (for UI status updates)
+			if c.connectionCallback != nil {
+				c.connectionCallback(StatusConnected)
+			}
 		}).
 		SetConnectionLostHandler(func(client pahomqtt.Client, err error) {
 			log.Printf("MQTT connection lost: %v", err)
+			// Notify callback - this is an error (unexpected disconnect)
+			if c.connectionCallback != nil {
+				c.connectionCallback(StatusError)
+			}
 		})
 
 	// Authenticate with scanner ID (UUID) and token
@@ -136,22 +164,30 @@ func NewClient(mqttConfig *models.MQTTConfig, scannerConfig *models.Config) (*Cl
 
 // Connect establishes the MQTT connection asynchronously.
 // The scanner will work locally even if MQTT is unavailable.
+// Status updates are sent via the connectionCallback from the Paho event handlers.
 func (c *Client) Connect() error {
 	log.Printf("Connecting to MQTT broker at %s (async)...", c.config.Broker)
 
 	// Connect asynchronously - don't block scanner startup
+	// The OnConnectHandler and ConnectionLostHandler will handle status notifications
 	go func() {
 		token := c.client.Connect()
-		// Wait with a reasonable timeout for initial connection
+		// Wait with a reasonable timeout for initial connection attempt
 		if token.WaitTimeout(10 * time.Second) {
 			if token.Error() != nil {
 				log.Printf("MQTT initial connection failed: %v (will retry in background)", token.Error())
-			} else {
-				log.Printf("MQTT connected successfully")
-				c.PublishStatus(true, false, "")
+				// Notify callback of failure (OnConnect won't fire if connection failed)
+				if c.connectionCallback != nil {
+					c.connectionCallback(StatusError)
+				}
 			}
+			// Success case: OnConnectHandler will fire and notify callback
 		} else {
 			log.Printf("MQTT connection timeout (will retry in background)")
+			// Notify callback of timeout
+			if c.connectionCallback != nil {
+				c.connectionCallback(StatusError)
+			}
 		}
 	}()
 
@@ -162,6 +198,10 @@ func (c *Client) Connect() error {
 func (c *Client) Disconnect() {
 	c.PublishStatus(false, false, "")
 	c.client.Disconnect(1000)
+	// Notify callback of intentional disconnect (not an error)
+	if c.connectionCallback != nil {
+		c.connectionCallback(StatusDisconnected)
+	}
 }
 
 // IsConnected returns whether the client is connected

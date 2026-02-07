@@ -15,15 +15,19 @@ import (
 // ConfigSaveFunc is called when config changes and should be persisted
 type ConfigSaveFunc func() error
 
+// ServerStatusFunc returns the current server status (MQTT/web)
+type ServerStatusFunc func() interface{}
+
 // Server handles HTTP requests for the spectrum scanner
 type Server struct {
-	engine       *scanner.Engine
-	config       *models.Config
-	mqtt         *mqtt.Client
-	store        *db.Store
-	mux          *http.ServeMux
-	wsHub        *WSHub
-	onConfigSave ConfigSaveFunc
+	engine          *scanner.Engine
+	config          *models.Config
+	mqtt            *mqtt.Client
+	store           *db.Store
+	mux             *http.ServeMux
+	wsHub           *WSHub
+	onConfigSave    ConfigSaveFunc
+	getServerStatus ServerStatusFunc
 }
 
 // NewServer creates a new HTTP server
@@ -42,6 +46,19 @@ func NewServer(engine *scanner.Engine, config *models.Config, mqttClient *mqtt.C
 // WSHub returns the WebSocket hub for external status broadcasts
 func (s *Server) WSHub() *WSHub {
 	return s.wsHub
+}
+
+// SetServerStatusFunc sets the callback to get current server status
+func (s *Server) SetServerStatusFunc(fn ServerStatusFunc) {
+	s.getServerStatus = fn
+}
+
+// GetServerStatus returns the current server status if callback is set
+func (s *Server) GetServerStatus() interface{} {
+	if s.getServerStatus != nil {
+		return s.getServerStatus()
+	}
+	return nil
 }
 
 func (s *Server) setupRoutes() {

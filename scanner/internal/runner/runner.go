@@ -176,6 +176,11 @@ func CreateBackend(cfg *models.Config) (scanner.Backend, error) {
 
 // EnableMQTT connects to MQTT broker (for runtime enable)
 func (r *Runner) EnableMQTT() error {
+	return r.EnableMQTTWithCallback(nil)
+}
+
+// EnableMQTTWithCallback connects to MQTT broker with an optional connection callback
+func (r *Runner) EnableMQTTWithCallback(callback mqtt.ConnectionCallback) error {
 	if r.Config.MQTT == nil || r.Config.MQTT.Broker == "" {
 		return fmt.Errorf("MQTT not configured")
 	}
@@ -193,6 +198,11 @@ func (r *Runner) EnableMQTT() error {
 		return fmt.Errorf("failed to create MQTT client: %w", err)
 	}
 
+	// Set callback before connecting
+	if callback != nil {
+		client.SetConnectionCallback(callback)
+	}
+
 	if err := client.Connect(); err != nil {
 		return fmt.Errorf("failed to connect to MQTT broker: %w", err)
 	}
@@ -206,7 +216,7 @@ func (r *Runner) EnableMQTT() error {
 		r.Engine.SetMQTTClient(client)
 	}
 
-	log.Printf("MQTT: Connected to %s", r.Config.MQTT.Broker)
+	// Note: Connect() is async, actual connection status comes via callback
 	return nil
 }
 

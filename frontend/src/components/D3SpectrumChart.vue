@@ -465,27 +465,12 @@ function updateTraces() {
       traceWorker.postMessage({ type: 'update', traceId, power })
     }
 
-    // Current trace - use D3 update pattern
-    // Live traces respect showCurrent toggle; explicit/historical traces always render
-    const shouldShowTrace = trace.isLive ? props.showCurrent : true
-    if (shouldShowTrace) {
-      const currentPoints = powerToPoints(power, hz_lo, hz_hi)
-      let currentPath = tracesGroup.select(`.trace-current-${safeId}`)
-
-      if (currentPath.empty()) {
-        currentPath = tracesGroup.append('path')
-          .attr('class', `trace-current-${safeId}`)
-          .attr('fill', 'none')
-          .attr('stroke', trace.color)
-          .attr('stroke-width', 1)
-      }
-      currentPath.datum(currentPoints).attr('d', lineGenerator)
-    } else {
-      tracesGroup.select(`.trace-current-${safeId}`).remove()
-    }
-
-    // Peak trace - Red
     const workerData = workerResults[traceId]
+
+    // Render order: peak (bottom) → average (middle) → current (top)
+    // SVG draws later elements on top, so current/green is always visible
+
+    // Peak trace - Red (rendered first, at bottom)
     if (props.showPeak && workerData?.peak) {
       const peakPoints = powerToPoints(workerData.peak, hz_lo, hz_hi)
       let peakPath = tracesGroup.select(`.trace-peak-${safeId}`)
@@ -503,7 +488,7 @@ function updateTraces() {
       tracesGroup.select(`.trace-peak-${safeId}`).remove()
     }
 
-    // Average trace - Yellow
+    // Average trace - Yellow (rendered second, middle)
     if (props.showAverage && workerData?.avg) {
       const avgPoints = powerToPoints(workerData.avg, hz_lo, hz_hi)
       let avgPath = tracesGroup.select(`.trace-avg-${safeId}`)
@@ -520,6 +505,26 @@ function updateTraces() {
       avgPath.datum(avgPoints).attr('d', lineGenerator)
     } else {
       tracesGroup.select(`.trace-avg-${safeId}`).remove()
+    }
+
+    // Current trace - Green (rendered last, on top)
+    // Live traces respect showCurrent toggle; explicit/historical traces always render
+    const shouldShowTrace = trace.isLive ? props.showCurrent : true
+    if (shouldShowTrace) {
+      const currentPoints = powerToPoints(power, hz_lo, hz_hi)
+      let currentPath = tracesGroup.select(`.trace-current-${safeId}`)
+
+      if (currentPath.empty()) {
+        currentPath = tracesGroup.append('path')
+          .attr('class', `trace-current-${safeId}`)
+          .attr('fill', 'none')
+          .attr('stroke', trace.color)
+          .attr('stroke-width', 1)
+      }
+      // Ensure current trace is on top by raising it
+      currentPath.datum(currentPoints).attr('d', lineGenerator).raise()
+    } else {
+      tracesGroup.select(`.trace-current-${safeId}`).remove()
     }
   })
 
