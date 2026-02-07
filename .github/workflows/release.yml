@@ -35,13 +35,13 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Install main frontend deps
+      - name: Install frontend deps
         working-directory: frontend
         run: npm ci
 
-      - name: Build desktop frontend
-        working-directory: scanner/cmd/desktop/frontend
-        run: npm ci && npm run build
+      - name: Build frontend
+        working-directory: scanner
+        run: make build-frontend
 
       - name: Verify frontend build
         run: ls -la scanner/cmd/desktop/frontend/dist/
