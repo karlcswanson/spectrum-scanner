@@ -1,10 +1,15 @@
-FROM python:3.12-slim
+FROM python:3.14-slim
+
+# Install uv
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
+ENV UV_PROJECT_ENVIRONMENT=/usr/local
 
 WORKDIR /app
 
 # Install dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY pyproject.toml uv.lock* ./
+RUN uv sync --frozen --no-dev --no-install-project
 
 # Copy application
 COPY . .
@@ -14,4 +19,5 @@ RUN mkdir -p /app/data
 
 EXPOSE 8000
 
-CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "2", "config.wsgi:application"]
+# Workers auto-scale: (2 * CPU cores) + 1
+CMD ["sh", "-c", "uv run gunicorn --bind 0.0.0.0:8000 --workers $(( 2 * $(nproc) + 1 )) config.wsgi:application"]

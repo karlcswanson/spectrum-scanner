@@ -35,6 +35,10 @@ frontend/dist-standalone/
 # Python cache
 __pycache__/
 *.pyc
+.venv/
+
+# GoReleaser
+dist/
 
 # SQLite database
 *.sqlite3

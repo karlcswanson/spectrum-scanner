@@ -90,9 +90,9 @@ services:
       retries: 3
       start_period: 10s
     command: >
-      sh -c "python manage.py migrate --noinput &&
-             python manage.py collectstatic --noinput &&
-             gunicorn --bind 0.0.0.0:8000 --workers 2 --threads 2 config.wsgi:application"
+      sh -c "uv run python manage.py migrate --noinput &&
+             uv run python manage.py collectstatic --noinput &&
+             uv run gunicorn --bind 0.0.0.0:8000 --workers $(( 2 * $(nproc) + 1 )) --threads 2 config.wsgi:application"
 
   # MQTT Bridge (stores scans to database)
   mqtt-bridge:
@@ -117,7 +117,7 @@ services:
         condition: service_started
       server:
         condition: service_healthy
-    command: python manage.py mqtt_bridge
+    command: uv run python manage.py mqtt_bridge
 
   # Frontend build (runs once, copies static files to volume)
   frontend:
