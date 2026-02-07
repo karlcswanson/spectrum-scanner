@@ -1,9 +1,13 @@
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useScanData, scanBus, logger } from '@lib'
 
 // Re-export for components that import from store
 export { scanBus }
+
+// Detect Wails desktop app - use localhost:8080 for API
+const isWails = !!(window.wails || window.go)
+const apiBase = isWails ? 'http://localhost:8080' : ''
 
 /**
  * Standalone scanner store - connects directly to Go scanner API
@@ -17,6 +21,7 @@ export const useStandaloneStore = defineStore('standalone', () => {
     getScanData,
     clearScanData,
     getScanInfo,
+    generateCSV,
     downloadCSV,
   } = useScanData()
 
@@ -25,6 +30,20 @@ export const useStandaloneStore = defineStore('standalone', () => {
   const status = ref(null)
   const connected = ref(false)
   const lastError = ref(null)
+
+  // Server mode state (for MQTT and web server control)
+  const serverStatus = ref({
+    mqtt_enabled: false,
+    mqtt_connected: false,
+    mqtt_broker: '',
+    web_enabled: false,
+    web_port: 8080,
+    web_running: false,
+  })
+
+  // Computed from config
+  const mqttConfig = computed(() => config.value?.mqtt || {})
+  const webConfig = computed(() => config.value?.web || { port: 8080 })
 
   // WebSocket connection
   let ws = null
@@ -50,7 +69,8 @@ export const useStandaloneStore = defineStore('standalone', () => {
     if (ws && ws.readyState === WebSocket.OPEN) return
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const wsUrl = `${protocol}//${window.location.host}/ws/stream`
+    const host = isWails ? 'localhost:8080' : window.location.host
+    const wsUrl = `${protocol}//${host}/ws/stream`
 
     logger.debug('Connecting to WebSocket:', wsUrl)
     ws = new WebSocket(wsUrl)
@@ -124,7 +144,7 @@ export const useStandaloneStore = defineStore('standalone', () => {
   // REST API calls
   async function fetchConfig() {
     try {
-      const response = await fetch('/api/config')
+      const response = await fetch(`${apiBase}/api/config`)
       if (!response.ok) throw new Error(`HTTP ${response.status}`)
       config.value = await response.json()
     } catch (err) {
@@ -134,7 +154,7 @@ export const useStandaloneStore = defineStore('standalone', () => {
 
   async function fetchStatus() {
     try {
-      const response = await fetch('/api/status')
+      const response = await fetch(`${apiBase}/api/status`)
       if (!response.ok) throw new Error(`HTTP ${response.status}`)
       status.value = await response.json()
     } catch (err) {
@@ -144,7 +164,7 @@ export const useStandaloneStore = defineStore('standalone', () => {
 
   async function startScanning() {
     try {
-      const response = await fetch('/api/scan/start', { method: 'POST' })
+      const response = await fetch(`${apiBase}/api/scan/start`, { method: 'POST' })
       if (!response.ok) throw new Error(`HTTP ${response.status}`)
       await fetchStatus()
     } catch (err) {
@@ -154,7 +174,7 @@ export const useStandaloneStore = defineStore('standalone', () => {
 
   async function stopScanning() {
     try {
-      const response = await fetch('/api/scan/stop', { method: 'POST' })
+      const response = await fetch(`${apiBase}/api/scan/stop`, { method: 'POST' })
       if (!response.ok) throw new Error(`HTTP ${response.status}`)
       await fetchStatus()
     } catch (err) {
@@ -164,7 +184,7 @@ export const useStandaloneStore = defineStore('standalone', () => {
 
   async function updateBands(updatedBands) {
     try {
-      const response = await fetch('/api/bands', {
+      const response = await fetch(`${apiBase}/api/bands`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updatedBands),
@@ -178,7 +198,7 @@ export const useStandaloneStore = defineStore('standalone', () => {
 
   async function updateGain(rxGain, rxGainMode) {
     try {
-      const response = await fetch('/api/gain', {
+      const response = await fetch(`${apiBase}/api/gain`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ rx_gain: rxGain, rx_gain_mode: rxGainMode }),
@@ -192,7 +212,7 @@ export const useStandaloneStore = defineStore('standalone', () => {
 
   async function updateName(name) {
     try {
-      const response = await fetch('/api/config', {
+      const response = await fetch(`${apiBase}/api/config`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name }),
@@ -213,12 +233,83 @@ export const useStandaloneStore = defineStore('standalone', () => {
     updateBands(updated)
   }
 
+  // Server mode control (uses Wails bindings if available)
+  const wailsApp = window.go?.main?.App
+
+  async function setMQTTConfig(cfg) {
+    if (wailsApp?.SetMQTTConfig) {
+      try {
+        await wailsApp.SetMQTTConfig(cfg)
+      } catch (err) {
+        lastError.value = { message: `MQTT Config: ${err.message}`, timestamp: Date.now() }
+      }
+    }
+  }
+
+  async function setWebConfig(cfg) {
+    if (wailsApp?.SetWebConfig) {
+      try {
+        await wailsApp.SetWebConfig(cfg)
+      } catch (err) {
+        lastError.value = { message: `Web Config: ${err.message}`, timestamp: Date.now() }
+      }
+    }
+  }
+
+  async function enableMQTT() {
+    if (wailsApp?.EnableMQTT) {
+      try {
+        await wailsApp.EnableMQTT()
+      } catch (err) {
+        lastError.value = { message: `MQTT: ${err.message}`, timestamp: Date.now() }
+      }
+    }
+  }
+
+  async function disableMQTT() {
+    if (wailsApp?.DisableMQTT) {
+      try {
+        await wailsApp.DisableMQTT()
+      } catch (err) {
+        lastError.value = { message: `MQTT: ${err.message}`, timestamp: Date.now() }
+      }
+    }
+  }
+
+  async function enableWebServer() {
+    if (wailsApp?.EnableWebServer) {
+      try {
+        await wailsApp.EnableWebServer()
+      } catch (err) {
+        lastError.value = { message: `Web Server: ${err.message}`, timestamp: Date.now() }
+      }
+    }
+  }
+
+  async function disableWebServer() {
+    if (wailsApp?.DisableWebServer) {
+      try {
+        await wailsApp.DisableWebServer()
+      } catch (err) {
+        lastError.value = { message: `Web Server: ${err.message}`, timestamp: Date.now() }
+      }
+    }
+  }
+
+  // Listen for Wails events (server status updates)
+  if (window.runtime) {
+    window.runtime.EventsOn('server-status', (data) => {
+      serverStatus.value = data
+    })
+  }
+
   return {
     // State
     config,
     status,
     connected,
     lastError,
+    serverStatus,
 
     // Computed
     scanning,
@@ -226,12 +317,15 @@ export const useStandaloneStore = defineStore('standalone', () => {
     bands,
     enabledBands,
     settings,
+    mqttConfig,
+    webConfig,
 
     // Scan data (use getScanData + scanBus for performance)
     getScanData,
     scanUpdateCount,
     clearScanData,
     getScanInfo,
+    generateCSV,
     downloadCSV,
 
     // Actions
@@ -245,5 +339,13 @@ export const useStandaloneStore = defineStore('standalone', () => {
     updateGain,
     updateName,
     toggleBand,
+
+    // Server mode control
+    setMQTTConfig,
+    setWebConfig,
+    enableMQTT,
+    disableMQTT,
+    enableWebServer,
+    disableWebServer,
   }
 })

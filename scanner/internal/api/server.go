@@ -1,19 +1,16 @@
 package api
 
 import (
-	"embed"
 	"io/fs"
 	"log"
 	"net/http"
 
+	"scanner/internal/api/web"
 	"scanner/internal/db"
 	"scanner/internal/models"
 	"scanner/internal/mqtt"
 	"scanner/internal/scanner"
 )
-
-//go:embed web
-var webFS embed.FS
 
 // ConfigSaveFunc is called when config changes and should be persisted
 type ConfigSaveFunc func() error
@@ -77,7 +74,7 @@ func (s *Server) setupRoutes() {
 	s.mux.HandleFunc("GET /health", s.handleHealth)
 
 	// Static files (Vue frontend)
-	webContent, err := fs.Sub(webFS, "web")
+	webContent, err := fs.Sub(web.Assets, ".")
 	if err != nil {
 		log.Printf("Warning: could not load embedded web files: %v", err)
 		// Serve a simple message if no web files embedded
@@ -109,12 +106,29 @@ func (s *Server) setupRoutes() {
 // ListenAndServe starts the HTTP server
 func (s *Server) ListenAndServe(addr string) error {
 	log.Printf("Starting HTTP server on %s", addr)
-	return http.ListenAndServe(addr, s.mux)
+	return http.ListenAndServe(addr, corsMiddleware(s.mux))
 }
 
 // Handler returns the HTTP handler (useful for testing)
 func (s *Server) Handler() http.Handler {
-	return s.mux
+	return corsMiddleware(s.mux)
+}
+
+// corsMiddleware adds CORS headers for Wails desktop app support
+func corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
+		// Handle preflight requests
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
 }
 
 // SetConfigSaveFunc sets the callback to persist config changes to disk

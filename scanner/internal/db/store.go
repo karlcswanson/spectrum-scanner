@@ -85,12 +85,12 @@ func (s *Store) migrate() error {
 	CREATE TABLE IF NOT EXISTS scans (
 		id INTEGER PRIMARY KEY AUTOINCREMENT,
 		band TEXT NOT NULL,
-		timestamp DATETIME NOT NULL,
+		timestamp INTEGER NOT NULL,
 		hz_lo REAL NOT NULL,
 		hz_hi REAL NOT NULL,
 		step REAL NOT NULL,
 		power BLOB NOT NULL,
-		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+		created_at INTEGER DEFAULT (strftime('%s', 'now'))
 	);
 
 	CREATE INDEX IF NOT EXISTS idx_scans_band_timestamp ON scans(band, timestamp);
@@ -177,9 +177,12 @@ func (s *Store) StoreScan(scan *models.ScanLine) error {
 		return fmt.Errorf("failed to compress power: %w", err)
 	}
 
+	// Store timestamp as Unix seconds (most reliable for SQLite)
+	timestamp := scan.Timestamp.Unix()
+
 	_, err = s.insertStmt.Exec(
 		scan.Band,
-		scan.Timestamp,
+		timestamp,
 		scan.HzLo,
 		scan.HzHi,
 		scan.Step,
@@ -197,7 +200,7 @@ func (s *Store) GetTimeline(band string, hours float64) ([]TimelineEntry, error)
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	since := time.Now().Add(-time.Duration(hours * float64(time.Hour)))
+	since := time.Now().Add(-time.Duration(hours * float64(time.Hour))).Unix()
 
 	rows, err := s.timelineStmt.Query(band, since)
 	if err != nil {
@@ -208,9 +211,11 @@ func (s *Store) GetTimeline(band string, hours float64) ([]TimelineEntry, error)
 	var entries []TimelineEntry
 	for rows.Next() {
 		var e TimelineEntry
-		if err := rows.Scan(&e.ID, &e.Timestamp, &e.Band); err != nil {
+		var ts int64
+		if err := rows.Scan(&e.ID, &ts, &e.Band); err != nil {
 			return nil, fmt.Errorf("failed to scan row: %w", err)
 		}
+		e.Timestamp = time.Unix(ts, 0).UTC()
 		entries = append(entries, e)
 	}
 
@@ -227,17 +232,18 @@ func (s *Store) GetScanAtTime(band string, t time.Time) (*models.ScanLine, error
 		SELECT id, band, timestamp, hz_lo, hz_hi, step, power
 		FROM scans
 		WHERE band = ?
-		ORDER BY ABS(strftime('%s', timestamp) - strftime('%s', ?))
+		ORDER BY ABS(timestamp - ?)
 		LIMIT 1
-	`, band, t)
+	`, band, t.Unix())
 
 	var scan models.ScanLine
 	var powerData []byte
+	var ts int64
 
 	err := row.Scan(
 		&scan.ID,
 		&scan.Band,
-		&scan.Timestamp,
+		&ts,
 		&scan.HzLo,
 		&scan.HzHi,
 		&scan.Step,
@@ -249,6 +255,8 @@ func (s *Store) GetScanAtTime(band string, t time.Time) (*models.ScanLine, error
 	if err != nil {
 		return nil, fmt.Errorf("failed to query scan: %w", err)
 	}
+
+	scan.Timestamp = time.Unix(ts, 0).UTC()
 
 	// Decompress power data
 	scan.Power, err = decompressPower(powerData)
@@ -265,9 +273,9 @@ func (s *Store) GetDecimatedScans(band string, hours float64) ([]DecimatedScan, 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	since := time.Now().Add(-time.Duration(hours * float64(time.Hour)))
+	since := time.Now().Add(-time.Duration(hours * float64(time.Hour))).Unix()
 
-	// Get one scan per minute using GROUP BY on minute boundary
+	// Get one scan per minute using GROUP BY on minute boundary (timestamp / 60)
 	rows, err := s.db.Query(`
 		SELECT id, band, timestamp, hz_lo, hz_hi, step, power
 		FROM scans
@@ -276,7 +284,7 @@ func (s *Store) GetDecimatedScans(band string, hours float64) ([]DecimatedScan, 
 			SELECT MIN(id)
 			FROM scans
 			WHERE band = ? AND timestamp >= ?
-			GROUP BY strftime('%Y-%m-%d %H:%M', timestamp)
+			GROUP BY (timestamp / 60)
 		)
 		ORDER BY timestamp ASC
 	`, band, since, band, since)
@@ -289,11 +297,12 @@ func (s *Store) GetDecimatedScans(band string, hours float64) ([]DecimatedScan, 
 	for rows.Next() {
 		var ds DecimatedScan
 		var powerData []byte
+		var ts int64
 
 		if err := rows.Scan(
 			&ds.ID,
 			&ds.Band,
-			&ds.Timestamp,
+			&ts,
 			&ds.HzLo,
 			&ds.HzHi,
 			&ds.Step,
@@ -301,6 +310,8 @@ func (s *Store) GetDecimatedScans(band string, hours float64) ([]DecimatedScan, 
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan row: %w", err)
 		}
+
+		ds.Timestamp = time.Unix(ts, 0).UTC()
 
 		// Decompress and decimate power data
 		fullPower, err := decompressPower(powerData)
@@ -351,7 +362,7 @@ func (s *Store) Cleanup(retentionHours int) (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	cutoff := time.Now().Add(-time.Duration(retentionHours) * time.Hour)
+	cutoff := time.Now().Add(-time.Duration(retentionHours) * time.Hour).Unix()
 
 	result, err := s.db.Exec(`DELETE FROM scans WHERE timestamp < ?`, cutoff)
 	if err != nil {
@@ -391,13 +402,12 @@ func (s *Store) GetStats() (map[string]interface{}, error) {
 		bands := make(map[string]interface{})
 		for rows.Next() {
 			var band string
-			var cnt int64
-			var oldest, newest time.Time
-			rows.Scan(&band, &cnt, &oldest, &newest)
+			var cnt, oldestTs, newestTs int64
+			rows.Scan(&band, &cnt, &oldestTs, &newestTs)
 			bands[band] = map[string]interface{}{
 				"count":  cnt,
-				"oldest": oldest,
-				"newest": newest,
+				"oldest": time.Unix(oldestTs, 0).UTC(),
+				"newest": time.Unix(newestTs, 0).UTC(),
 			}
 		}
 		stats["bands"] = bands

@@ -1,10 +1,13 @@
 <script setup>
-import { onMounted, onUnmounted, ref, computed } from 'vue'
+import { onMounted, onUnmounted, ref, computed, watch } from 'vue'
 import { useStandaloneStore, scanBus } from './store'
 import BandCard from '../components/BandCard.vue'
 import ScannerSettings from '../components/ScannerSettings.vue'
 
 const store = useStandaloneStore()
+
+// Detect Wails environment
+const isWails = !!(window.wails || window.go)
 
 // Reactive error display (updates every second instead of every render)
 const now = ref(Date.now())
@@ -16,6 +19,31 @@ const showError = computed(() => {
 
 // UI state
 const showSettings = ref(false)
+const settingsTab = ref('scanner') // 'scanner' or 'server'
+
+// Server mode form fields
+const mqttBroker = ref('')
+const mqttId = ref('')
+const mqttToken = ref('')
+const mqttLocation = ref('')
+const webPort = ref(8080)
+
+// Sync MQTT config from store
+watch(() => store.mqttConfig, (cfg) => {
+  if (cfg) {
+    mqttBroker.value = cfg.broker || ''
+    mqttId.value = cfg.id || ''
+    mqttToken.value = cfg.token || ''
+    mqttLocation.value = cfg.location || ''
+  }
+}, { immediate: true })
+
+// Sync web config from store
+watch(() => store.webConfig, (cfg) => {
+  if (cfg) {
+    webPort.value = cfg.port || 8080
+  }
+}, { immediate: true })
 
 // Connect on mount
 onMounted(() => {
@@ -30,9 +58,24 @@ onUnmounted(() => {
   store.disconnect()
 })
 
-// Export handler for BandCard
-function handleExport(bandName) {
-  store.downloadCSV(bandName, store.config?.name)
+// Export handler for BandCard - uses native dialog in Wails, browser download otherwise
+async function handleExport(bandName) {
+  const csv = store.generateCSV(bandName)
+  if (!csv) return
+
+  // In Wails, use native file dialog
+  if (isWails && window.go?.main?.App?.SaveCSV) {
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+    const filename = `scan_${bandName.replace(/\s+/g, '-')}_${timestamp}.csv`
+    try {
+      await window.go.main.App.SaveCSV(csv, filename)
+    } catch (err) {
+      // Error handled by native dialog
+    }
+  } else {
+    // Browser download
+    store.downloadCSV(bandName, store.config?.name)
+  }
 }
 
 // Settings handlers
@@ -46,6 +89,42 @@ function handleUpdateGain(value, mode) {
 
 function handleToggleBand(bandName) {
   store.toggleBand(bandName)
+}
+
+// Server mode functions
+async function saveMQTTConfig() {
+  await store.setMQTTConfig({
+    enabled: store.mqttConfig?.enabled || false,
+    broker: mqttBroker.value,
+    id: mqttId.value,
+    token: mqttToken.value,
+    location: mqttLocation.value,
+  })
+}
+
+async function saveWebConfig() {
+  await store.setWebConfig({
+    enabled: store.webConfig?.enabled || false,
+    port: webPort.value,
+  })
+}
+
+async function toggleMQTT() {
+  await saveMQTTConfig()
+  if (store.serverStatus?.mqtt_connected) {
+    await store.disableMQTT()
+  } else {
+    await store.enableMQTT()
+  }
+}
+
+async function toggleWebServer() {
+  await saveWebConfig()
+  if (store.serverStatus?.web_running) {
+    await store.disableWebServer()
+  } else {
+    await store.enableWebServer()
+  }
 }
 </script>
 
@@ -71,8 +150,8 @@ function handleToggleBand(bandName) {
             <span>{{ store.lastError.message }}</span>
           </div>
 
-          <!-- Tuner status - clickable to open settings -->
-          <button @click="showSettings = !showSettings"
+          <!-- Tuner status - clickable to open scanner settings -->
+          <button @click="showSettings = true; settingsTab = 'scanner'"
                class="flex items-center gap-2 px-3 py-1.5 rounded bg-gray-700 hover:bg-gray-600 transition-colors"
           >
             <span
@@ -85,6 +164,25 @@ function handleToggleBand(bandName) {
               <path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49m11.31-2.82a10 10 0 0 1 0 14.14m-14.14 0a10 10 0 0 1 0-14.14"></path>
             </svg>
             <span class="text-xs text-gray-300">Tuner</span>
+          </button>
+
+          <!-- Server status - clickable to open server settings (desktop only) -->
+          <button v-if="isWails"
+               @click="showSettings = true; settingsTab = 'server'"
+               class="flex items-center gap-2 px-3 py-1.5 rounded bg-gray-700 hover:bg-gray-600 transition-colors"
+          >
+            <span
+              class="w-2 h-2 rounded-full"
+              :class="store.serverStatus?.mqtt_connected ? 'bg-green-500' : 'bg-gray-500'"
+            ></span>
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 text-gray-300" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect>
+              <rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect>
+              <line x1="6" y1="6" x2="6.01" y2="6"></line>
+              <line x1="6" y1="18" x2="6.01" y2="18"></line>
+            </svg>
+            <span class="text-xs text-gray-300">Server</span>
           </button>
 
           <!-- Start/Stop -->
@@ -108,7 +206,9 @@ function handleToggleBand(bandName) {
       <!-- Settings panel -->
       <div v-if="showSettings" class="mt-4 pt-4 border-t border-gray-700">
         <div class="flex justify-between items-center mb-4">
-          <h3 class="text-sm font-medium text-gray-300">Scanner Settings</h3>
+          <h3 class="text-sm font-medium text-gray-300">
+            {{ settingsTab === 'scanner' ? 'Scanner Settings' : 'Server Settings' }}
+          </h3>
           <button
             @click="showSettings = false"
             class="p-1 rounded hover:bg-gray-700 text-gray-400 hover:text-white"
@@ -120,7 +220,9 @@ function handleToggleBand(bandName) {
           </button>
         </div>
 
+        <!-- Scanner settings -->
         <ScannerSettings
+          v-if="settingsTab === 'scanner'"
           :config="store.config"
           :bands="store.bands"
           :settings="store.settings"
@@ -128,6 +230,119 @@ function handleToggleBand(bandName) {
           @update:gain="handleUpdateGain"
           @toggle-band="handleToggleBand"
         />
+
+        <!-- Server mode settings -->
+        <div v-if="settingsTab === 'server'" class="space-y-6">
+          <div class="grid md:grid-cols-2 gap-6">
+            <!-- MQTT Configuration -->
+            <div class="bg-gray-900 rounded-lg p-4">
+              <div class="flex items-center justify-between mb-4">
+                <h4 class="text-sm font-medium text-gray-300">MQTT (Spectrum Server)</h4>
+                <div class="flex items-center gap-2">
+                  <span
+                    class="w-2 h-2 rounded-full"
+                    :class="store.serverStatus?.mqtt_connected ? 'bg-green-500' : 'bg-gray-500'"
+                  ></span>
+                  <span class="text-xs text-gray-400">
+                    {{ store.serverStatus?.mqtt_connected ? 'Connected' : 'Disconnected' }}
+                  </span>
+                </div>
+              </div>
+
+              <div class="space-y-3">
+                <div>
+                  <label class="block text-xs text-gray-400 mb-1">Broker URL</label>
+                  <input
+                    v-model="mqttBroker"
+                    type="text"
+                    placeholder="tcp://spectrum.example.com:1883"
+                    class="w-full px-3 py-1.5 bg-gray-800 border border-gray-600 rounded text-sm"
+                  />
+                </div>
+                <div class="grid grid-cols-2 gap-3">
+                  <div>
+                    <label class="block text-xs text-gray-400 mb-1">Scanner ID</label>
+                    <input
+                      v-model="mqttId"
+                      type="text"
+                      placeholder="UUID from server"
+                      class="w-full px-3 py-1.5 bg-gray-800 border border-gray-600 rounded text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label class="block text-xs text-gray-400 mb-1">Auth Token</label>
+                    <input
+                      v-model="mqttToken"
+                      type="password"
+                      placeholder="Token from server"
+                      class="w-full px-3 py-1.5 bg-gray-800 border border-gray-600 rounded text-sm"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label class="block text-xs text-gray-400 mb-1">Location</label>
+                  <input
+                    v-model="mqttLocation"
+                    type="text"
+                    placeholder="e.g. Stage Left, FOH, Studio A"
+                    class="w-full px-3 py-1.5 bg-gray-800 border border-gray-600 rounded text-sm"
+                  />
+                </div>
+                <button
+                  @click="toggleMQTT"
+                  class="w-full py-2 rounded text-sm font-medium transition-colors"
+                  :class="store.serverStatus?.mqtt_connected
+                    ? 'bg-red-500 hover:bg-red-600 text-white'
+                    : 'bg-cyan-500 hover:bg-cyan-600 text-black'"
+                >
+                  {{ store.serverStatus?.mqtt_connected ? 'Disconnect' : 'Connect' }}
+                </button>
+              </div>
+            </div>
+
+            <!-- Web Server Configuration -->
+            <div class="bg-gray-900 rounded-lg p-4">
+              <div class="flex items-center justify-between mb-4">
+                <h4 class="text-sm font-medium text-gray-300">Local Web Server</h4>
+                <div class="flex items-center gap-2">
+                  <span
+                    class="w-2 h-2 rounded-full"
+                    :class="store.serverStatus?.web_running ? 'bg-green-500' : 'bg-gray-500'"
+                  ></span>
+                  <span class="text-xs text-gray-400">
+                    {{ store.serverStatus?.web_running ? 'Running' : 'Stopped' }}
+                  </span>
+                </div>
+              </div>
+
+              <div class="space-y-3">
+                <div>
+                  <label class="block text-xs text-gray-400 mb-1">Port</label>
+                  <input
+                    v-model.number="webPort"
+                    type="number"
+                    min="1024"
+                    max="65535"
+                    class="w-full px-3 py-1.5 bg-gray-800 border border-gray-600 rounded text-sm"
+                  />
+                </div>
+                <p class="text-xs text-gray-500">
+                  Access via browser at
+                  <span class="text-cyan-400">http://localhost:{{ webPort }}</span>
+                </p>
+                <button
+                  @click="toggleWebServer"
+                  class="w-full py-2 rounded text-sm font-medium transition-colors"
+                  :class="store.serverStatus?.web_running
+                    ? 'bg-red-500 hover:bg-red-600 text-white'
+                    : 'bg-cyan-500 hover:bg-cyan-600 text-black'"
+                >
+                  {{ store.serverStatus?.web_running ? 'Stop Server' : 'Start Server' }}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </header>
 

@@ -2,10 +2,9 @@
   "$schema": "https://wails.io/schemas/config.v2.json",
   "name": "spectrum-scanner",
   "outputfilename": "Spectrum Scanner",
-  "frontend:install": "npm install",
-  "frontend:build": "npm run build",
-  "frontend:dev:watcher": "npm run dev",
-  "frontend:dev:serverUrl": "auto",
+  "frontend:install": "echo 'Using shared frontend from internal/api/web'",
+  "frontend:build": "echo 'Frontend already built by make build-frontend'",
+  "assetdir": "../../internal/api/web",
   "author": {
     "name": "Micboard",
     "email": "info@micboard.com"

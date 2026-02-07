@@ -44,7 +44,7 @@ jobs:
         run: make build-frontend
 
       - name: Verify frontend build
-        run: ls -la scanner/cmd/desktop/frontend/dist/
+        run: ls -la scanner/internal/api/web/
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v6

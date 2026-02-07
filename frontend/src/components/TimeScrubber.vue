@@ -101,8 +101,9 @@ const selectedTime = computed(() => {
 // showingLive is secondary (indicates if live data is actually available)
 const isLive = computed(() => !dragTime.value)
 
-// Store xScale for drag operations
+// Store xScale and plotWidth for drag operations
 let currentXScale = null
+let currentPlotWidth = 0
 
 // Filter timeline by band if specified
 const filteredTimeline = computed(() => {
@@ -173,34 +174,18 @@ const customRangeDisplay = computed(() => {
 })
 
 function goLive() {
+  console.log('[Scrubber] goLive called, stack:', new Error().stack)
   dragTime.value = null
   emit('live')
 }
 
-// Pixel-to-scan index for O(1) lookup during drag
-let pixelIndex = new Map() // pixel x -> marker
-
-function buildPixelIndex(markers, xScale) {
-  pixelIndex.clear()
-  for (const marker of markers) {
-    const px = Math.round(xScale(marker.date))
-    // Keep the marker closest to this pixel
-    if (!pixelIndex.has(px)) {
-      pixelIndex.set(px, marker)
-    }
-  }
-}
-
-// Find scan at pixel position - O(1) with small search radius
-function findScanAtPixel(x) {
-  // Check exact pixel first
-  if (pixelIndex.has(x)) return pixelIndex.get(x)
-  // Search within 3 pixels
-  for (let offset = 1; offset <= 3; offset++) {
-    if (pixelIndex.has(x - offset)) return pixelIndex.get(x - offset)
-    if (pixelIndex.has(x + offset)) return pixelIndex.get(x + offset)
-  }
-  return null
+// Convert pixel position to time based on current scale
+// Returns a Date representing the time at that pixel position
+function pixelToTime(x, plotWidth) {
+  const timeRange = getTimeRange()
+  const pct = Math.max(0, Math.min(1, x / plotWidth))
+  const timeMs = timeRange.start.getTime() + pct * (timeRange.end.getTime() - timeRange.start.getTime())
+  return new Date(timeMs)
 }
 
 
@@ -345,8 +330,8 @@ function draw() {
     }))
     .filter(t => t.date >= timeRange.start && t.date <= timeRange.end)
 
-  // Build pixel index for O(1) lookup during drag
-  buildPixelIndex(allMarkers, xScale)
+  // Store plotWidth for drag operations
+  currentPlotWidth = plotWidth
 
   // Only draw markers if not hidden
   if (!props.hideMarkers) {
@@ -398,6 +383,7 @@ function draw() {
 
   // Update scrubber position and colors
   const scrubberX = selectedTime.value ? xScale(selectedTime.value) : nowX
+  console.log('[Scrubber] draw: selectedTime=', selectedTime.value, 'dragTime=', dragTime.value, 'scrubberX=', scrubberX, 'isLive=', isLive.value)
   const scrubber = chart.select('.scrubber')
     .attr('transform', `translate(${Math.max(0, Math.min(plotWidth, scrubberX))}, 0)`)
     .style('cursor', 'ew-resize')
@@ -438,54 +424,47 @@ function draw() {
   // Only set up drag behavior once
   if (!scrubber.node().__dragInitialized) {
     scrubber.node().__dragInitialized = true
-    let lastPreviewScanId = null
 
     const drag = d3.drag()
       .on('start', () => {
         isDragging.value = true
-        lastPreviewScanId = null
       })
       .on('drag', (event) => {
         // Immediately follow the mouse for responsive feel
-        const x = Math.max(0, Math.min(plotWidth, event.x))
+        const x = Math.max(0, Math.min(currentPlotWidth, event.x))
         scrubber.attr('transform', `translate(${x}, 0)`)
 
         // Update line color while dragging
         scrubber.select('line').attr('stroke', '#00d4ff')
         scrubber.selectAll('path').attr('fill', '#00d4ff')
 
-        // O(1) pixel lookup for scan
-        const closest = findScanAtPixel(Math.round(x))
-        if (closest && closest.id !== lastPreviewScanId) {
-          lastPreviewScanId = closest.id
-          dragTime.value = closest.date
-          emit('preview', closest.date)
-        }
+        // Calculate time from pixel position and emit preview
+        const time = pixelToTime(x, currentPlotWidth)
+        dragTime.value = time
+        emit('preview', time)
       })
       .on('end', (event) => {
         isDragging.value = false
-        // On release, emit select for full resolution fetch
-        const x = Math.max(0, Math.min(plotWidth, event.x))
-        const closest = findScanAtPixel(Math.round(x))
-        if (closest) {
-          dragTime.value = closest.date
-          emit('select', closest.date)
-        }
-        // Redraw will snap scrubber to actual data point
+        // On release, calculate time from pixel position and emit select
+        const x = Math.max(0, Math.min(currentPlotWidth, event.x))
+        const time = pixelToTime(x, currentPlotWidth)
+        console.log('[Scrubber] end: x=', x, 'plotWidth=', currentPlotWidth, 'time=', time)
+        dragTime.value = time
+        console.log('[Scrubber] end: dragTime set to', dragTime.value)
+        emit('select', time)
+        // Redraw to update scrubber appearance
         draw()
       })
 
     scrubber.call(drag)
 
-    // Click anywhere on timeline to seek (full resolution immediately)
+    // Click anywhere on timeline to seek
     chart.select('.click-area')
       .on('click', (event) => {
         const [x] = d3.pointer(event)
-        const closest = findScanAtPixel(Math.round(x))
-        if (closest) {
-          dragTime.value = closest.date
-          emit('select', closest.date)
-        }
+        const time = pixelToTime(x, currentPlotWidth)
+        dragTime.value = time
+        emit('select', time)
       })
   }
 }
@@ -515,9 +494,21 @@ onUnmounted(() => {
 
 // Sync dragTime with props.currentTime when it updates from parent
 // (e.g., when parent loads historical scan on mount)
+// Only accept if we have no time set, or if parent's time is close to ours (within 2 min)
+// This prevents stale historicalScan timestamps from overwriting user's selection
 watch(() => props.currentTime, (newTime) => {
   if (newTime && !isDragging.value) {
-    dragTime.value = newTime
+    if (!dragTime.value) {
+      // No local time set, accept parent's time
+      dragTime.value = newTime
+    } else {
+      // Only update if parent is confirming our selection (closest scan in DB)
+      const diff = Math.abs(newTime.getTime() - dragTime.value.getTime())
+      if (diff < 120000) { // 2 minutes - reasonable for "closest scan"
+        dragTime.value = newTime
+      }
+      // Otherwise ignore - it's stale data from a previous selection
+    }
   }
 })
 

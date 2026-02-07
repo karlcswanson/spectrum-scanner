@@ -1,4 +1,4 @@
-.PHONY: build build-arm build-glinet run dev deploy deploy-service clean tidy test build-frontend desktop desktop-deps desktop-mac desktop-windows desktop-linux desktop-dev calibrate help
+.PHONY: build build-arm build-glinet run dev deploy deploy-service clean tidy test build-frontend desktop desktop-mac desktop-windows desktop-linux desktop-dev calibrate help
 
 # Default target
 all: build
@@ -39,28 +39,24 @@ build-local: build calibrate
 
 # ============== Desktop App (Wails) ==============
 
-# Install desktop frontend dependencies
-desktop-deps:
-	cd cmd/desktop/frontend && npm install
-
 # Build desktop app for current platform
-desktop: desktop-deps
+desktop: build-frontend
 	cd cmd/desktop && wails build
 
 # Build desktop app for macOS (universal binary)
-desktop-mac: desktop-deps
+desktop-mac: build-frontend
 	cd cmd/desktop && wails build -platform darwin/universal
 
 # Build desktop app for Windows
-desktop-windows: desktop-deps
+desktop-windows: build-frontend
 	cd cmd/desktop && wails build -platform windows/amd64
 
 # Build desktop app for Linux
-desktop-linux: desktop-deps
+desktop-linux: build-frontend
 	cd cmd/desktop && wails build -platform linux/amd64
 
-# Run desktop app in dev mode
-desktop-dev: desktop-deps
+# Run desktop app in dev mode (uses build-frontend, no hot reload)
+desktop-dev: build-frontend
 	cd cmd/desktop && wails dev
 
 # Development: run on Mac, talk to Pluto over USB

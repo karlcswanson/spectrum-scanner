@@ -13,7 +13,7 @@ const props = defineProps({
   onExport: { type: Function, default: null },
   // Enable timeline scrubber (requires local SQLite or API)
   showTimeline: { type: Boolean, default: true },
-  timelineHours: { type: Number, default: 6 },
+  timelineHours: { type: Number, default: 0.167 },  // 10 minutes
 })
 
 // Trace display modes
@@ -69,7 +69,7 @@ function getBandForChart() {
 const chartTraces = computed(() => {
   const traces = []
 
-  // Historical trace (yellow, when scrubbing)
+  // Historical trace (blue, when scrubbing)
   if (!isLive.value && historicalScan.value) {
     traces.push({
       id: `${props.band.name}-historical`,
@@ -80,7 +80,7 @@ const chartTraces = computed(() => {
         step: historicalScan.value.step,
         power: historicalScan.value.power,
       },
-      color: '#fbbf24', // yellow
+      color: '#00d4ff', // Blue/cyan for historical
     })
   }
 
@@ -115,7 +115,9 @@ async function loadTimeline(options = null) {
 
   // Fetch decimated scans for fast preview during scrubbing
   const decimated = await fetchDecimatedScans(props.band.name, hours)
+  console.log('[BandCard] loadTimeline: fetched', decimated.length, 'decimated scans')
   decimatedCache.value = buildDecimatedCache(decimated)
+  console.log('[BandCard] loadTimeline: cache built with', decimatedCache.value.size, 'entries')
 }
 
 // Handle time range change from scrubber
@@ -126,8 +128,10 @@ async function handleRangeChange(rangeOpts) {
 
 // Preview handler (while dragging) - use decimated cache for speed
 function handleTimePreview(time) {
+  console.log('[BandCard] handleTimePreview:', time, 'cache size:', decimatedCache.value.size)
   isLive.value = false
   const scan = findClosestInCache(decimatedCache.value, time)
+  console.log('[BandCard] findClosestInCache result:', scan ? `found with ${scan.power?.length} points` : 'NULL')
   if (scan) {
     historicalScan.value = {
       hz_lo: scan.hz_lo,
@@ -139,7 +143,7 @@ function handleTimePreview(time) {
   }
 }
 
-// Select handler (on release) - fetch full resolution scan
+// Select handler (on release) - fetch full resolution scan from DB
 async function handleTimeSelect(time) {
   isLive.value = false
   const scan = await fetchScanAtTime(props.band.name, time)
@@ -163,6 +167,7 @@ const hasScanData = () => !!props.getScanData(props.band.name)
 
 // Load timeline on mount
 onMounted(() => {
+  console.log('[BandCard] onMounted for band:', props.band.name, 'timelineAvailable:', timelineAvailable.value, 'showTimeline:', props.showTimeline)
   loadTimeline()
 })
 
@@ -243,9 +248,9 @@ watch(() => props.scanUpdateCount, () => {
       :band="getBandForChart()"
       :traces="chartTraces"
       :height="300"
-      :show-current="showCurrent && isLive"
-      :show-average="showAverage"
-      :show-peak="showPeak"
+      :show-current="showCurrent"
+      :show-average="showAverage && isLive"
+      :show-peak="showPeak && isLive"
     />
 
     <!-- Timeline scrubber for historical playback -->
