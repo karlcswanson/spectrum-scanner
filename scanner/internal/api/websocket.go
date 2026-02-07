@@ -89,6 +89,15 @@ func (h *WSHub) BroadcastConfig(config interface{}) {
 	})
 }
 
+// BroadcastServerStatus sends server status (MQTT/web) to all clients
+func (h *WSHub) BroadcastServerStatus(status interface{}) {
+	log.Printf("WSHub: broadcasting server-status: %+v", status)
+	h.Broadcast(WSMessage{
+		Type: "server-status",
+		Data: status,
+	})
+}
+
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
@@ -116,6 +125,14 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	// Send initial status
 	s.wsHub.BroadcastStatus(s.engine.IsRunning(), s.engine.CurrentBand())
+
+	// Send initial server status (MQTT/web) if available
+	log.Printf("WebSocket: checking for server status callback...")
+	serverStatus := s.GetServerStatus()
+	log.Printf("WebSocket: got server status: %+v", serverStatus)
+	if serverStatus != nil {
+		s.wsHub.BroadcastServerStatus(serverStatus)
+	}
 
 	// Handle incoming messages (for future use - commands from client)
 	go func() {

@@ -41,6 +41,7 @@ type App struct {
 	webServer      *api.Server
 	httpServer     *http.Server
 	standaloneMQTT *mqtt.Client // MQTT client when running without a runner (before Pluto connects)
+	mqttStatus     string       // "connected", "disconnected", "error", or "" for unknown
 
 	// SQLite store for scan history (timeline scrubber)
 	store *db.Store
@@ -69,7 +70,8 @@ type StatusEvent struct {
 // ServerStatus reports the state of MQTT and web server
 type ServerStatus struct {
 	MQTTEnabled   bool   `json:"mqtt_enabled"`
-	MQTTConnected bool   `json:"mqtt_connected"`
+	MQTTConnected bool   `json:"mqtt_connected"` // Kept for backwards compatibility
+	MQTTStatus    string `json:"mqtt_status"`    // "connected", "disconnected", "error"
 	MQTTBroker    string `json:"mqtt_broker"`
 	WebEnabled    bool   `json:"web_enabled"`
 	WebPort       int    `json:"web_port"`
@@ -702,10 +704,9 @@ func (a *App) GetWebConfig() *models.WebConfig {
 	return a.config.Web
 }
 
-// SetMQTTConfig updates the MQTT configuration
+// SetMQTTConfig updates the MQTT configuration and saves to file
 func (a *App) SetMQTTConfig(enabled bool, broker, id, token, location string) error {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 
 	if a.config.MQTT == nil {
 		a.config.MQTT = &models.MQTTConfig{
@@ -719,13 +720,21 @@ func (a *App) SetMQTTConfig(enabled bool, broker, id, token, location string) er
 	a.config.MQTT.Token = token
 	a.config.MQTT.Location = location
 
+	configPath := a.configPath
+	cfg := a.config
+	a.mu.Unlock()
+
+	if err := config.SaveToFile(configPath, cfg); err != nil {
+		log.Printf("Warning: failed to save MQTT config: %v", err)
+		return err
+	}
+	log.Printf("MQTT config saved to %s", configPath)
 	return nil
 }
 
-// SetWebConfig updates the web server configuration
+// SetWebConfig updates the web server configuration and saves to file
 func (a *App) SetWebConfig(enabled bool, port int) error {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 
 	if a.config.Web == nil {
 		a.config.Web = &models.WebConfig{}
@@ -738,27 +747,47 @@ func (a *App) SetWebConfig(enabled bool, port int) error {
 		a.config.Web.Port = defaultWebServerPort
 	}
 
+	configPath := a.configPath
+	cfg := a.config
+	a.mu.Unlock()
+
+	if err := config.SaveToFile(configPath, cfg); err != nil {
+		log.Printf("Warning: failed to save web config: %v", err)
+		return err
+	}
+	log.Printf("Web config saved to %s", configPath)
 	return nil
 }
 
 // EnableMQTT starts the MQTT client
-func (a *App) EnableMQTT() error {
+func (a *App) EnableMQTT() {
+	// First, disconnect any existing connections (outside of lock to avoid deadlock)
 	a.mu.Lock()
-	defer a.mu.Unlock()
+	existingStandalone := a.standaloneMQTT
+	a.standaloneMQTT = nil
+	a.mqttStatus = "" // Clear previous status - connection is now pending
+	a.mu.Unlock()
 
-	return a.startMQTT()
+	if existingStandalone != nil {
+		existingStandalone.Disconnect()
+	}
+
+	// Now start new connection
+	a.mu.Lock()
+	err := a.startMQTTLocked()
+	if err != nil {
+		log.Printf("EnableMQTT error: %v", err)
+		a.mqttStatus = "error"
+	}
+	a.mu.Unlock()
+	// Don't broadcast here - the async connection callback will broadcast when done
 }
 
 // startMQTTStandalone starts MQTT without a runner (must be called with lock held)
+// Caller must disconnect any existing client before calling this.
 func (a *App) startMQTTStandalone() error {
 	if a.config.MQTT == nil || a.config.MQTT.Broker == "" {
 		return fmt.Errorf("MQTT not configured")
-	}
-
-	// Disconnect existing standalone client
-	if a.standaloneMQTT != nil {
-		a.standaloneMQTT.Disconnect()
-		a.standaloneMQTT = nil
 	}
 
 	log.Printf("MQTT: Connecting to %s...", a.config.MQTT.Broker)
@@ -768,35 +797,59 @@ func (a *App) startMQTTStandalone() error {
 		return fmt.Errorf("failed to create MQTT client: %w", err)
 	}
 
+	// Set up callback to broadcast status when connection state changes
+	client.SetConnectionCallback(func(status mqtt.ConnectionStatus) {
+		a.mu.Lock()
+		a.mqttStatus = string(status)
+		webServer := a.webServer
+		a.mu.Unlock()
+		if webServer != nil {
+			a.mu.RLock()
+			serverStatus := a.getServerStatusLocked()
+			a.mu.RUnlock()
+			log.Printf("MQTT connection callback: status=%s, broadcasting", status)
+			webServer.WSHub().BroadcastServerStatus(serverStatus)
+		}
+	})
+
 	if err := client.Connect(); err != nil {
 		return fmt.Errorf("failed to connect to MQTT broker: %w", err)
 	}
 
 	a.standaloneMQTT = client
 	a.config.MQTT.Enabled = true
-	log.Printf("MQTT: Connected to %s", a.config.MQTT.Broker)
+	// Note: Connect() is async, status updates come via callback
 
 	return nil
 }
 
-// startMQTT starts the MQTT client (must be called with lock held)
-func (a *App) startMQTT() error {
+// startMQTTLocked starts the MQTT client (must be called with lock held)
+// Caller must disconnect any existing client before calling this.
+func (a *App) startMQTTLocked() error {
 	if a.config.MQTT == nil || a.config.MQTT.Broker == "" {
 		return fmt.Errorf("MQTT not configured")
 	}
 
 	// If we have a runner, use its EnableMQTT method
 	if a.runner != nil {
-		// Disconnect standalone client if exists
-		if a.standaloneMQTT != nil {
-			a.standaloneMQTT.Disconnect()
-			a.standaloneMQTT = nil
+		// Use callback version to broadcast status when connection state changes
+		callback := func(status mqtt.ConnectionStatus) {
+			a.mu.Lock()
+			a.mqttStatus = string(status)
+			webServer := a.webServer
+			a.mu.Unlock()
+			if webServer != nil {
+				a.mu.RLock()
+				serverStatus := a.getServerStatusLocked()
+				a.mu.RUnlock()
+				log.Printf("MQTT connection callback (runner): status=%s, broadcasting", status)
+				webServer.WSHub().BroadcastServerStatus(serverStatus)
+			}
 		}
-		if err := a.runner.EnableMQTT(); err != nil {
+		if err := a.runner.EnableMQTTWithCallback(callback); err != nil {
 			return err
 		}
 		a.config.MQTT.Enabled = true
-		wailsRuntime.EventsEmit(a.ctx, "server-status", a.getServerStatusLocked())
 		return nil
 	}
 
@@ -807,33 +860,47 @@ func (a *App) startMQTT() error {
 // DisableMQTT stops the MQTT client
 func (a *App) DisableMQTT() {
 	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	if a.runner != nil {
-		a.runner.DisableMQTT()
-	}
-
-	if a.standaloneMQTT != nil {
-		a.standaloneMQTT.Disconnect()
-		a.standaloneMQTT = nil
-	}
-
+	// Get references before releasing lock
+	runner := a.runner
+	standaloneMQTT := a.standaloneMQTT
+	a.standaloneMQTT = nil
 	if a.config.MQTT != nil {
 		a.config.MQTT.Enabled = false
 	}
+	a.mu.Unlock()
+
+	// Disconnect outside of lock (Disconnect calls callback which needs lock)
+	if runner != nil {
+		runner.DisableMQTT()
+	}
+	if standaloneMQTT != nil {
+		standaloneMQTT.Disconnect()
+	}
+
+	// Update status and broadcast
+	a.mu.Lock()
+	a.mqttStatus = "disconnected"
+	webServer := a.webServer
+	status := a.getServerStatusLocked()
+	a.mu.Unlock()
 
 	log.Println("MQTT: Disconnected")
-
-	// Emit event to frontend
-	wailsRuntime.EventsEmit(a.ctx, "server-status", a.getServerStatusLocked())
+	if webServer != nil {
+		webServer.WSHub().BroadcastServerStatus(status)
+	}
 }
 
 // EnableWebServer starts the local web server
-func (a *App) EnableWebServer() error {
+func (a *App) EnableWebServer() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	return a.startWebServer()
+	if err := a.startWebServer(); err != nil {
+		log.Printf("EnableWebServer error: %v", err)
+	}
+	if a.webServer != nil {
+		a.webServer.WSHub().BroadcastServerStatus(a.getServerStatusLocked())
+	}
 }
 
 // startWebServer starts the web server (must be called with lock held)
@@ -876,6 +943,13 @@ func (a *App) startWebServer() error {
 		return config.SaveToFile(configPath, a.config)
 	})
 
+	// Wire up server status callback so WebSocket clients get initial status
+	a.webServer.SetServerStatusFunc(func() interface{} {
+		a.mu.RLock()
+		defer a.mu.RUnlock()
+		return a.getServerStatusLocked()
+	})
+
 	// Wire up status change callback to broadcast to WebSocket clients
 	if engine != nil {
 		engine.SetStatusChangeCallback(func(scanning bool, currentBand string) {
@@ -910,9 +984,6 @@ func (a *App) startWebServer() error {
 		}
 	}()
 
-	// Emit event to frontend
-	wailsRuntime.EventsEmit(a.ctx, "server-status", a.getServerStatusLocked())
-
 	return nil
 }
 
@@ -920,6 +991,13 @@ func (a *App) startWebServer() error {
 func (a *App) DisableWebServer() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+
+	// Broadcast before stopping so clients get the update
+	status := a.getServerStatusLocked()
+	status.WebRunning = false
+	if a.webServer != nil {
+		a.webServer.WSHub().BroadcastServerStatus(status)
+	}
 
 	if a.httpServer != nil {
 		a.httpServer.Close()
@@ -932,9 +1010,6 @@ func (a *App) DisableWebServer() {
 	}
 
 	log.Println("Web server: Stopped")
-
-	// Emit event to frontend
-	wailsRuntime.EventsEmit(a.ctx, "server-status", a.getServerStatusLocked())
 }
 
 // getServerStatusLocked returns server status (must be called with lock held)
@@ -944,12 +1019,20 @@ func (a *App) getServerStatusLocked() ServerStatus {
 	if a.config.MQTT != nil {
 		status.MQTTEnabled = a.config.MQTT.Enabled
 		status.MQTTBroker = a.config.MQTT.Broker
-		// Check both runner's MQTT and standalone MQTT
-		if a.runner != nil && a.runner.MQTTClient != nil && a.runner.MQTTClient.IsConnected() {
-			status.MQTTConnected = true
-		} else if a.standaloneMQTT != nil && a.standaloneMQTT.IsConnected() {
-			status.MQTTConnected = true
+
+		// Use stored mqttStatus from callbacks (most accurate)
+		if a.mqttStatus != "" {
+			status.MQTTStatus = a.mqttStatus
+			status.MQTTConnected = a.mqttStatus == "connected"
+		} else {
+			// No callback has fired yet - default to disconnected
+			// Don't use IsConnected() as it can be unreliable during async connect
+			status.MQTTStatus = "disconnected"
+			status.MQTTConnected = false
 		}
+	} else {
+		// MQTT not configured
+		status.MQTTStatus = "disconnected"
 	}
 
 	if a.config.Web != nil {

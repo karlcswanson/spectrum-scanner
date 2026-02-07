@@ -13,7 +13,7 @@ const props = defineProps({
   onExport: { type: Function, default: null },
   // Enable timeline scrubber (requires local SQLite or API)
   showTimeline: { type: Boolean, default: true },
-  timelineHours: { type: Number, default: 6 },
+  timelineHours: { type: Number, default: 0.167 },  // 10 minutes
 })
 
 // Trace display modes
@@ -69,7 +69,7 @@ function getBandForChart() {
 const chartTraces = computed(() => {
   const traces = []
 
-  // Historical trace (yellow, when scrubbing)
+  // Historical trace (blue, when scrubbing)
   if (!isLive.value && historicalScan.value) {
     traces.push({
       id: `${props.band.name}-historical`,
@@ -80,7 +80,7 @@ const chartTraces = computed(() => {
         step: historicalScan.value.step,
         power: historicalScan.value.power,
       },
-      color: '#fbbf24', // yellow
+      color: '#00d4ff', // Blue/cyan for historical
     })
   }
 
@@ -139,7 +139,7 @@ function handleTimePreview(time) {
   }
 }
 
-// Select handler (on release) - fetch full resolution scan
+// Select handler (on release) - fetch full resolution scan from DB
 async function handleTimeSelect(time) {
   isLive.value = false
   const scan = await fetchScanAtTime(props.band.name, time)
@@ -243,9 +243,9 @@ watch(() => props.scanUpdateCount, () => {
       :band="getBandForChart()"
       :traces="chartTraces"
       :height="300"
-      :show-current="showCurrent && isLive"
-      :show-average="showAverage"
-      :show-peak="showPeak"
+      :show-current="showCurrent"
+      :show-average="showAverage && isLive"
+      :show-peak="showPeak && isLive"
     />
 
     <!-- Timeline scrubber for historical playback -->

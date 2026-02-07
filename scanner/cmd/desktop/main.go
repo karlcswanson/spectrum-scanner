@@ -1,7 +1,6 @@
 package main
 
 import (
-	"embed"
 	"log"
 
 	"github.com/wailsapp/wails/v2"
@@ -10,10 +9,9 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/options/linux"
 	"github.com/wailsapp/wails/v2/pkg/options/mac"
 	"github.com/wailsapp/wails/v2/pkg/options/windows"
-)
 
-//go:embed all:frontend/dist
-var assets embed.FS
+	"scanner/internal/api/web"
+)
 
 func main() {
 	// Create the app instance
@@ -27,11 +25,11 @@ func main() {
 		MinWidth:  800,
 		MinHeight: 600,
 		AssetServer: &assetserver.Options{
-			Assets: assets,
+			Assets: web.Assets,
 		},
 		BackgroundColour: &options.RGBA{R: 17, G: 24, B: 39, A: 1}, // gray-900
 		Debug: options.Debug{
-			OpenInspectorOnStartup: false, // Set to true to auto-open devtools
+			OpenInspectorOnStartup: false,
 		},
 		OnStartup:  app.startup,
 		OnShutdown: app.shutdown,

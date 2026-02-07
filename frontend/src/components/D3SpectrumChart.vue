@@ -99,25 +99,12 @@ function initWorker() {
 }
 
 // Get traces - combine event bus mode, explicit traces, and legacy props
+// Order matters for z-index: first added = drawn first = behind
 function getTracesForDraw() {
   const result = []
 
-  // Event bus mode: add live scan if available and showCurrent is enabled
-  if (props.bandName && props.getScanData && props.showCurrent) {
-    const scan = currentScanData
-    if (scan?.power?.length > 0) {
-      result.push({
-        id: props.bandName,
-        name: 'Live',
-        scan: scan,
-        color: '#00d4ff',
-        isLive: true,  // Flag to indicate this is a live trace (respects showCurrent)
-      })
-    }
-  }
-
-  // Add explicit traces (e.g., historical scans from scrubber)
-  // These are always drawn regardless of showCurrent
+  // Add explicit traces first (e.g., historical scans from scrubber)
+  // These are drawn behind live trace
   if (props.traces.length > 0) {
     for (const [idx, trace] of props.traces.entries()) {
       result.push({
@@ -130,13 +117,27 @@ function getTracesForDraw() {
     }
   }
 
+  // Event bus mode: add live scan last so it renders on top
+  if (props.bandName && props.getScanData && props.showCurrent) {
+    const scan = currentScanData
+    if (scan?.power?.length > 0) {
+      result.push({
+        id: props.bandName,
+        name: 'Live',
+        scan: scan,
+        color: '#22c55e',  // Green for live/current
+        isLive: true,  // Flag to indicate this is a live trace (respects showCurrent)
+      })
+    }
+  }
+
   // Legacy single scan prop
   if (result.length === 0 && props.scan?.power?.length > 0) {
     result.push({
       id: 'default',
       name: 'Scanner',
       scan: props.scan,
-      color: '#00d4ff',
+      color: '#22c55e',  // Green for live/current
       isLive: true,
     })
   }
@@ -464,7 +465,49 @@ function updateTraces() {
       traceWorker.postMessage({ type: 'update', traceId, power })
     }
 
-    // Current trace - use D3 update pattern
+    const workerData = workerResults[traceId]
+
+    // Render order: peak (bottom) → average (middle) → current (top)
+    // SVG draws later elements on top, so current/green is always visible
+
+    // Peak trace - Red (rendered first, at bottom)
+    if (props.showPeak && workerData?.peak) {
+      const peakPoints = powerToPoints(workerData.peak, hz_lo, hz_hi)
+      let peakPath = tracesGroup.select(`.trace-peak-${safeId}`)
+
+      if (peakPath.empty()) {
+        peakPath = tracesGroup.append('path')
+          .attr('class', `trace-peak-${safeId}`)
+          .attr('fill', 'none')
+          .attr('stroke', '#ef4444')  // Red for peak
+          .attr('stroke-width', 1)
+          .attr('opacity', 0.8)
+      }
+      peakPath.datum(peakPoints).attr('d', lineGenerator)
+    } else {
+      tracesGroup.select(`.trace-peak-${safeId}`).remove()
+    }
+
+    // Average trace - Yellow (rendered second, middle)
+    if (props.showAverage && workerData?.avg) {
+      const avgPoints = powerToPoints(workerData.avg, hz_lo, hz_hi)
+      let avgPath = tracesGroup.select(`.trace-avg-${safeId}`)
+
+      if (avgPath.empty()) {
+        avgPath = tracesGroup.append('path')
+          .attr('class', `trace-avg-${safeId}`)
+          .attr('fill', 'none')
+          .attr('stroke', '#fbbf24')  // Yellow for average
+          .attr('stroke-width', 1.5)
+          .attr('stroke-dasharray', '4,2')
+          .attr('opacity', 0.8)
+      }
+      avgPath.datum(avgPoints).attr('d', lineGenerator)
+    } else {
+      tracesGroup.select(`.trace-avg-${safeId}`).remove()
+    }
+
+    // Current trace - Green (rendered last, on top)
     // Live traces respect showCurrent toggle; explicit/historical traces always render
     const shouldShowTrace = trace.isLive ? props.showCurrent : true
     if (shouldShowTrace) {
@@ -478,47 +521,10 @@ function updateTraces() {
           .attr('stroke', trace.color)
           .attr('stroke-width', 1)
       }
-      currentPath.datum(currentPoints).attr('d', lineGenerator)
+      // Ensure current trace is on top by raising it
+      currentPath.datum(currentPoints).attr('d', lineGenerator).raise()
     } else {
       tracesGroup.select(`.trace-current-${safeId}`).remove()
-    }
-
-    // Peak trace
-    const workerData = workerResults[traceId]
-    if (props.showPeak && workerData?.peak) {
-      const peakPoints = powerToPoints(workerData.peak, hz_lo, hz_hi)
-      let peakPath = tracesGroup.select(`.trace-peak-${safeId}`)
-
-      if (peakPath.empty()) {
-        peakPath = tracesGroup.append('path')
-          .attr('class', `trace-peak-${safeId}`)
-          .attr('fill', 'none')
-          .attr('stroke', d3.color(trace.color).darker(0.5).toString())
-          .attr('stroke-width', 1)
-          .attr('opacity', 0.5)
-      }
-      peakPath.datum(peakPoints).attr('d', lineGenerator)
-    } else {
-      tracesGroup.select(`.trace-peak-${safeId}`).remove()
-    }
-
-    // Average trace
-    if (props.showAverage && workerData?.avg) {
-      const avgPoints = powerToPoints(workerData.avg, hz_lo, hz_hi)
-      let avgPath = tracesGroup.select(`.trace-avg-${safeId}`)
-
-      if (avgPath.empty()) {
-        avgPath = tracesGroup.append('path')
-          .attr('class', `trace-avg-${safeId}`)
-          .attr('fill', 'none')
-          .attr('stroke', d3.color(trace.color).brighter(0.3).toString())
-          .attr('stroke-width', 1.5)
-          .attr('stroke-dasharray', '4,2')
-          .attr('opacity', 0.7)
-      }
-      avgPath.datum(avgPoints).attr('d', lineGenerator)
-    } else {
-      tracesGroup.select(`.trace-avg-${safeId}`).remove()
     }
   })
 
