@@ -1,10 +1,18 @@
-FROM python:3.12-slim
+FROM python:3.14-slim
+
+# Install curl for healthchecks
+RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
+
+# Install uv
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
+ENV UV_PROJECT_ENVIRONMENT=/usr/local
 
 WORKDIR /app
 
 # Install dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY pyproject.toml uv.lock* ./
+RUN uv sync --frozen --no-dev --no-install-project
 
 # Copy application
 COPY . .
@@ -12,11 +20,9 @@ COPY . .
 # Create data directory for SQLite
 RUN mkdir -p /app/data
 
-# Collect static files
-RUN python manage.py collectstatic --noinput
-
 EXPOSE 8000
 
-# Use gunicorn for production with multiple workers
-# For async support (WebSockets), use daphne instead
-CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "4", "--threads", "2", "config.wsgi:application"]
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+ENTRYPOINT ["/entrypoint.sh"]
