@@ -4,7 +4,7 @@ project_name: spectrum-scanner
 
 before:
   hooks:
-    - go mod tidy
+    - cd scanner && go mod tidy
 
 builds:
   - id: scanner
@@ -25,35 +25,15 @@ builds:
         goarch: arm64
     ldflags:
       - -s -w
-      - -X main.version={{.Version}}
-      - -X main.commit={{.ShortCommit}}
+    mod_timestamp: "{{ .CommitTimestamp }}"
 
-  - id: calibrate
-    dir: scanner
-    main: ./cmd/calibrate
-    binary: spectrum-calibrate
-    env:
-      - CGO_ENABLED=0
-    goos:
-      - linux
-      - darwin
-      - windows
-    goarch:
-      - amd64
-      - arm64
-    ignore:
-      - goos: windows
-        goarch: arm64
-    ldflags:
-      - -s -w
+universal_binaries:
+  - id: scanner
+    replace: true
 
 archives:
-  - id: nix
-    builds:
+  - builds:
       - scanner
-      - calibrate
-    formats:
-      - tar.gz
     name_template: >-
       {{ .ProjectName }}_
       {{- .Version }}_
@@ -63,28 +43,6 @@ archives:
       - README.md
       - src: scanner/config.example.yaml
         dst: .
-    filter:
-      goos:
-        - linux
-        - darwin
-  - id: windows
-    builds:
-      - scanner
-      - calibrate
-    formats:
-      - zip
-    name_template: >-
-      {{ .ProjectName }}_
-      {{- .Version }}_
-      {{- .Os }}_
-      {{- .Arch }}
-    files:
-      - README.md
-      - src: scanner/config.example.yaml
-        dst: .
-    filter:
-      goos:
-        - windows
 
 checksum:
   name_template: 'checksums.txt'
