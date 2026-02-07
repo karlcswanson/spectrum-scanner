@@ -19,5 +19,5 @@ RUN mkdir -p /app/data
 
 EXPOSE 8000
 
-# Workers auto-scale: (2 * CPU cores) + 1
-CMD ["sh", "-c", "uv run gunicorn --bind 0.0.0.0:8000 --workers $(( 2 * $(nproc) + 1 )) config.wsgi:application"]
+# Dev: use runserver for auto-reload
+CMD ["uv", "run", "python", "manage.py", "runserver", "0.0.0.0:8000"]

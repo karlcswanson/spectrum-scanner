@@ -32,10 +32,10 @@ services:
       - MQTT_BRIDGE_PASSWORD=bridge-secret-token-change-me
     volumes:
       - .:/app
-      - server_data:/app/data
+      - ./data:/app/data
     command: >
-      sh -c "python manage.py migrate &&
-             python manage.py runserver 0.0.0.0:8000"
+      sh -c "uv run python manage.py migrate &&
+             uv run python manage.py runserver 0.0.0.0:8000"
 
   # MQTT Bridge (stores scans to database)
   mqtt-bridge:
@@ -50,7 +50,7 @@ services:
       - MQTT_BRIDGE_PASSWORD=bridge-secret-token-change-me
     volumes:
       - .:/app
-      - server_data:/app/data
+      - ./data:/app/data
     depends_on:
       - mosquitto
       - server
@@ -74,5 +74,4 @@ services:
 volumes:
   mosquitto_data:
   mosquitto_log:
-  server_data:
   frontend_modules:
