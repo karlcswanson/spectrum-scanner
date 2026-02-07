@@ -1,5 +1,3 @@
-version: '3.8'
-
 # Production Docker Compose for Spectrum Scanner
 # Usage: docker compose -f docker-compose.prod.yml up -d
 
@@ -39,7 +37,7 @@ services:
       frontend:
         condition: service_completed_successfully
       server:
-        condition: service_started
+        condition: service_healthy
 
   # MQTT Broker with Django auth
   mosquitto:
@@ -84,15 +82,11 @@ services:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health/')"]
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/admin/login/"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 10s
-    command: >
-      sh -c "uv run python manage.py migrate --noinput &&
-             uv run python manage.py collectstatic --noinput &&
-             uv run gunicorn --bind 0.0.0.0:8000 --workers $(( 2 * $(nproc) + 1 )) --threads 2 config.wsgi:application"
+      start_period: 30s
 
   # MQTT Bridge (stores scans to database)
   mqtt-bridge:
@@ -117,7 +111,7 @@ services:
         condition: service_started
       server:
         condition: service_healthy
-    command: uv run python manage.py mqtt_bridge
+    entrypoint: ["uv", "run", "python", "manage.py", "mqtt_bridge"]
 
   # Frontend build (runs once, copies static files to volume)
   frontend:
