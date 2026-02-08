@@ -1,12 +1,16 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"log"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"scanner/internal/api"
 	"scanner/internal/config"
+	"scanner/internal/models"
 	"scanner/internal/runner"
 )
 
@@ -59,6 +63,10 @@ func main() {
 			status)
 	}
 
+	// Set up signal handling for graceful shutdown
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	// Create runner with all components
 	runnerOpts := runner.DefaultOptions()
 	runnerOpts.EnableStore = !noStore
@@ -68,10 +76,9 @@ func main() {
 	}
 	defer r.Close()
 
-	// Always auto-start scanning
-	cfg.AutoStart = true
-	if err := r.AutoStart(); err != nil {
-		log.Printf("Warning: Failed to auto-start scanner: %v", err)
+	// CLI always starts scanning immediately
+	if err := r.Engine.Start(); err != nil {
+		log.Printf("Warning: Failed to start scanner: %v", err)
 	}
 
 	// Create and start HTTP server
@@ -94,6 +101,11 @@ func main() {
 		server.WSHub().BroadcastStatus(scanning, currentBand)
 	})
 
+	// Wire up config change callback so remote changes (via MQTT) reach WebSocket clients
+	r.Engine.SetConfigChangeCallback(func(cfg *models.Config) {
+		server.WSHub().BroadcastConfig(cfg)
+	})
+
 	log.Printf("Starting HTTP server on %s", configOpts.ListenAddr)
 	log.Printf("API endpoints:")
 	log.Printf("  GET  /api/status     - Scanner status")
@@ -105,7 +117,14 @@ func main() {
 	log.Printf("  POST /api/scan/stop  - Stop scanning")
 	log.Printf("  GET  /ws/stream      - WebSocket for live data")
 
-	if err := server.ListenAndServe(configOpts.ListenAddr); err != nil {
-		log.Fatalf("Server error: %v", err)
-	}
+	// Start HTTP server in background
+	go func() {
+		if err := server.ListenAndServe(configOpts.ListenAddr); err != nil {
+			log.Fatalf("Server error: %v", err)
+		}
+	}()
+
+	// Wait for shutdown signal
+	<-ctx.Done()
+	log.Println("Shutting down...")
 }

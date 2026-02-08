@@ -106,13 +106,9 @@ func (a *App) startup(ctx context.Context) {
 		go func() {
 			a.mu.Lock()
 			err := a.startMQTTStandalone()
-			status := a.getServerStatusLocked()
 			a.mu.Unlock()
-
 			if err != nil {
 				log.Printf("Warning: Failed to auto-start MQTT: %v", err)
-			} else {
-				wailsRuntime.EventsEmit(a.ctx, "server-status", status)
 			}
 		}()
 	}
@@ -120,13 +116,9 @@ func (a *App) startup(ctx context.Context) {
 		go func() {
 			a.mu.Lock()
 			err := a.startWebServer()
-			status := a.getServerStatusLocked()
 			a.mu.Unlock()
-
 			if err != nil {
 				log.Printf("Warning: Failed to auto-start web server: %v", err)
-			} else {
-				wailsRuntime.EventsEmit(a.ctx, "server-status", status)
 			}
 		}()
 	}
@@ -172,7 +164,6 @@ func (a *App) autoConnect() {
 
 	// Get values needed after unlock
 	autoStart := a.config.AutoStart
-	serverStatus := a.getServerStatusLocked()
 	engine := a.runner.Engine
 
 	// Release lock before callbacks/events that may need it
@@ -184,9 +175,6 @@ func (a *App) autoConnect() {
 		CurrentBand: "",
 		Connected:   true,
 	})
-
-	// Emit server status so frontend shows current state
-	wailsRuntime.EventsEmit(a.ctx, "server-status", serverStatus)
 
 	// Auto-start scanning if configured
 	log.Printf("Auto-start config: %v", autoStart)
@@ -772,6 +760,22 @@ func (a *App) EnableMQTT() {
 	// Don't broadcast here - the async connection callback will broadcast when done
 }
 
+// mqttConnectionCallback returns the callback used for MQTT connection status changes
+func (a *App) mqttConnectionCallback() mqtt.ConnectionCallback {
+	return func(status mqtt.ConnectionStatus) {
+		a.mu.Lock()
+		a.mqttStatus = string(status)
+		webServer := a.webServer
+		serverStatus := a.getServerStatusLocked()
+		a.mu.Unlock()
+
+		log.Printf("MQTT connection callback: status=%s", status)
+		if webServer != nil {
+			webServer.WSHub().BroadcastServerStatus(serverStatus)
+		}
+	}
+}
+
 // startMQTTStandalone starts MQTT without a runner (must be called with lock held)
 // Caller must disconnect any existing client before calling this.
 func (a *App) startMQTTStandalone() error {
@@ -786,20 +790,7 @@ func (a *App) startMQTTStandalone() error {
 		return fmt.Errorf("failed to create MQTT client: %w", err)
 	}
 
-	// Set up callback to broadcast status when connection state changes
-	client.SetConnectionCallback(func(status mqtt.ConnectionStatus) {
-		a.mu.Lock()
-		a.mqttStatus = string(status)
-		webServer := a.webServer
-		a.mu.Unlock()
-		if webServer != nil {
-			a.mu.RLock()
-			serverStatus := a.getServerStatusLocked()
-			a.mu.RUnlock()
-			log.Printf("MQTT connection callback: status=%s, broadcasting", status)
-			webServer.WSHub().BroadcastServerStatus(serverStatus)
-		}
-	})
+	client.SetConnectionCallback(a.mqttConnectionCallback())
 
 	if err := client.Connect(); err != nil {
 		return fmt.Errorf("failed to connect to MQTT broker: %w", err)
@@ -807,7 +798,6 @@ func (a *App) startMQTTStandalone() error {
 
 	a.standaloneMQTT = client
 	a.config.MQTT.Enabled = true
-	// Note: Connect() is async, status updates come via callback
 
 	return nil
 }
@@ -821,21 +811,7 @@ func (a *App) startMQTTLocked() error {
 
 	// If we have a runner, use its EnableMQTT method
 	if a.runner != nil {
-		// Use callback version to broadcast status when connection state changes
-		callback := func(status mqtt.ConnectionStatus) {
-			a.mu.Lock()
-			a.mqttStatus = string(status)
-			webServer := a.webServer
-			a.mu.Unlock()
-			if webServer != nil {
-				a.mu.RLock()
-				serverStatus := a.getServerStatusLocked()
-				a.mu.RUnlock()
-				log.Printf("MQTT connection callback (runner): status=%s, broadcasting", status)
-				webServer.WSHub().BroadcastServerStatus(serverStatus)
-			}
-		}
-		if err := a.runner.EnableMQTTWithCallback(callback); err != nil {
+		if err := a.runner.EnableMQTTWithCallback(a.mqttConnectionCallback()); err != nil {
 			return err
 		}
 		a.config.MQTT.Enabled = true
@@ -967,7 +943,7 @@ func (a *App) DisableWebServer() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	// Broadcast before stopping so clients get the update
+	// Broadcast before stopping so WebSocket clients get the update
 	status := a.getServerStatusLocked()
 	status.WebRunning = false
 	if a.webServer != nil {
