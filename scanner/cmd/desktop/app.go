@@ -43,9 +43,6 @@ type App struct {
 	standaloneMQTT *mqtt.Client // MQTT client when running without a runner (before Pluto connects)
 	mqttStatus     string       // "connected", "disconnected", "error", or "" for unknown
 
-	// SQLite store for scan history (timeline scrubber)
-	store *db.Store
-
 	mu              sync.RWMutex
 	configPath      string
 	forwardingScans bool // prevents multiple forwardScans goroutines
@@ -103,17 +100,6 @@ func (a *App) startup(ctx context.Context) {
 
 	log.Printf("Desktop app started - %s (%s)", a.config.Name, a.config.DeviceID)
 
-	// Initialize SQLite store for scan history
-	dbPath := config.AppConfigDir() + "/scans.db"
-	a.store, err = db.NewStore(dbPath)
-	if err != nil {
-		log.Printf("Warning: Failed to initialize scan history database: %v", err)
-	} else {
-		log.Printf("Scan history database: %s", dbPath)
-		// Start periodic cleanup (keep 24 hours by default)
-		go a.runCleanupLoop(24)
-	}
-
 	// Start MQTT and web server independently of Pluto connection
 	// These should run even if the tuner isn't available
 	if a.config.MQTT != nil && a.config.MQTT.Enabled {
@@ -154,8 +140,6 @@ func (a *App) onDomReady(ctx context.Context) {
 
 // autoConnect attempts to connect to the configured backend and optionally start scanning
 func (a *App) autoConnect() {
-	// Small delay to let MQTT/web server goroutines start first
-	// This prevents lock contention at startup
 	log.Println("Auto-connect: waiting for services to initialize...")
 
 	a.mu.Lock()
@@ -166,13 +150,7 @@ func (a *App) autoConnect() {
 	}
 	log.Printf("Auto-connect: attempting to connect to %s backend...", backendType)
 
-	// Don't auto-start MQTT in runner - we handle it separately via standalone client
-	opts := runner.Options{
-		AutoConnect:   true,
-		AutoStartMQTT: false, // We manage MQTT separately
-	}
-
-	r, err := runner.New(a.config, opts)
+	r, err := a.createRunner()
 	if err != nil {
 		a.mu.Unlock()
 		log.Printf("Auto-connect failed: %v (user can connect manually)", err)
@@ -188,50 +166,9 @@ func (a *App) autoConnect() {
 	}
 
 	a.runner = r
-
-	// Update web server with the engine if it's already running
-	if a.webServer != nil {
-		a.webServer.SetEngine(r.Engine)
-		log.Println("Updated web server with engine")
-	}
-
-	// Set up status change callback for Wails frontend
-	a.runner.Engine.SetStatusChangeCallback(func(scanning bool, currentBand string) {
-		a.mu.RLock()
-		connected := a.runner != nil && a.runner.Backend != nil && a.runner.Backend.IsConnected()
-		webServer := a.webServer
-		a.mu.RUnlock()
-
-		wailsRuntime.EventsEmit(a.ctx, "status", StatusEvent{
-			Scanning:    scanning,
-			CurrentBand: currentBand,
-			Connected:   connected,
-		})
-		if webServer != nil {
-			webServer.WSHub().BroadcastStatus(scanning, currentBand)
-		}
-	})
-
-	// Set up config change callback for remote config updates (e.g., band enable/disable via MQTT)
-	a.runner.Engine.SetConfigChangeCallback(func(cfg *models.Config) {
-		a.mu.RLock()
-		webServer := a.webServer
-		a.mu.RUnlock()
-
-		wailsRuntime.EventsEmit(a.ctx, "config-changed", cfg)
-		if webServer != nil {
-			webServer.WSHub().BroadcastConfig(cfg)
-		}
-	})
+	a.setupEngineCallbacks()
 
 	log.Printf("Auto-connected to %s: %s", r.Backend.Type(), r.Backend.Name())
-
-	// Connect standalone MQTT to the engine so scans get published
-	if a.standaloneMQTT != nil && a.standaloneMQTT.IsConnected() {
-		log.Println("Connecting standalone MQTT to engine...")
-		r.Engine.SetMQTTClient(a.standaloneMQTT)
-		a.standaloneMQTT.SetCommandHandler(r.Engine)
-	}
 
 	// Get values needed after unlock
 	autoStart := a.config.AutoStart
@@ -276,26 +213,69 @@ func (a *App) shutdown(ctx context.Context) {
 	if a.runner != nil {
 		a.runner.Close()
 	}
-	if a.store != nil {
-		a.store.Close()
-	}
 	log.Println("Desktop app shutdown")
 }
 
-// runCleanupLoop periodically cleans up old scans
-func (a *App) runCleanupLoop(retentionHours int) {
-	ticker := time.NewTicker(1 * time.Hour)
-	defer ticker.Stop()
+// createRunner creates a new runner with standard desktop options (must be called with lock held)
+func (a *App) createRunner() (*runner.Runner, error) {
+	opts := runner.Options{
+		AutoConnect:         true,
+		AutoStartMQTT:       false, // Desktop manages MQTT separately
+		EnableStore:         true,
+		StoreRetentionHours: 24,
+	}
+	return runner.New(a.config, opts)
+}
 
-	for {
-		select {
-		case <-ticker.C:
-			if a.store != nil {
-				a.store.Cleanup(retentionHours)
-			}
-		case <-a.ctx.Done():
-			return
+// setupEngineCallbacks wires up engine callbacks, MQTT, and web server (must be called with lock held)
+func (a *App) setupEngineCallbacks() {
+	r := a.runner
+
+	// Update web server with the engine if it's already running
+	if a.webServer != nil {
+		a.webServer.SetEngine(r.Engine)
+		log.Println("Updated web server with engine")
+	}
+
+	// Connect standalone MQTT to the engine so scans get published
+	if a.standaloneMQTT != nil && a.standaloneMQTT.IsConnected() {
+		log.Println("Connecting standalone MQTT to engine...")
+		r.Engine.SetMQTTClient(a.standaloneMQTT)
+		a.standaloneMQTT.SetCommandHandler(r.Engine)
+	}
+
+	// Set up status change callback for Wails frontend + WebSocket
+	r.Engine.SetStatusChangeCallback(func(scanning bool, currentBand string) {
+		a.mu.RLock()
+		connected := a.runner != nil && a.runner.Backend != nil && a.runner.Backend.IsConnected()
+		webServer := a.webServer
+		a.mu.RUnlock()
+
+		wailsRuntime.EventsEmit(a.ctx, "status", StatusEvent{
+			Scanning:    scanning,
+			CurrentBand: currentBand,
+			Connected:   connected,
+		})
+		if webServer != nil {
+			webServer.WSHub().BroadcastStatus(scanning, currentBand)
 		}
+	})
+
+	// Set up config change callback for remote config updates
+	r.Engine.SetConfigChangeCallback(func(cfg *models.Config) {
+		a.mu.RLock()
+		webServer := a.webServer
+		a.mu.RUnlock()
+
+		wailsRuntime.EventsEmit(a.ctx, "config-changed", cfg)
+		if webServer != nil {
+			webServer.WSHub().BroadcastConfig(cfg)
+		}
+	})
+
+	// Wire up store to web server if available
+	if r.Store != nil && a.webServer != nil {
+		a.webServer.SetStore(r.Store)
 	}
 }
 
@@ -341,12 +321,7 @@ func (a *App) Connect(address string) error {
 
 	log.Printf("Connecting to %s backend at %s...", backendType, address)
 
-	// Use runner to create and connect (but don't auto-start MQTT here, user controls that)
-	opts := runner.Options{
-		AutoConnect:   true,
-		AutoStartMQTT: false, // User controls MQTT separately in desktop app
-	}
-	r, err := runner.New(a.config, opts)
+	r, err := a.createRunner()
 	if err != nil {
 		a.mu.Unlock()
 		return fmt.Errorf("failed to connect: %w", err)
@@ -359,49 +334,9 @@ func (a *App) Connect(address string) error {
 	}
 
 	a.runner = r
+	a.setupEngineCallbacks()
+
 	log.Printf("Connected to %s: %s", r.Backend.Type(), r.Backend.Name())
-
-	// Update web server with the engine if it's already running
-	if a.webServer != nil {
-		a.webServer.SetEngine(r.Engine)
-		log.Println("Updated web server with engine")
-	}
-
-	// Connect standalone MQTT to the engine so scans get published
-	if a.standaloneMQTT != nil && a.standaloneMQTT.IsConnected() {
-		log.Println("Connecting standalone MQTT to engine...")
-		r.Engine.SetMQTTClient(a.standaloneMQTT)
-		a.standaloneMQTT.SetCommandHandler(r.Engine)
-	}
-
-	// Set up status change callback
-	a.runner.Engine.SetStatusChangeCallback(func(scanning bool, currentBand string) {
-		a.mu.RLock()
-		connected := a.runner != nil && a.runner.Backend != nil && a.runner.Backend.IsConnected()
-		webServer := a.webServer
-		a.mu.RUnlock()
-
-		wailsRuntime.EventsEmit(a.ctx, "status", StatusEvent{
-			Scanning:    scanning,
-			CurrentBand: currentBand,
-			Connected:   connected,
-		})
-		if webServer != nil {
-			webServer.WSHub().BroadcastStatus(scanning, currentBand)
-		}
-	})
-
-	// Set up config change callback for remote config updates
-	a.runner.Engine.SetConfigChangeCallback(func(cfg *models.Config) {
-		a.mu.RLock()
-		webServer := a.webServer
-		a.mu.RUnlock()
-
-		wailsRuntime.EventsEmit(a.ctx, "config-changed", cfg)
-		if webServer != nil {
-			webServer.WSHub().BroadcastConfig(cfg)
-		}
-	})
 
 	// Get values needed after unlock
 	autoStart := a.config.AutoStart
@@ -475,8 +410,9 @@ func (a *App) StopScanning() {
 	}
 }
 
-// forwardScans subscribes to engine scans and emits them to the frontend.
+// forwardScans subscribes to engine scans and emits them to the Wails frontend.
 // Only one instance runs at a time - additional calls are no-ops.
+// Scan persistence to SQLite is handled by the runner.
 func (a *App) forwardScans() {
 	a.mu.Lock()
 	if a.forwardingScans {
@@ -485,7 +421,6 @@ func (a *App) forwardScans() {
 	}
 	a.forwardingScans = true
 	r := a.runner
-	store := a.store
 	a.mu.Unlock()
 
 	defer func() {
@@ -502,23 +437,23 @@ func (a *App) forwardScans() {
 	defer r.Engine.Unsubscribe(ch)
 
 	for scan := range ch {
-		event := ScanEvent{
+		wailsRuntime.EventsEmit(a.ctx, "scan", ScanEvent{
 			Band:      scan.Band,
 			HzLo:      scan.HzLo,
 			HzHi:      scan.HzHi,
 			Step:      scan.Step,
 			Power:     scan.Power,
 			Timestamp: scan.Timestamp.Format("2006-01-02T15:04:05Z07:00"),
-		}
-		wailsRuntime.EventsEmit(a.ctx, "scan", event)
-
-		// Store scan in SQLite for timeline scrubber
-		if store != nil {
-			if err := store.StoreScan(&scan); err != nil {
-				log.Printf("Warning: failed to store scan: %v", err)
-			}
-		}
+		})
 	}
+}
+
+// getStore returns the runner's store, or nil if no runner is active
+func (a *App) getStore() *db.Store {
+	if a.runner != nil {
+		return a.runner.Store
+	}
+	return nil
 }
 
 // GetConfig returns the current configuration
@@ -987,8 +922,8 @@ func (a *App) startWebServer() error {
 	a.webServer = api.NewServer(engine, a.config, mqttClient)
 
 	// Wire up SQLite store for scan history endpoints
-	if a.store != nil {
-		a.webServer.SetStore(a.store)
+	if store := a.getStore(); store != nil {
+		a.webServer.SetStore(store)
 	}
 
 	// Wire up config save callback so API changes persist to YAML
@@ -1004,26 +939,8 @@ func (a *App) startWebServer() error {
 		return a.getServerStatusLocked()
 	})
 
-	// Wire up status change callback to broadcast to WebSocket clients
-	if engine != nil {
-		engine.SetStatusChangeCallback(func(scanning bool, currentBand string) {
-			a.mu.RLock()
-			connected := a.runner != nil && a.runner.Backend != nil && a.runner.Backend.IsConnected()
-			webServer := a.webServer
-			a.mu.RUnlock()
-
-			// Emit to Wails frontend
-			wailsRuntime.EventsEmit(a.ctx, "status", StatusEvent{
-				Scanning:    scanning,
-				CurrentBand: currentBand,
-				Connected:   connected,
-			})
-			// Broadcast to WebSocket clients
-			if webServer != nil {
-				webServer.WSHub().BroadcastStatus(scanning, currentBand)
-			}
-		})
-	}
+	// Note: status change callback is set up by setupEngineCallbacks()
+	// which handles both Wails events and WebSocket broadcasts
 
 	addr := fmt.Sprintf("%s:%d", a.config.Web.Host, port)
 	a.httpServer = &http.Server{
@@ -1152,7 +1069,7 @@ type DecimatedScan struct {
 // GetTimeline returns timeline entries for a band
 func (a *App) GetTimeline(band string, hours float64) []TimelineEntry {
 	a.mu.RLock()
-	store := a.store
+	store := a.getStore()
 	a.mu.RUnlock()
 
 	if store == nil {
@@ -1180,7 +1097,7 @@ func (a *App) GetTimeline(band string, hours float64) []TimelineEntry {
 // GetScanAtTime returns the scan closest to the given time
 func (a *App) GetScanAtTime(band string, timeStr string) *ScanEvent {
 	a.mu.RLock()
-	store := a.store
+	store := a.getStore()
 	a.mu.RUnlock()
 
 	if store == nil {
@@ -1215,7 +1132,7 @@ func (a *App) GetScanAtTime(band string, timeStr string) *ScanEvent {
 // GetDecimatedScans returns decimated scans for scrubber preview
 func (a *App) GetDecimatedScans(band string, hours float64) []DecimatedScan {
 	a.mu.RLock()
-	store := a.store
+	store := a.getStore()
 	a.mu.RUnlock()
 
 	if store == nil {
@@ -1247,7 +1164,7 @@ func (a *App) GetDecimatedScans(band string, hours float64) []DecimatedScan {
 // GetScanStats returns database statistics
 func (a *App) GetScanStats() map[string]interface{} {
 	a.mu.RLock()
-	store := a.store
+	store := a.getStore()
 	a.mu.RUnlock()
 
 	if store == nil {
