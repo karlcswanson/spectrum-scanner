@@ -6,7 +6,7 @@
   "frontend:build": "echo 'Frontend already built by make build-frontend'",
   "assetdir": "../../internal/api/web",
   "author": {
-    "name": "Micboard",
-    "email": "info@micboard.com"
+    "name": "Karl Swanson",
+    "email": "karl@micboard.io"
   }
 }

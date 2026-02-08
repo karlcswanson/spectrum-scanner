@@ -2,13 +2,18 @@
 package runner
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"runtime"
+	"sync"
+	"time"
 
 	"scanner/internal/backend/owon"
 	"scanner/internal/backend/pluto"
 	"scanner/internal/backend/tinysa"
+	"scanner/internal/config"
+	"scanner/internal/db"
 	"scanner/internal/models"
 	"scanner/internal/mqtt"
 	"scanner/internal/scanner"
@@ -20,6 +25,11 @@ type Runner struct {
 	Backend    scanner.Backend
 	Engine     *scanner.Engine
 	MQTTClient *mqtt.Client
+	Store      *db.Store
+
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
 }
 
 // Options configures the runner behavior
@@ -28,25 +38,47 @@ type Options struct {
 	AutoConnect bool
 	// AutoStartMQTT starts MQTT if enabled in config (default: true)
 	AutoStartMQTT bool
+	// EnableStore initializes SQLite store for scan history (default: true)
+	EnableStore bool
+	// StoreRetentionHours is how long to keep scans (default: 24)
+	StoreRetentionHours int
 }
 
 // DefaultOptions returns sensible defaults
 func DefaultOptions() Options {
 	return Options{
-		AutoConnect:   true,
-		AutoStartMQTT: true,
+		AutoConnect:         true,
+		AutoStartMQTT:       true,
+		EnableStore:         true,
+		StoreRetentionHours: 24,
 	}
 }
 
 // New creates a new Runner with all components initialized based on config.
 func New(cfg *models.Config, opts Options) (*Runner, error) {
+	ctx, cancel := context.WithCancel(context.Background())
+	return newRunner(ctx, cancel, cfg, opts)
+}
+
+// NewWithContext creates a Runner with an external context for lifecycle management.
+// Use this when embedding Runner in another application (e.g., Wails desktop app).
+func NewWithContext(ctx context.Context, cfg *models.Config, opts Options) (*Runner, error) {
+	childCtx, cancel := context.WithCancel(ctx)
+	return newRunner(childCtx, cancel, cfg, opts)
+}
+
+// newRunner is the shared implementation for New and NewWithContext
+func newRunner(ctx context.Context, cancel context.CancelFunc, cfg *models.Config, opts Options) (*Runner, error) {
 	r := &Runner{
 		Config: cfg,
+		ctx:    ctx,
+		cancel: cancel,
 	}
 
 	// Create backend
 	backend, err := CreateBackend(cfg)
 	if err != nil {
+		cancel()
 		return nil, fmt.Errorf("failed to create backend: %w", err)
 	}
 	r.Backend = backend
@@ -85,7 +117,77 @@ func New(cfg *models.Config, opts Options) (*Runner, error) {
 		r.MQTTClient.SetCommandHandler(r.Engine)
 	}
 
+	// Initialize SQLite store for scan history
+	if opts.EnableStore {
+		if err := r.initStore(opts.StoreRetentionHours); err != nil {
+			log.Printf("Warning: Failed to initialize scan history: %v", err)
+		}
+	}
+
 	return r, nil
+}
+
+// initStore initializes the SQLite store and starts background goroutines
+func (r *Runner) initStore(retentionHours int) error {
+	dbPath := config.AppConfigDir() + "/scans.db"
+	store, err := db.NewStore(dbPath)
+	if err != nil {
+		return fmt.Errorf("failed to open database: %w", err)
+	}
+	r.Store = store
+	log.Printf("Scan history database: %s", dbPath)
+
+	// Start cleanup goroutine
+	r.wg.Add(1)
+	go r.runCleanupLoop(retentionHours)
+
+	// Start scan persistence goroutine
+	r.wg.Add(1)
+	go r.runScanPersistence()
+
+	return nil
+}
+
+// runCleanupLoop periodically removes old scans
+func (r *Runner) runCleanupLoop(retentionHours int) {
+	defer r.wg.Done()
+	ticker := time.NewTicker(1 * time.Hour)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			if r.Store != nil {
+				r.Store.Cleanup(retentionHours)
+			}
+		case <-r.ctx.Done():
+			return
+		}
+	}
+}
+
+// runScanPersistence subscribes to engine scans and stores them
+func (r *Runner) runScanPersistence() {
+	defer r.wg.Done()
+
+	ch := r.Engine.Subscribe()
+	defer r.Engine.Unsubscribe(ch)
+
+	for {
+		select {
+		case scan, ok := <-ch:
+			if !ok {
+				return
+			}
+			if r.Store != nil {
+				if err := r.Store.StoreScan(&scan); err != nil {
+					log.Printf("Warning: failed to store scan: %v", err)
+				}
+			}
+		case <-r.ctx.Done():
+			return
+		}
+	}
 }
 
 // AutoStart starts scanning if config.AutoStart is true
@@ -97,16 +199,30 @@ func (r *Runner) AutoStart() error {
 	return nil
 }
 
-// Close shuts down all components
+// Close shuts down all components and waits for goroutines to finish
 func (r *Runner) Close() {
+	// Cancel context to signal goroutines to stop
+	if r.cancel != nil {
+		r.cancel()
+	}
+
+	// Stop scanning
 	if r.Engine != nil && r.Engine.IsRunning() {
 		r.Engine.Stop()
 	}
+
+	// Wait for background goroutines
+	r.wg.Wait()
+
+	// Close components
 	if r.MQTTClient != nil {
 		r.MQTTClient.Disconnect()
 	}
 	if r.Backend != nil {
 		r.Backend.Close()
+	}
+	if r.Store != nil {
+		r.Store.Close()
 	}
 }
 

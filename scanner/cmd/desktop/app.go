@@ -46,8 +46,9 @@ type App struct {
 	// SQLite store for scan history (timeline scrubber)
 	store *db.Store
 
-	mu         sync.RWMutex
-	configPath string
+	mu              sync.RWMutex
+	configPath      string
+	forwardingScans bool // prevents multiple forwardScans goroutines
 }
 
 // ScanEvent is sent to the frontend when new scan data arrives
@@ -118,22 +119,28 @@ func (a *App) startup(ctx context.Context) {
 	if a.config.MQTT != nil && a.config.MQTT.Enabled {
 		go func() {
 			a.mu.Lock()
-			defer a.mu.Unlock()
-			if err := a.startMQTTStandalone(); err != nil {
+			err := a.startMQTTStandalone()
+			status := a.getServerStatusLocked()
+			a.mu.Unlock()
+
+			if err != nil {
 				log.Printf("Warning: Failed to auto-start MQTT: %v", err)
 			} else {
-				wailsRuntime.EventsEmit(a.ctx, "server-status", a.getServerStatusLocked())
+				wailsRuntime.EventsEmit(a.ctx, "server-status", status)
 			}
 		}()
 	}
 	if a.config.Web != nil && a.config.Web.Enabled {
 		go func() {
 			a.mu.Lock()
-			defer a.mu.Unlock()
-			if err := a.startWebServer(); err != nil {
+			err := a.startWebServer()
+			status := a.getServerStatusLocked()
+			a.mu.Unlock()
+
+			if err != nil {
 				log.Printf("Warning: Failed to auto-start web server: %v", err)
 			} else {
-				wailsRuntime.EventsEmit(a.ctx, "server-status", a.getServerStatusLocked())
+				wailsRuntime.EventsEmit(a.ctx, "server-status", status)
 			}
 		}()
 	}
@@ -152,7 +159,6 @@ func (a *App) autoConnect() {
 	log.Println("Auto-connect: waiting for services to initialize...")
 
 	a.mu.Lock()
-	defer a.mu.Unlock()
 
 	backendType := "pluto"
 	if a.config.Backend != nil && a.config.Backend.Type != "" {
@@ -168,12 +174,14 @@ func (a *App) autoConnect() {
 
 	r, err := runner.New(a.config, opts)
 	if err != nil {
+		a.mu.Unlock()
 		log.Printf("Auto-connect failed: %v (user can connect manually)", err)
 		return
 	}
 
 	// Check if backend actually connected
 	if r.Backend == nil || !r.Backend.IsConnected() {
+		a.mu.Unlock()
 		log.Printf("Auto-connect: backend not connected (user can connect manually)")
 		r.Close()
 		return
@@ -189,21 +197,30 @@ func (a *App) autoConnect() {
 
 	// Set up status change callback for Wails frontend
 	a.runner.Engine.SetStatusChangeCallback(func(scanning bool, currentBand string) {
+		a.mu.RLock()
+		connected := a.runner != nil && a.runner.Backend != nil && a.runner.Backend.IsConnected()
+		webServer := a.webServer
+		a.mu.RUnlock()
+
 		wailsRuntime.EventsEmit(a.ctx, "status", StatusEvent{
 			Scanning:    scanning,
 			CurrentBand: currentBand,
-			Connected:   a.runner != nil && a.runner.Backend != nil && a.runner.Backend.IsConnected(),
+			Connected:   connected,
 		})
-		if a.webServer != nil {
-			a.webServer.WSHub().BroadcastStatus(scanning, currentBand)
+		if webServer != nil {
+			webServer.WSHub().BroadcastStatus(scanning, currentBand)
 		}
 	})
 
 	// Set up config change callback for remote config updates (e.g., band enable/disable via MQTT)
 	a.runner.Engine.SetConfigChangeCallback(func(cfg *models.Config) {
+		a.mu.RLock()
+		webServer := a.webServer
+		a.mu.RUnlock()
+
 		wailsRuntime.EventsEmit(a.ctx, "config-changed", cfg)
-		if a.webServer != nil {
-			a.webServer.WSHub().BroadcastConfig(cfg)
+		if webServer != nil {
+			webServer.WSHub().BroadcastConfig(cfg)
 		}
 	})
 
@@ -216,6 +233,14 @@ func (a *App) autoConnect() {
 		a.standaloneMQTT.SetCommandHandler(r.Engine)
 	}
 
+	// Get values needed after unlock
+	autoStart := a.config.AutoStart
+	serverStatus := a.getServerStatusLocked()
+	engine := a.runner.Engine
+
+	// Release lock before callbacks/events that may need it
+	a.mu.Unlock()
+
 	// Emit connected status to frontend
 	wailsRuntime.EventsEmit(a.ctx, "status", StatusEvent{
 		Scanning:    false,
@@ -224,14 +249,14 @@ func (a *App) autoConnect() {
 	})
 
 	// Emit server status so frontend shows current state
-	wailsRuntime.EventsEmit(a.ctx, "server-status", a.getServerStatusLocked())
+	wailsRuntime.EventsEmit(a.ctx, "server-status", serverStatus)
 
 	// Auto-start scanning if configured
-	log.Printf("Auto-start config: %v", a.config.AutoStart)
-	if a.config.AutoStart {
+	log.Printf("Auto-start config: %v", autoStart)
+	if autoStart {
 		log.Println("Auto-starting scanning...")
 		go a.forwardScans()
-		if err := a.runner.Engine.Start(); err != nil {
+		if err := engine.Start(); err != nil {
 			log.Printf("Auto-start scanning failed: %v", err)
 		}
 	}
@@ -277,7 +302,6 @@ func (a *App) runCleanupLoop(retentionHours int) {
 // Connect connects to the configured backend device
 func (a *App) Connect(address string) error {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 
 	// Close existing runner if any
 	if a.runner != nil {
@@ -324,10 +348,12 @@ func (a *App) Connect(address string) error {
 	}
 	r, err := runner.New(a.config, opts)
 	if err != nil {
+		a.mu.Unlock()
 		return fmt.Errorf("failed to connect: %w", err)
 	}
 
 	if !r.Backend.IsConnected() {
+		a.mu.Unlock()
 		r.Close()
 		return fmt.Errorf("failed to connect to %s at %s", backendType, address)
 	}
@@ -350,23 +376,39 @@ func (a *App) Connect(address string) error {
 
 	// Set up status change callback
 	a.runner.Engine.SetStatusChangeCallback(func(scanning bool, currentBand string) {
+		a.mu.RLock()
+		connected := a.runner != nil && a.runner.Backend != nil && a.runner.Backend.IsConnected()
+		webServer := a.webServer
+		a.mu.RUnlock()
+
 		wailsRuntime.EventsEmit(a.ctx, "status", StatusEvent{
 			Scanning:    scanning,
 			CurrentBand: currentBand,
-			Connected:   a.runner != nil && a.runner.Backend != nil && a.runner.Backend.IsConnected(),
+			Connected:   connected,
 		})
-		if a.webServer != nil {
-			a.webServer.WSHub().BroadcastStatus(scanning, currentBand)
+		if webServer != nil {
+			webServer.WSHub().BroadcastStatus(scanning, currentBand)
 		}
 	})
 
 	// Set up config change callback for remote config updates
 	a.runner.Engine.SetConfigChangeCallback(func(cfg *models.Config) {
+		a.mu.RLock()
+		webServer := a.webServer
+		a.mu.RUnlock()
+
 		wailsRuntime.EventsEmit(a.ctx, "config-changed", cfg)
-		if a.webServer != nil {
-			a.webServer.WSHub().BroadcastConfig(cfg)
+		if webServer != nil {
+			webServer.WSHub().BroadcastConfig(cfg)
 		}
 	})
+
+	// Get values needed after unlock
+	autoStart := a.config.AutoStart
+	engine := a.runner.Engine
+
+	// Release lock before callbacks/events that may need it
+	a.mu.Unlock()
 
 	// Emit connected status
 	wailsRuntime.EventsEmit(a.ctx, "status", StatusEvent{
@@ -376,10 +418,10 @@ func (a *App) Connect(address string) error {
 	})
 
 	// Auto-start scanning if configured
-	if a.config.AutoStart {
+	if autoStart {
 		log.Println("Auto-starting scanning after connect...")
 		go a.forwardScans()
-		if err := a.runner.Engine.Start(); err != nil {
+		if err := engine.Start(); err != nil {
 			log.Printf("Auto-start scanning failed: %v", err)
 		}
 	}
@@ -433,12 +475,24 @@ func (a *App) StopScanning() {
 	}
 }
 
-// forwardScans subscribes to engine scans and emits them to the frontend
+// forwardScans subscribes to engine scans and emits them to the frontend.
+// Only one instance runs at a time - additional calls are no-ops.
 func (a *App) forwardScans() {
-	a.mu.RLock()
+	a.mu.Lock()
+	if a.forwardingScans {
+		a.mu.Unlock()
+		return // already running
+	}
+	a.forwardingScans = true
 	r := a.runner
 	store := a.store
-	a.mu.RUnlock()
+	a.mu.Unlock()
+
+	defer func() {
+		a.mu.Lock()
+		a.forwardingScans = false
+		a.mu.Unlock()
+	}()
 
 	if r == nil || r.Engine == nil {
 		return
@@ -953,16 +1007,20 @@ func (a *App) startWebServer() error {
 	// Wire up status change callback to broadcast to WebSocket clients
 	if engine != nil {
 		engine.SetStatusChangeCallback(func(scanning bool, currentBand string) {
-			// Emit to Wails frontend
+			a.mu.RLock()
 			connected := a.runner != nil && a.runner.Backend != nil && a.runner.Backend.IsConnected()
+			webServer := a.webServer
+			a.mu.RUnlock()
+
+			// Emit to Wails frontend
 			wailsRuntime.EventsEmit(a.ctx, "status", StatusEvent{
 				Scanning:    scanning,
 				CurrentBand: currentBand,
 				Connected:   connected,
 			})
 			// Broadcast to WebSocket clients
-			if a.webServer != nil {
-				a.webServer.WSHub().BroadcastStatus(scanning, currentBand)
+			if webServer != nil {
+				webServer.WSHub().BroadcastStatus(scanning, currentBand)
 			}
 		})
 	}

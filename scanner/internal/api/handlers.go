@@ -322,6 +322,11 @@ func (s *Server) handleGetTimeline(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	// Ensure empty array instead of null
+	if entries == nil {
+		w.Write([]byte("[]"))
+		return
+	}
 	json.NewEncoder(w).Encode(entries)
 }
 
@@ -390,6 +395,11 @@ func (s *Server) handleGetDecimatedScans(w http.ResponseWriter, r *http.Request)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	// Ensure empty array instead of null
+	if scans == nil {
+		w.Write([]byte("[]"))
+		return
+	}
 	json.NewEncoder(w).Encode(scans)
 }
 

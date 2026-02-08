@@ -4,27 +4,25 @@ import (
 	"flag"
 	"log"
 	"os"
-	"time"
 
 	"scanner/internal/api"
 	"scanner/internal/config"
-	"scanner/internal/db"
 	"scanner/internal/runner"
 )
 
 func main() {
 	// Command line flags (env vars are also checked by config.LoadWithOptions)
-	opts := config.DefaultOptions()
+	configOpts := config.DefaultOptions()
 	var noStore bool
-	flag.StringVar(&opts.ListenAddr, "listen", opts.ListenAddr, "HTTP listen address")
-	flag.StringVar(&opts.BackendType, "backend", "", "Backend type: pluto, owon (overrides config)")
-	flag.StringVar(&opts.BackendAddr, "addr", "", "Backend address (IP or URL, overrides config)")
-	flag.StringVar(&opts.ConfigFile, "config", "", "Config file path (optional)")
+	flag.StringVar(&configOpts.ListenAddr, "listen", configOpts.ListenAddr, "HTTP listen address")
+	flag.StringVar(&configOpts.BackendType, "backend", "", "Backend type: pluto, owon (overrides config)")
+	flag.StringVar(&configOpts.BackendAddr, "addr", "", "Backend address (IP or URL, overrides config)")
+	flag.StringVar(&configOpts.ConfigFile, "config", "", "Config file path (optional)")
 	flag.BoolVar(&noStore, "no-store", false, "Disable local scan history storage")
 	flag.Parse()
 
 	// Load config with options (handles env vars and applies overrides)
-	cfg, configPath, err := config.LoadWithOptions(opts)
+	cfg, configPath, err := config.LoadWithOptions(configOpts)
 	if err != nil {
 		log.Fatalf("Failed to load config from %s: %v", configPath, err)
 	}
@@ -62,7 +60,9 @@ func main() {
 	}
 
 	// Create runner with all components
-	r, err := runner.New(cfg, runner.DefaultOptions())
+	runnerOpts := runner.DefaultOptions()
+	runnerOpts.EnableStore = !noStore
+	r, err := runner.New(cfg, runnerOpts)
 	if err != nil {
 		log.Fatalf("Failed to initialize: %v", err)
 	}
@@ -74,35 +74,12 @@ func main() {
 		log.Printf("Warning: Failed to auto-start scanner: %v", err)
 	}
 
-	// Initialize SQLite store for scan history (timeline scrubber)
-	var store *db.Store
-	if noStore {
-		log.Println("Local scan history storage disabled (-no-store)")
-	} else {
-		dbPath := config.AppConfigDir() + "/scans.db"
-		store, err = db.NewStore(dbPath)
-		if err != nil {
-			log.Printf("Warning: Failed to initialize scan history database: %v", err)
-		} else {
-			log.Printf("Scan history database: %s", dbPath)
-			defer store.Close()
-			// Start periodic cleanup (keep 24 hours)
-			go func() {
-				ticker := time.NewTicker(1 * time.Hour)
-				defer ticker.Stop()
-				for range ticker.C {
-					store.Cleanup(24)
-				}
-			}()
-		}
-	}
-
 	// Create and start HTTP server
 	server := api.NewServer(r.Engine, cfg, r.MQTTClient)
 
 	// Wire up SQLite store for scan history endpoints
-	if store != nil {
-		server.SetStore(store)
+	if r.Store != nil {
+		server.SetStore(r.Store)
 	}
 
 	// Wire up config save callback if using a config file
@@ -117,20 +94,7 @@ func main() {
 		server.WSHub().BroadcastStatus(scanning, currentBand)
 	})
 
-	// Subscribe to scans and store them
-	if store != nil {
-		go func() {
-			ch := r.Engine.Subscribe()
-			defer r.Engine.Unsubscribe(ch)
-			for scan := range ch {
-				if err := store.StoreScan(&scan); err != nil {
-					log.Printf("Warning: failed to store scan: %v", err)
-				}
-			}
-		}()
-	}
-
-	log.Printf("Starting HTTP server on %s", opts.ListenAddr)
+	log.Printf("Starting HTTP server on %s", configOpts.ListenAddr)
 	log.Printf("API endpoints:")
 	log.Printf("  GET  /api/status     - Scanner status")
 	log.Printf("  GET  /api/config     - Configuration")
@@ -141,7 +105,7 @@ func main() {
 	log.Printf("  POST /api/scan/stop  - Stop scanning")
 	log.Printf("  GET  /ws/stream      - WebSocket for live data")
 
-	if err := server.ListenAndServe(opts.ListenAddr); err != nil {
+	if err := server.ListenAndServe(configOpts.ListenAddr); err != nil {
 		log.Fatalf("Server error: %v", err)
 	}
 }
