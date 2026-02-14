@@ -6,6 +6,7 @@ import { logger } from '../lib'
 
 export const useScannersStore = defineStore('scanners', () => {
   const scanners = ref({})
+  const groups = ref([])             // Scanner group list from API
   const latestScans = ref({})       // { scannerId: lastScan }
   const bandScans = ref({})         // { scannerId: { bandName: lastScan } }
   const timelines = ref({})         // { `${scannerId}:${bandName}`: [{ id, timestamp, band__name }] }
@@ -600,6 +601,31 @@ export const useScannersStore = defineStore('scanners', () => {
     }
   }
 
+  async function fetchGroups() {
+    try {
+      const response = await fetch('/api/groups/', {
+        credentials: 'include',
+      })
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      groups.value = await response.json()
+    } catch (error) {
+      logger.error('Failed to fetch groups:', error)
+    }
+  }
+
+  async function fetchGroup(id) {
+    try {
+      const response = await fetch(`/api/groups/${id}/`, {
+        credentials: 'include',
+      })
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      return await response.json()
+    } catch (error) {
+      logger.error('Failed to fetch group:', error)
+      return null
+    }
+  }
+
   async function fetchScanners() {
     try {
       const response = await fetch('/api/scanners/', {
@@ -781,6 +807,7 @@ export const useScannersStore = defineStore('scanners', () => {
   return {
     scanners,
     scannerList,
+    groups,
     latestScans,
     bandScans,
     timelines,
@@ -792,6 +819,8 @@ export const useScannersStore = defineStore('scanners', () => {
     subscribe,
     unsubscribe,
     fetchScanners,
+    fetchGroups,
+    fetchGroup,
     exportScanCSV,
     fetchTimeline,
     getTimeline,

@@ -1,116 +1,69 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, ref, watch, onMounted } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useScannersStore } from '../stores/scanners'
-import { SCRUBBER_HOURS } from '../constants'
-import ScannerHeader from '../components/ScannerHeader.vue'
-import BandChart from '../components/BandChart.vue'
-import MultiScannerChart from '../components/MultiScannerChart.vue'
+import ScannerBandGrid from '../components/ScannerBandGrid.vue'
 
 const store = useScannersStore()
+const route = useRoute()
+const router = useRouter()
 
-// Online scanners for quick links
-const onlineScanners = computed(() =>
-  store.scannerList.filter(s => s.online)
-)
+// Active group filter (null = all scanners)
+const activeGroupId = ref(null)
 
-// Track which bands are selected for overlay comparison
-// Key format: "scannerId:bandName"
-const selectedBands = ref(new Set())
-
-// Get all bands across all scanners, grouped by scanner
-const scannerBands = computed(() => {
-  const result = []
-  for (const scanner of store.scannerList) {
-    const bands = (scanner.bands || [])
-      .filter(b => b.enabled)
-      .sort((a, b) => (Number(a.start_hz) || 0) - (Number(b.start_hz) || 0))
-      .map(band => ({
-        scannerId: scanner.id,
-        scannerName: scanner.name,
-        bandName: band.name,
-        band,
-        scan: store.bandScans[scanner.id]?.[band.name] || null,
-        key: `${scanner.id}:${band.name}`,
-      }))
-
-    if (bands.length > 0) {
-      result.push({
-        scanner,
-        bands,
-      })
-    }
-  }
-  return result
-})
-
-// Flat list of all bands for easier iteration
-const allBands = computed(() => {
-  return scannerBands.value.flatMap(s => s.bands)
-})
-
-// Get selected bands for overlay
-const selectedBandsList = computed(() => {
-  return allBands.value.filter(item => selectedBands.value.has(item.key))
-})
-
-// Show overlay when 2+ bands selected
-const showOverlay = computed(() => selectedBandsList.value.length >= 2)
-
-// Calculate combined frequency range for overlay
-const overlayRange = computed(() => {
-  if (selectedBandsList.value.length === 0) {
-    return { startHz: 470e6, stopHz: 608e6, label: 'No bands selected' }
-  }
-
-  let minHz = Infinity
-  let maxHz = -Infinity
-
-  for (const item of selectedBandsList.value) {
-    const startHz = Number(item.band.start_hz) || 0
-    const stopHz = Number(item.band.stop_hz) || 0
-    if (startHz && stopHz) {
-      minHz = Math.min(minHz, startHz)
-      maxHz = Math.max(maxHz, stopHz)
-    }
-  }
-
-  const startMHz = (minHz / 1e6).toFixed(0)
-  const stopMHz = (maxHz / 1e6).toFixed(0)
-
-  return {
-    startHz: minHz,
-    stopHz: maxHz,
-    label: `${startMHz}-${stopMHz} MHz`,
+// Sync filter with URL query param
+onMounted(() => {
+  store.fetchGroups()
+  if (route.query.group) {
+    activeGroupId.value = route.query.group
   }
 })
 
-// Available scanners for overlay chart
-const overlayAvailableScanners = computed(() => {
-  return selectedBandsList.value.map(item => ({
-    scannerId: item.scannerId,
-    scannerName: item.scannerName,
-    bandName: item.bandName,
-  }))
+watch(() => route.query.group, (groupId) => {
+  activeGroupId.value = groupId || null
 })
 
-// Selection helpers
-function isSelected(key) {
-  return selectedBands.value.has(key)
-}
-
-function toggleSelection(key) {
-  if (selectedBands.value.has(key)) {
-    selectedBands.value.delete(key)
+function setGroup(groupId) {
+  if (groupId === activeGroupId.value) return
+  activeGroupId.value = groupId
+  if (groupId) {
+    router.replace({ query: { group: groupId } })
   } else {
-    selectedBands.value.add(key)
+    router.replace({ query: {} })
   }
-  // Force reactivity
-  selectedBands.value = new Set(selectedBands.value)
 }
 
-function clearSelection() {
-  selectedBands.value = new Set()
-}
+// Active group object (for showing description etc.)
+const activeGroup = computed(() => {
+  if (!activeGroupId.value) return null
+  return store.groups.find(g => g.id === activeGroupId.value) || null
+})
+
+// Filter scanners by active group
+const filteredScanners = computed(() => {
+  if (!activeGroupId.value) return store.scannerList
+
+  // Find scanners that belong to the selected group
+  const group = activeGroup.value
+  if (!group) return store.scannerList
+
+  // Use the group's scanner list if we have it cached, otherwise filter by scanner_groups
+  // Since scanners come from MQTT/store and groups from API, we need to cross-reference
+  // Scanners in the store may have scanner_groups populated from the API fetch
+  return store.scannerList.filter(s => {
+    // Check if this scanner's groups include the active group
+    const scannerGroups = s.scanner_groups || s.deployments || []
+    return scannerGroups.some(g => {
+      const gId = typeof g === 'object' ? g.id : g
+      return gId === activeGroupId.value
+    })
+  })
+})
+
+// Online scanners (from filtered set) for quick links
+const onlineScanners = computed(() =>
+  filteredScanners.value.filter(s => s.online)
+)
 
 function scrollToScanner(scannerId) {
   const el = document.getElementById(`scanner-${scannerId}`)
@@ -126,19 +79,6 @@ function scrollToScanner(scannerId) {
     <div class="flex items-center justify-between mb-4">
       <h1 class="text-2xl font-bold">Dashboard</h1>
       <div class="flex items-center gap-4">
-        <!-- Selection info -->
-        <div v-if="selectedBands.size > 0" class="flex items-center gap-2">
-          <span class="text-sm text-gray-400">
-            {{ selectedBands.size }} band{{ selectedBands.size > 1 ? 's' : '' }} selected
-          </span>
-          <button
-            @click="clearSelection"
-            class="text-xs text-gray-400 hover:text-white px-2 py-1 rounded bg-gray-700 hover:bg-gray-600"
-          >
-            Clear
-          </button>
-        </div>
-
         <!-- Error indicator -->
         <div
           v-if="store.lastError && Date.now() - store.lastError.timestamp < 10000"
@@ -163,6 +103,31 @@ function scrollToScanner(scannerId) {
       </div>
     </div>
 
+    <!-- Group filter pills -->
+    <div v-if="store.groups.length > 0" class="flex items-center gap-2 mb-4">
+      <button
+        @click="setGroup(null)"
+        class="px-3 py-1.5 text-sm rounded-full transition-colors"
+        :class="!activeGroupId
+          ? 'bg-cyan-600 text-white'
+          : 'bg-gray-700 text-gray-300 hover:bg-gray-600 hover:text-white'"
+      >
+        All
+      </button>
+      <button
+        v-for="group in store.groups"
+        :key="group.id"
+        @click="setGroup(group.id)"
+        class="px-3 py-1.5 text-sm rounded-full transition-colors"
+        :class="activeGroupId === group.id
+          ? 'bg-cyan-600 text-white'
+          : 'bg-gray-700 text-gray-300 hover:bg-gray-600 hover:text-white'"
+      >
+        {{ group.name }}
+        <span class="ml-1 text-xs opacity-60">{{ group.scanner_count }}</span>
+      </button>
+    </div>
+
     <!-- Online scanners quick links -->
     <div v-if="onlineScanners.length" class="flex items-center gap-2 mb-6">
       <span class="text-gray-500 text-sm">Online:</span>
@@ -184,64 +149,15 @@ function scrollToScanner(scannerId) {
       No scanners connected. Waiting for data...
     </div>
 
-    <!-- Overlay comparison chart (shows when 2+ bands selected) -->
-    <div v-if="showOverlay" class="mb-6">
-      <div class="bg-gray-800 rounded-lg p-4">
-        <div class="flex items-center justify-between mb-3">
-          <h2 class="text-lg font-semibold text-cyan-400">
-            Comparison
-            <span class="text-gray-500 font-normal text-sm ml-2">
-              {{ selectedBandsList.length }} bands
-            </span>
-          </h2>
-          <button
-            @click="clearSelection"
-            class="text-sm text-gray-400 hover:text-white px-3 py-1 rounded bg-gray-700 hover:bg-gray-600"
-          >
-            Clear Selection
-          </button>
-        </div>
-        <MultiScannerChart
-          :start-hz="overlayRange.startHz"
-          :stop-hz="overlayRange.stopHz"
-          :label="overlayRange.label"
-          :available-scanners="overlayAvailableScanners"
-          :height="350"
-        />
-      </div>
+    <!-- Filtered empty state -->
+    <div
+      v-else-if="activeGroupId && filteredScanners.length === 0"
+      class="text-center text-gray-500 py-12"
+    >
+      No scanners in this group.
     </div>
 
-    <!-- Scanner sections -->
-    <div class="space-y-6">
-      <div v-for="{ scanner, bands } in scannerBands" :key="scanner.id" :id="`scanner-${scanner.id}`">
-        <!-- Scanner header with inline controls -->
-        <ScannerHeader :scanner="scanner" class="mb-4" />
-
-        <!-- Band charts for this scanner -->
-        <div class="grid grid-cols-1 xl:grid-cols-2 min-[1920px]:grid-cols-3 gap-4">
-          <BandChart
-            v-for="item in bands"
-            :key="item.key"
-            :scanner-id="item.scannerId"
-            :scanner-name="item.scannerName"
-            :band="item.band"
-            :scan="item.scan"
-            :show-timeline="true"
-            :timeline-hours="SCRUBBER_HOURS"
-            :selectable="true"
-            :selected="isSelected(item.key)"
-            @update:selected="toggleSelection(item.key)"
-          />
-        </div>
-      </div>
-
-      <!-- No enabled bands message -->
-      <div
-        v-if="store.scannerList.length > 0 && allBands.length === 0"
-        class="bg-gray-800 rounded-lg p-8 text-center text-gray-500"
-      >
-        No enabled bands. Configure bands in scanner settings.
-      </div>
-    </div>
+    <!-- Scanner band grid with comparison -->
+    <ScannerBandGrid :scanners="filteredScanners" />
   </div>
 </template>

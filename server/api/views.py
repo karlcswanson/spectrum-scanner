@@ -12,10 +12,11 @@ from rest_framework.response import Response
 
 from django.contrib.auth import authenticate, login, logout
 
-from core.models import Scanner, Band, Scan, UserMQTTCredentials
+from core.models import Scanner, Band, Scan, UserMQTTCredentials, ScannerGroup, Access
 from .serializers import (
     ScannerSerializer, BandSerializer, ScanSerializer, ScanCreateSerializer,
-    DecimatedScanSerializer
+    DecimatedScanSerializer, ScannerGroupSerializer, ScannerGroupDetailSerializer,
+    AccessSerializer
 )
 
 logger = logging.getLogger(__name__)
@@ -43,6 +44,15 @@ class ScannerViewSet(viewsets.ModelViewSet):
     queryset = Scanner.objects.all()
     serializer_class = ScannerSerializer
     permission_classes = [IsAuthenticated, ReadOnlyIfShareSession]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        group_id = self.request.query_params.get('group')
+        if group_id:
+            queryset = queryset.filter(scanner_groups__id=group_id)
+        if self.request.query_params.get('pool', '').lower() == 'true':
+            queryset = queryset.filter(scanner_groups__isnull=True)
+        return queryset
 
     @action(detail=True, methods=['post'])
     def start(self, request, pk=None):
@@ -610,6 +620,141 @@ def auth_logout(request):
     return Response({'status': 'logged out'})
 
 
+# ============== Scanner Groups ==============
+
+
+class ScannerGroupViewSet(viewsets.ModelViewSet):
+    """API endpoint for scanner groups."""
+
+    queryset = ScannerGroup.objects.all()
+    serializer_class = ScannerGroupSerializer
+    permission_classes = [IsAuthenticated, ReadOnlyIfShareSession]
+
+    def get_serializer_class(self):
+        if self.action == 'retrieve':
+            return ScannerGroupDetailSerializer
+        return ScannerGroupSerializer
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user)
+
+    @action(detail=True, methods=['post'])
+    def assign(self, request, pk=None):
+        """Assign scanners to this group.
+
+        POST data: {"scanners": ["uuid1", "uuid2", ...]}
+        """
+        group = self.get_object()
+        scanner_ids = request.data.get('scanners', [])
+        scanners = Scanner.objects.filter(id__in=scanner_ids)
+        group.scanners.add(*scanners)
+        return Response({'status': 'assigned', 'count': scanners.count()})
+
+    @action(detail=True, methods=['post'])
+    def release(self, request, pk=None):
+        """Remove scanners from this group.
+
+        POST data: {"scanners": ["uuid1", "uuid2", ...]}
+        """
+        group = self.get_object()
+        scanner_ids = request.data.get('scanners', [])
+        scanners = Scanner.objects.filter(id__in=scanner_ids)
+        group.scanners.remove(*scanners)
+        return Response({'status': 'released', 'count': scanners.count()})
+
+
+# ============== Access Management ==============
+
+
+@api_view(['GET'])
+def list_access(request):
+    """List access grants. Staff sees all, users see their own."""
+    if request.user.is_staff:
+        grants = Access.objects.select_related('user', 'scanner_group', 'scanner').all()
+    else:
+        grants = Access.objects.select_related('user', 'scanner_group', 'scanner').filter(user=request.user)
+    return Response(AccessSerializer(grants, many=True).data)
+
+
+@api_view(['POST'])
+def create_access(request):
+    """Create a new access grant (staff only).
+
+    POST data:
+    - type: "user" or "token"
+    - user_id: (if type=user) user PK
+    - group_id: (if scoped to a scanner group) group UUID
+    - scanner_id: (if scoped to scanner) scanner UUID
+    - permission: "r" or "rw" (default "r")
+    - label: descriptive label
+    - expires_hours: optional expiration in hours
+    """
+    if not request.user.is_staff:
+        return Response({'error': 'Admin access required'}, status=status.HTTP_403_FORBIDDEN)
+
+    access_type = request.data.get('type', 'token')
+    permission = request.data.get('permission', 'r')
+    label = request.data.get('label', '')
+
+    kwargs = {
+        'permission': permission,
+        'label': label,
+        'created_by': request.user,
+    }
+
+    # Principal
+    if access_type == 'user':
+        user_id = request.data.get('user_id')
+        if not user_id:
+            return Response({'error': 'user_id required for type=user'}, status=status.HTTP_400_BAD_REQUEST)
+        from django.contrib.auth.models import User as AuthUser
+        try:
+            kwargs['user'] = AuthUser.objects.get(pk=user_id)
+        except AuthUser.DoesNotExist:
+            return Response({'error': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
+    else:
+        from core.models import generate_auth_token
+        kwargs['token'] = generate_auth_token()
+
+    # Scope
+    group_id = request.data.get('group_id')
+    scanner_id = request.data.get('scanner_id')
+    if group_id:
+        try:
+            kwargs['scanner_group'] = ScannerGroup.objects.get(pk=group_id)
+        except ScannerGroup.DoesNotExist:
+            return Response({'error': 'Scanner group not found'}, status=status.HTTP_404_NOT_FOUND)
+    elif scanner_id:
+        try:
+            kwargs['scanner'] = Scanner.objects.get(pk=scanner_id)
+        except Scanner.DoesNotExist:
+            return Response({'error': 'Scanner not found'}, status=status.HTTP_404_NOT_FOUND)
+    else:
+        return Response({'error': 'group_id or scanner_id required'}, status=status.HTTP_400_BAD_REQUEST)
+
+    # Expiration
+    expires_hours = request.data.get('expires_hours')
+    if expires_hours:
+        kwargs['expires_at'] = timezone.now() + timedelta(hours=int(expires_hours))
+
+    access = Access.objects.create(**kwargs)
+    return Response(AccessSerializer(access).data, status=status.HTTP_201_CREATED)
+
+
+@api_view(['DELETE'])
+def revoke_access(request, pk):
+    """Revoke an access grant (staff only)."""
+    if not request.user.is_staff:
+        return Response({'error': 'Admin access required'}, status=status.HTTP_403_FORBIDDEN)
+    try:
+        access = Access.objects.get(pk=pk)
+    except Access.DoesNotExist:
+        return Response({'error': 'Not found'}, status=status.HTTP_404_NOT_FOUND)
+    access.is_active = False
+    access.save(update_fields=['is_active', 'updated_at'])
+    return Response({'status': 'revoked'})
+
+
 # ============== Share Link System ==============
 
 from django.contrib.auth.models import User
@@ -622,9 +767,41 @@ from core.models import ShareLink
 def share_token_auth(request, token):
     """Authenticate via share token and redirect to app.
 
-    This endpoint validates a share link from the database and creates a
-    read-only session for demo/viewing purposes.
+    Checks Access model first (new), then falls back to ShareLink (legacy).
     """
+    # Try Access token first
+    try:
+        access = Access.objects.select_related('scanner_group', 'scanner').get(token=token)
+        if access.is_valid():
+            # Get or create demo user
+            demo_user, created = User.objects.get_or_create(
+                username='demo_viewer',
+                defaults={'email': 'demo@example.com', 'is_active': True, 'is_staff': False}
+            )
+            if created:
+                demo_user.set_unusable_password()
+                demo_user.save()
+
+            login(request, demo_user, backend='django.contrib.auth.backends.ModelBackend')
+            request.session['readonly'] = access.permission == 'r'
+            request.session['access_id'] = str(access.id)
+            request.session['share_label'] = access.label
+
+            access.record_use()
+            logger.info(f"Access token login: {access.label} (use #{access.use_count})")
+
+            from django.conf import settings
+            if settings.DEBUG:
+                return redirect('http://localhost:5173/')
+            return redirect('/')
+
+        reason = "revoked" if not access.is_active else "expired"
+        logger.warning(f"Access token {reason}: {access.label}")
+        return Response({'error': f'Access token has been {reason}'}, status=status.HTTP_401_UNAUTHORIZED)
+    except Access.DoesNotExist:
+        pass
+
+    # Fall back to legacy ShareLink
     try:
         share_link = ShareLink.objects.get(token=token)
     except ShareLink.DoesNotExist:

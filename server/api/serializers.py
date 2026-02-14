@@ -1,7 +1,7 @@
 """API serializers for Spectrum Server."""
 
 from rest_framework import serializers
-from core.models import Scanner, Band, Scan
+from core.models import Scanner, Band, Scan, ScannerGroup, Access
 
 
 class BandSerializer(serializers.ModelSerializer):
@@ -15,15 +15,16 @@ class BandSerializer(serializers.ModelSerializer):
 
 class ScannerSerializer(serializers.ModelSerializer):
     bands = BandSerializer(many=True, read_only=True)
+    scanner_groups = serializers.PrimaryKeyRelatedField(many=True, read_only=True)
 
     class Meta:
         model = Scanner
         fields = [
             'id', 'name', 'scanner_type', 'location', 'description',
             'online', 'scanning', 'current_band', 'last_seen',
-            'bands', 'created_at', 'updated_at'
+            'bands', 'scanner_groups', 'created_at', 'updated_at'
         ]
-        read_only_fields = ['online', 'scanning', 'current_band', 'last_seen', 'bands', 'created_at', 'updated_at']
+        read_only_fields = ['online', 'scanning', 'current_band', 'last_seen', 'bands', 'scanner_groups', 'created_at', 'updated_at']
 
 
 class ScanSerializer(serializers.ModelSerializer):
@@ -37,6 +38,48 @@ class ScanSerializer(serializers.ModelSerializer):
             'id', 'scanner_id', 'scanner_name', 'band_name',
             'timestamp', 'hz_lo', 'hz_hi', 'step_hz', 'power', 'metadata', 'bin_count'
         ]
+
+
+class ScannerGroupSerializer(serializers.ModelSerializer):
+    scanner_count = serializers.SerializerMethodField()
+    scanners_online = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ScannerGroup
+        fields = [
+            'id', 'name', 'description', 'start_date', 'end_date',
+            'scanner_count', 'scanners_online', 'created_at', 'updated_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def get_scanner_count(self, obj):
+        return obj.scanners.count()
+
+    def get_scanners_online(self, obj):
+        return obj.scanners.filter(online=True).count()
+
+
+class ScannerGroupDetailSerializer(ScannerGroupSerializer):
+    scanners = ScannerSerializer(many=True, read_only=True)
+
+    class Meta(ScannerGroupSerializer.Meta):
+        fields = ScannerGroupSerializer.Meta.fields + ['scanners']
+
+
+class AccessSerializer(serializers.ModelSerializer):
+    username = serializers.CharField(source='user.username', read_only=True, default=None)
+    scanner_group_name = serializers.CharField(source='scanner_group.name', read_only=True, default=None)
+    scanner_name = serializers.CharField(source='scanner.name', read_only=True, default=None)
+
+    class Meta:
+        model = Access
+        fields = [
+            'id', 'user', 'token', 'scanner_group', 'scanner',
+            'permission', 'label', 'is_active', 'expires_at',
+            'username', 'scanner_group_name', 'scanner_name',
+            'created_at', 'updated_at', 'last_used_at', 'use_count'
+        ]
+        read_only_fields = ['id', 'token', 'created_at', 'updated_at', 'last_used_at', 'use_count']
 
 
 class DecimatedScanSerializer(serializers.ModelSerializer):

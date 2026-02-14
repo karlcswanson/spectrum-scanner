@@ -4,7 +4,7 @@ from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.contrib.auth.models import User
 from django.utils.html import format_html
-from .models import Scanner, Band, Scan, UserMQTTCredentials, ShareLink
+from .models import Scanner, Band, Scan, UserMQTTCredentials, ShareLink, ScannerGroup, Access
 
 
 class BandInline(admin.TabularInline):
@@ -21,12 +21,16 @@ class ScannerAdmin(admin.ModelAdmin):
     search_fields = ['id', 'name', 'location']
     readonly_fields = ['id', 'online', 'scanning', 'current_band', 'last_seen', 'created_at', 'updated_at', 'credentials_display']
     inlines = [BandInline]
+    filter_horizontal = ['scanner_groups']
     actions = ['regenerate_tokens']
     change_form_template = 'admin/core/scanner/change_form.html'
 
     fieldsets = (
         (None, {
             'fields': ('name', 'scanner_type', 'location', 'description')
+        }),
+        ('Groups', {
+            'fields': ('scanner_groups',),
         }),
         ('Authentication', {
             'fields': ('enabled', 'credentials_display'),
@@ -156,6 +160,109 @@ class ShareLinkAdmin(admin.ModelAdmin):
 
     def save_model(self, request, obj, form, change):
         if not change:  # New object
+            obj.created_by = request.user
+        super().save_model(request, obj, form, change)
+
+
+class ScannerGroupMembershipInline(admin.TabularInline):
+    """Inline for managing scanners in a group."""
+    model = Scanner.scanner_groups.through
+    extra = 1
+    verbose_name = 'Scanner'
+    verbose_name_plural = 'Scanners'
+    autocomplete_fields = ['scanner']
+
+
+@admin.register(ScannerGroup)
+class ScannerGroupAdmin(admin.ModelAdmin):
+    list_display = ['name', 'short_id', 'scanner_count', 'start_date', 'end_date', 'created_at']
+    search_fields = ['name', 'description']
+    readonly_fields = ['id', 'created_at', 'updated_at']
+    inlines = [ScannerGroupMembershipInline]
+
+    fieldsets = (
+        (None, {
+            'fields': ('name', 'description', 'start_date', 'end_date')
+        }),
+        ('Metadata', {
+            'fields': ('id', 'created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
+
+    def short_id(self, obj):
+        return str(obj.id)[:8]
+    short_id.short_description = 'ID'
+
+    def scanner_count(self, obj):
+        return obj.scanners.count()
+    scanner_count.short_description = 'Scanners'
+
+    def save_model(self, request, obj, form, change):
+        if not change:
+            obj.created_by = request.user
+        super().save_model(request, obj, form, change)
+
+
+@admin.register(Access)
+class AccessAdmin(admin.ModelAdmin):
+    list_display = ['label', 'who_display', 'scope_display', 'permission', 'is_active', 'use_count', 'created_at']
+    list_filter = ['permission', 'is_active']
+    search_fields = ['label', 'token']
+    readonly_fields = ['id', 'created_at', 'updated_at', 'last_used_at', 'use_count']
+    actions = ['revoke_access', 'activate_access']
+
+    fieldsets = (
+        (None, {
+            'fields': ('label', 'permission', 'is_active')
+        }),
+        ('Principal (set exactly one)', {
+            'fields': ('user', 'token'),
+        }),
+        ('Scope (set exactly one)', {
+            'fields': ('scanner_group', 'scanner'),
+        }),
+        ('Expiration', {
+            'fields': ('expires_at',),
+        }),
+        ('Usage Stats', {
+            'fields': ('use_count', 'last_used_at', 'created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+        ('Metadata', {
+            'fields': ('id',),
+            'classes': ('collapse',)
+        }),
+    )
+
+    def who_display(self, obj):
+        if obj.user:
+            return obj.user.username
+        if obj.token:
+            return f"token:{obj.token[:12]}..."
+        return "—"
+    who_display.short_description = 'Who'
+
+    def scope_display(self, obj):
+        if obj.scanner_group:
+            return f"Group: {obj.scanner_group.name}"
+        if obj.scanner:
+            return f"Scanner: {obj.scanner.name}"
+        return "—"
+    scope_display.short_description = 'Scope'
+
+    @admin.action(description='Revoke selected access grants')
+    def revoke_access(self, request, queryset):
+        count = queryset.update(is_active=False)
+        self.message_user(request, f"Revoked {count} access grant(s)")
+
+    @admin.action(description='Activate selected access grants')
+    def activate_access(self, request, queryset):
+        count = queryset.update(is_active=True)
+        self.message_user(request, f"Activated {count} access grant(s)")
+
+    def save_model(self, request, obj, form, change):
+        if not change:
             obj.created_by = request.user
         super().save_model(request, obj, form, change)
 

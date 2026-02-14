@@ -28,6 +28,13 @@ class Scanner(models.Model):
     location = models.CharField(max_length=200, blank=True)
     description = models.TextField(blank=True)
 
+    # Scanner groups (M2M - scanners can belong to multiple groups)
+    scanner_groups = models.ManyToManyField(
+        'ScannerGroup',
+        blank=True,
+        related_name='scanners'
+    )
+
     # Authentication
     auth_token = models.CharField(max_length=64, default=generate_auth_token)
     enabled = models.BooleanField(default=True, help_text="Disabled scanners cannot connect")
@@ -187,6 +194,134 @@ class ShareLink(models.Model):
 
     def record_use(self):
         """Record that this link was used."""
+        from django.utils import timezone
+        self.last_used_at = timezone.now()
+        self.use_count += 1
+        self.save(update_fields=['last_used_at', 'use_count'])
+
+
+class ScannerGroup(models.Model):
+    """A logical group of scanners (event, venue, tour, etc.)."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(max_length=200)
+    description = models.TextField(blank=True)
+    start_date = models.DateField(null=True, blank=True)
+    end_date = models.DateField(null=True, blank=True)
+
+    created_by = models.ForeignKey(
+        'auth.User',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='scanner_groups'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return self.name
+
+
+class Access(models.Model):
+    """Permission grant scoped to a scanner group or scanner, for a user or token."""
+
+    PERMISSION_CHOICES = [
+        ('r', 'Read'),
+        ('rw', 'Read/Write'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    # Who — exactly one of these is set
+    user = models.ForeignKey(
+        'auth.User',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='access_grants'
+    )
+    token = models.CharField(
+        max_length=64,
+        null=True,
+        blank=True,
+        unique=True,
+        default=None,
+    )
+
+    # What — exactly one of these is set
+    scanner_group = models.ForeignKey(
+        ScannerGroup,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='access_grants'
+    )
+    scanner = models.ForeignKey(
+        Scanner,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='access_grants'
+    )
+
+    permission = models.CharField(max_length=2, choices=PERMISSION_CHOICES, default='r')
+    label = models.CharField(max_length=100, blank=True, help_text="Descriptive label")
+    is_active = models.BooleanField(default=True)
+    expires_at = models.DateTimeField(null=True, blank=True)
+
+    # Tracking
+    created_by = models.ForeignKey(
+        'auth.User',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='access_grants_created'
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    last_used_at = models.DateTimeField(null=True, blank=True)
+    use_count = models.IntegerField(default=0)
+
+    class Meta:
+        ordering = ['-created_at']
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(user__isnull=False, token__isnull=True) |
+                    models.Q(user__isnull=True, token__isnull=False)
+                ),
+                name='access_exactly_one_principal',
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(scanner_group__isnull=False, scanner__isnull=True) |
+                    models.Q(scanner_group__isnull=True, scanner__isnull=False)
+                ),
+                name='access_exactly_one_scope',
+            ),
+        ]
+
+    def __str__(self):
+        who = self.user.username if self.user else f"token:{self.token[:12]}..."
+        what = self.scanner_group.name if self.scanner_group else str(self.scanner)
+        return f"{who} -> {what} ({self.get_permission_display()})"
+
+    def is_valid(self):
+        """Check if access grant is active and not expired."""
+        if not self.is_active:
+            return False
+        if self.expires_at:
+            from django.utils import timezone
+            if timezone.now() > self.expires_at:
+                return False
+        return True
+
+    def record_use(self):
+        """Record that this access was used."""
         from django.utils import timezone
         self.last_used_at = timezone.now()
         self.use_count += 1
