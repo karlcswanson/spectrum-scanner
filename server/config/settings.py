@@ -66,9 +66,11 @@ TEMPLATES = [
 WSGI_APPLICATION = 'config.wsgi.application'
 
 # Database
+_db_engine = os.getenv('DB_ENGINE', 'django.db.backends.sqlite3')
+
 DATABASES = {
     'default': {
-        'ENGINE': os.getenv('DB_ENGINE', 'django.db.backends.sqlite3'),
+        'ENGINE': _db_engine,
         'NAME': os.getenv('DB_NAME', BASE_DIR / 'db.sqlite3'),
         'USER': os.getenv('DB_USER', ''),
         'PASSWORD': os.getenv('DB_PASSWORD', ''),
@@ -76,6 +78,15 @@ DATABASES = {
         'PORT': os.getenv('DB_PORT', ''),
     }
 }
+
+if 'sqlite3' in _db_engine:
+    DATABASES['default']['OPTIONS'] = {
+        'timeout': 30,
+        'init_command': (
+            'PRAGMA journal_mode=WAL;'
+            'PRAGMA synchronous=NORMAL;'
+        ),
+    }
 
 # Password validation
 AUTH_PASSWORD_VALIDATORS = [

@@ -27,6 +27,10 @@ class Scanner(models.Model):
     scanner_type = models.CharField(max_length=20, choices=SCANNER_TYPES, default='pluto')
     location = models.CharField(max_length=200, blank=True)
     description = models.TextField(blank=True)
+    retention_policy = models.CharField(
+        max_length=200, blank=True, default='',
+        help_text='Graphite-style retention policy override (e.g. "1s:24h,1m:7d,5m:30d,1h:1y"). Empty = use global default.'
+    )
 
     # Scanner groups (M2M - scanners can belong to multiple groups)
     scanner_groups = models.ManyToManyField(
@@ -220,6 +224,8 @@ class ScannerGroup(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
+        verbose_name = 'Scanner Group'
+        verbose_name_plural = 'Scanner Groups'
         ordering = ['-created_at']
 
     def __str__(self):
@@ -326,3 +332,64 @@ class Access(models.Model):
         self.last_used_at = timezone.now()
         self.use_count += 1
         self.save(update_fields=['last_used_at', 'use_count'])
+
+
+class SiteSettings(models.Model):
+    """Global key-value settings store."""
+
+    name = models.CharField(max_length=100, unique=True)
+    value = models.JSONField()
+    description = models.CharField(max_length=200, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Site Setting'
+        verbose_name_plural = 'Site Settings'
+        ordering = ['name']
+
+    def __str__(self):
+        return self.name
+
+    @classmethod
+    def get(cls, name, default=None):
+        """Get a setting value by name."""
+        try:
+            return cls.objects.get(name=name).value
+        except cls.DoesNotExist:
+            return default
+
+
+class ScanSummary(models.Model):
+    """Pre-computed scan summary for a time bucket (TSDB-style rollup)."""
+
+    scanner = models.ForeignKey(Scanner, on_delete=models.CASCADE, related_name='scan_summaries')
+    band = models.ForeignKey('Band', on_delete=models.SET_NULL, null=True, blank=True)
+
+    bucket_start = models.DateTimeField(db_index=True)
+    bucket_seconds = models.IntegerField()
+
+    hz_lo = models.BigIntegerField()
+    hz_hi = models.BigIntegerField()
+    step_hz = models.FloatField()
+
+    peak_power = models.JSONField()
+    avg_power = models.JSONField()
+    scan_count = models.IntegerField()
+
+    class Meta:
+        verbose_name = 'Scan Summary'
+        verbose_name_plural = 'Scan Summaries'
+        ordering = ['-bucket_start']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['scanner', 'band', 'bucket_start', 'bucket_seconds'],
+                name='unique_scan_summary_bucket',
+            ),
+        ]
+        indexes = [
+            models.Index(fields=['scanner', 'bucket_start']),
+            models.Index(fields=['scanner', 'band', 'bucket_start']),
+        ]
+
+    def __str__(self):
+        return f"{self.scanner.name} {self.bucket_seconds}s @ {self.bucket_start}"

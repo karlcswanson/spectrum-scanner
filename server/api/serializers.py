@@ -1,7 +1,7 @@
 """API serializers for Spectrum Server."""
 
 from rest_framework import serializers
-from core.models import Scanner, Band, Scan, ScannerGroup, Access
+from core.models import Scanner, Band, Scan, ScanSummary, ScannerGroup, Access
 
 
 class BandSerializer(serializers.ModelSerializer):
@@ -60,6 +60,70 @@ class ScanSerializer(serializers.ModelSerializer):
             'id', 'scanner_id', 'scanner_name', 'band_name',
             'timestamp', 'hz_lo', 'hz_hi', 'step_hz', 'power', 'metadata', 'bin_count'
         ]
+
+
+class ScanSummaryAsScanSerializer(serializers.ModelSerializer):
+    """Serialize ScanSummary in the same shape as ScanSerializer.
+
+    The frontend doesn't need to know whether it's viewing raw scans
+    or rolled-up summaries — the data format is identical.
+    """
+
+    id = serializers.IntegerField(source='pk', read_only=True)
+    scanner_id = serializers.UUIDField(source='scanner.id', read_only=True)
+    scanner_name = serializers.CharField(source='scanner.name', read_only=True)
+    band_name = serializers.CharField(source='band.name', read_only=True, allow_null=True)
+    timestamp = serializers.DateTimeField(source='bucket_start', read_only=True)
+    power = serializers.JSONField(source='peak_power', read_only=True)
+    metadata = serializers.SerializerMethodField()
+    bin_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ScanSummary
+        fields = [
+            'id', 'scanner_id', 'scanner_name', 'band_name',
+            'timestamp', 'hz_lo', 'hz_hi', 'step_hz', 'power', 'metadata', 'bin_count'
+        ]
+
+    def get_metadata(self, obj):
+        return {'source': 'summary', 'scan_count': obj.scan_count, 'bucket_seconds': obj.bucket_seconds}
+
+    def get_bin_count(self, obj):
+        return len(obj.peak_power) if obj.peak_power else 0
+
+
+class DecimatedScanSummarySerializer(serializers.ModelSerializer):
+    """Decimated version of ScanSummary for scrubber preview."""
+
+    id = serializers.IntegerField(source='pk', read_only=True)
+    scanner_id = serializers.UUIDField(source='scanner.id', read_only=True)
+    band_name = serializers.CharField(source='band.name', read_only=True, allow_null=True)
+    timestamp = serializers.DateTimeField(source='bucket_start', read_only=True)
+    power = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ScanSummary
+        fields = [
+            'id', 'scanner_id', 'band_name',
+            'timestamp', 'hz_lo', 'hz_hi', 'step_hz', 'power'
+        ]
+
+    def get_power(self, obj):
+        if not obj.peak_power:
+            return []
+        target_points = 1920
+        original = obj.peak_power
+        if len(original) <= target_points:
+            return original
+        factor = len(original) / target_points
+        result = []
+        for i in range(target_points):
+            start = int(i * factor)
+            end = int((i + 1) * factor)
+            chunk = original[start:end]
+            if chunk:
+                result.append(max(chunk))
+        return result
 
 
 class ScannerGroupSerializer(serializers.ModelSerializer):

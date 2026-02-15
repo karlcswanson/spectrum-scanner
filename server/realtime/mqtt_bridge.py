@@ -12,10 +12,10 @@ Run as a Django management command:
 import json
 import logging
 import threading
-import time
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import paho.mqtt.client as mqtt
+from django.core.management import call_command
 from django.conf import settings
 from django.utils import timezone
 
@@ -28,10 +28,8 @@ class MQTTBridge:
     # Store scans every N seconds
     STORE_INTERVAL_SECONDS = 10
 
-    # Cleanup settings
-    CLEANUP_INTERVAL_SECONDS = 3600  # Run cleanup every hour
-    CLEANUP_RETENTION_HOURS = 6      # Delete scans older than 6 hours
-    CLEANUP_BATCH_SIZE = 1000        # Delete in batches to avoid locking
+    # Rollup interval
+    ROLLUP_INTERVAL_SECONDS = 300  # 5 minutes
 
     def __init__(self):
         self.client = mqtt.Client(
@@ -55,9 +53,8 @@ class MQTTBridge:
         # Key: (scanner_id, band_name), Value: last_store_time
         self.last_store_times = {}
 
-        # Cleanup thread
-        self._cleanup_thread = None
-        self._stop_cleanup = threading.Event()
+        # Rollup thread
+        self._rollup_stop = threading.Event()
 
     def connect(self):
         """Connect to MQTT broker."""
@@ -286,55 +283,22 @@ class MQTTBridge:
         except Exception as e:
             logger.error(f"Error updating scanner status: {e}")
 
-    def _cleanup_old_scans(self):
-        """Delete scans older than retention period."""
-        from core.models import Scan
-
-        cutoff = timezone.now() - timedelta(hours=self.CLEANUP_RETENTION_HOURS)
-
-        try:
-            total_deleted = 0
-            while True:
-                # Get batch of IDs to delete
-                ids_to_delete = list(
-                    Scan.objects.filter(timestamp__lt=cutoff)
-                    .values_list("id", flat=True)[:self.CLEANUP_BATCH_SIZE]
-                )
-
-                if not ids_to_delete:
-                    break
-
-                # Delete batch
-                deleted_count, _ = Scan.objects.filter(id__in=ids_to_delete).delete()
-                total_deleted += deleted_count
-
-                # Sleep between batches to reduce lock contention with SQLite
-                time.sleep(0.5)
-
-            if total_deleted > 0:
-                logger.info(f"Cleanup: deleted {total_deleted} scans older than {self.CLEANUP_RETENTION_HOURS} hours")
-
-        except Exception as e:
-            logger.error(f"Error during scan cleanup: {e}")
-
-    def _cleanup_loop(self):
-        """Background thread that runs cleanup periodically."""
-        logger.info(f"Cleanup thread started (every {self.CLEANUP_INTERVAL_SECONDS}s, retain {self.CLEANUP_RETENTION_HOURS}h)")
-
-        # Run cleanup immediately on start
-        self._cleanup_old_scans()
-
-        while not self._stop_cleanup.wait(self.CLEANUP_INTERVAL_SECONDS):
-            self._cleanup_old_scans()
-
-        logger.info("Cleanup thread stopped")
+    def _rollup_loop(self):
+        """Background thread that runs rollup periodically."""
+        logger.info(f"Rollup thread started (every {self.ROLLUP_INTERVAL_SECONDS}s)")
+        while not self._rollup_stop.wait(self.ROLLUP_INTERVAL_SECONDS):
+            try:
+                logger.info("Running scheduled rollup...")
+                call_command('rollup')
+                logger.info("Rollup completed")
+            except Exception as e:
+                logger.error(f"Rollup failed: {e}")
 
     def run(self):
         """Start the MQTT bridge (blocking)."""
-        # Start cleanup thread
-        self._stop_cleanup.clear()
-        self._cleanup_thread = threading.Thread(target=self._cleanup_loop, daemon=True)
-        self._cleanup_thread.start()
+        self._rollup_stop.clear()
+        rollup_thread = threading.Thread(target=self._rollup_loop, daemon=True)
+        rollup_thread.start()
 
         self.connect()
         logger.info("MQTT bridge running...")
@@ -342,9 +306,5 @@ class MQTTBridge:
 
     def stop(self):
         """Stop the MQTT bridge."""
-        # Stop cleanup thread
-        self._stop_cleanup.set()
-        if self._cleanup_thread:
-            self._cleanup_thread.join(timeout=5)
-
+        self._rollup_stop.set()
         self.client.disconnect()

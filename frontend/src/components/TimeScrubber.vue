@@ -111,6 +111,11 @@ const filteredTimeline = computed(() => {
   return props.timeline.filter(t => t.band__name === props.bandName)
 })
 
+// Count summary entries for display
+const summaryCount = computed(() => {
+  return filteredTimeline.value.filter(t => t.source === 'summary').length
+})
+
 // Time range - computed fresh in draw(), using selected range
 function getTimeRange() {
   if (isCustomRange.value && customRangeStart.value && customRangeEnd.value) {
@@ -283,6 +288,7 @@ function draw() {
     .attr('stroke', '#333')
 
   // Draw density bar to show data availability
+  // Green = raw scans, amber = rolled-up summaries
   if (props.showDensity) {
     const densityBar = chart.select('.density-bar')
     densityBar.selectAll('*').remove()
@@ -290,29 +296,51 @@ function draw() {
     // Create bins for density calculation
     const numBins = Math.min(plotWidth / 4, 100) // 4px per bin minimum
     const binWidth = plotWidth / numBins
-    const bins = new Array(numBins).fill(0)
+    const rawBins = new Array(numBins).fill(0)
+    const summaryBins = new Array(numBins).fill(0)
 
-    // Count scans in each bin
+    // Count scans in each bin, split by source
     filteredTimeline.value.forEach(t => {
       const date = getDate(t.timestamp)
       if (date >= timeRange.start && date <= timeRange.end) {
         const x = xScale(date)
         const binIdx = Math.min(Math.floor(x / binWidth), numBins - 1)
-        if (binIdx >= 0) bins[binIdx]++
+        if (binIdx >= 0) {
+          if (t.source === 'summary') {
+            summaryBins[binIdx]++
+          } else {
+            rawBins[binIdx]++
+          }
+        }
       }
     })
 
-    // Find max for normalization
-    const maxCount = Math.max(...bins, 1)
+    // Find max across both for normalization
+    const maxCount = Math.max(...rawBins, ...summaryBins, 1)
 
-    // Draw density rectangles
+    // Draw density rectangles - summaries first (behind), then raw (in front)
     const barHeight = 6
-    bins.forEach((count, idx) => {
+    const y = plotHeight - barHeight - 2
+
+    summaryBins.forEach((count, idx) => {
       if (count > 0) {
         const intensity = Math.min(count / maxCount, 1)
         densityBar.append('rect')
           .attr('x', idx * binWidth)
-          .attr('y', plotHeight - barHeight - 2)
+          .attr('y', y)
+          .attr('width', binWidth - 1)
+          .attr('height', barHeight)
+          .attr('fill', `rgba(245, 158, 11, ${0.3 + intensity * 0.7})`)
+          .attr('rx', 1)
+      }
+    })
+
+    rawBins.forEach((count, idx) => {
+      if (count > 0) {
+        const intensity = Math.min(count / maxCount, 1)
+        densityBar.append('rect')
+          .attr('x', idx * binWidth)
+          .attr('y', y)
           .attr('width', binWidth - 1)
           .attr('height', barHeight)
           .attr('fill', `rgba(34, 197, 94, ${0.3 + intensity * 0.7})`)
@@ -570,7 +598,11 @@ const selectedTimeDisplay = computed(() => {
             Custom
           </button>
         </div>
-        <span class="text-xs text-gray-600">{{ filteredTimeline.length }} scans</span>
+        <span class="text-xs text-gray-600">{{ filteredTimeline.length }} scans
+          <template v-if="summaryCount > 0">
+            (<span class="text-amber-500">{{ summaryCount }} avg</span>)
+          </template>
+        </span>
         <button
           @click="goLive"
           class="px-3 py-1 rounded text-xs font-semibold transition-colors"

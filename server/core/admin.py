@@ -4,7 +4,7 @@ from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.contrib.auth.models import User
 from django.utils.html import format_html
-from .models import Scanner, Band, Scan, UserMQTTCredentials, ShareLink, ScannerGroup, Access
+from .models import Scanner, Band, Scan, UserMQTTCredentials, ShareLink, ScannerGroup, Access, SiteSettings, ScanSummary
 
 
 class BandInline(admin.TabularInline):
@@ -35,6 +35,11 @@ class ScannerAdmin(admin.ModelAdmin):
         ('Authentication', {
             'fields': ('enabled', 'credentials_display'),
             'description': 'Copy these credentials to the scanner config.yaml'
+        }),
+        ('Data Retention', {
+            'fields': ('retention_policy',),
+            'classes': ('collapse',),
+            'description': 'Override the global retention policy for this scanner. Leave empty to use the global default.'
         }),
         ('Status (read-only)', {
             'fields': ('online', 'scanning', 'current_band', 'last_seen'),
@@ -265,6 +270,59 @@ class AccessAdmin(admin.ModelAdmin):
         if not change:
             obj.created_by = request.user
         super().save_model(request, obj, form, change)
+
+
+@admin.register(SiteSettings)
+class SiteSettingsAdmin(admin.ModelAdmin):
+    list_display = ['name', 'value', 'updated_at']
+    search_fields = ['name']
+    readonly_fields = ['updated_at']
+
+    fieldsets = (
+        (None, {
+            'fields': ('name', 'value', 'description', 'updated_at')
+        }),
+    )
+
+
+@admin.register(ScanSummary)
+class ScanSummaryAdmin(admin.ModelAdmin):
+    list_display = ['scanner', 'band', 'bucket_start', 'bucket_seconds_display', 'scan_count', 'hz_lo', 'hz_hi']
+    list_filter = ['scanner', 'band', 'bucket_seconds']
+    date_hierarchy = 'bucket_start'
+    readonly_fields = ['scanner', 'band', 'bucket_start', 'bucket_seconds', 'hz_lo', 'hz_hi', 'step_hz', 'peak_power', 'avg_power', 'scan_count']
+    change_list_template = 'admin/core/scansummary/change_list.html'
+
+    def bucket_seconds_display(self, obj):
+        if obj.bucket_seconds >= 3600:
+            return f"{obj.bucket_seconds // 3600}h"
+        return f"{obj.bucket_seconds // 60}m"
+    bucket_seconds_display.short_description = 'Resolution'
+
+    def has_add_permission(self, request):
+        return False
+
+    def get_urls(self):
+        from django.urls import path
+        urls = super().get_urls()
+        custom_urls = [
+            path('run-rollup/', self.admin_site.admin_view(self.run_rollup_view), name='core_scansummary_rollup'),
+        ]
+        return custom_urls + urls
+
+    def run_rollup_view(self, request):
+        from django.shortcuts import redirect
+        from django.contrib import messages
+        from django.core.management import call_command
+        from io import StringIO
+
+        out = StringIO()
+        try:
+            call_command('rollup', stdout=out)
+            messages.success(request, f'Rollup completed. {out.getvalue()}')
+        except Exception as e:
+            messages.error(request, f'Rollup failed: {e}')
+        return redirect('admin:core_scansummary_changelist')
 
 
 class UserMQTTCredentialsInline(admin.StackedInline):

@@ -12,10 +12,11 @@ from rest_framework.response import Response
 
 from django.contrib.auth import authenticate, login, logout
 
-from core.models import Scanner, Band, Scan, UserMQTTCredentials, ScannerGroup, Access
+from core.models import Scanner, Band, Scan, ScanSummary, UserMQTTCredentials, ScannerGroup, Access
 from .serializers import (
     ScannerSerializer, BandSerializer, ScanSerializer, ScanCreateSerializer,
-    DecimatedScanSerializer, ScannerGroupSerializer, ScannerGroupDetailSerializer,
+    DecimatedScanSerializer, ScanSummaryAsScanSerializer, DecimatedScanSummarySerializer,
+    ScannerGroupSerializer, ScannerGroupDetailSerializer,
     AccessSerializer
 )
 from .permissions import (
@@ -186,11 +187,31 @@ class ScannerViewSet(viewsets.ModelViewSet):
 
         scans = queryset[:limit]
 
-        if decimated:
-            # Return decimated scans for scrubber preview
-            return Response(DecimatedScanSerializer(scans, many=True).data)
+        if scans:
+            if decimated:
+                return Response(DecimatedScanSerializer(scans, many=True).data)
+            return Response(ScanSerializer(scans, many=True).data)
 
-        return Response(ScanSerializer(scans, many=True).data)
+        # Fall back to ScanSummary data (finest resolution available)
+        summary_qs = ScanSummary.objects.filter(
+            scanner=scanner,
+            bucket_start__gte=start_time,
+            bucket_start__lte=end_time,
+        ).order_by('bucket_seconds', 'bucket_start')
+
+        if band_name:
+            summary_qs = summary_qs.filter(band__name=band_name)
+
+        # Use finest resolution available
+        finest_resolution = summary_qs.values_list('bucket_seconds', flat=True).first()
+        if finest_resolution is not None:
+            summary_qs = summary_qs.filter(bucket_seconds=finest_resolution).order_by('bucket_start')
+
+        summaries = summary_qs[:limit]
+
+        if decimated:
+            return Response(DecimatedScanSummarySerializer(summaries, many=True).data)
+        return Response(ScanSummaryAsScanSerializer(summaries, many=True).data)
 
     @action(detail=True, methods=['get'])
     def timeline(self, request, pk=None):
@@ -240,9 +261,32 @@ class ScannerViewSet(viewsets.ModelViewSet):
         if band_name:
             queryset = queryset.filter(band__name=band_name)
 
-        # Return only timestamps and IDs for the timeline
-        scans = queryset.values('id', 'timestamp', 'band__name')
-        return Response(list(scans))
+        # Raw scan timestamps
+        scan_entries = [
+            {**s, 'source': 'raw'}
+            for s in queryset.values('id', 'timestamp', 'band__name')
+        ]
+
+        # Also include ScanSummary timestamps for rolled-up data
+        summary_qs = ScanSummary.objects.filter(
+            scanner=scanner,
+            bucket_start__gte=start_time,
+            bucket_start__lte=end_time,
+        ).order_by('bucket_start')
+
+        if band_name:
+            summary_qs = summary_qs.filter(band__name=band_name)
+
+        summary_entries = [
+            {'id': s['id'], 'timestamp': s['bucket_start'], 'band__name': s['band__name'], 'source': 'summary'}
+            for s in summary_qs.values('id', 'bucket_start', 'band__name')
+        ]
+
+        # Merge and sort by timestamp
+        all_entries = scan_entries + summary_entries
+        all_entries.sort(key=lambda x: x['timestamp'])
+
+        return Response(all_entries)
 
 
 class BandViewSet(viewsets.ModelViewSet):
@@ -359,6 +403,31 @@ class ScanViewSet(viewsets.ModelViewSet):
 
         if scan:
             return Response(ScanSerializer(scan).data)
+
+        # Fall back to ScanSummary (finest resolution available)
+        summary_qs = ScanSummary.objects.filter(scanner_id=scanner_id)
+        if band_name:
+            summary_qs = summary_qs.filter(band__name=band_name)
+
+        # Find finest resolution with data near target time
+        finest = summary_qs.order_by('bucket_seconds').values_list('bucket_seconds', flat=True).first()
+        if finest is not None:
+            summary_qs = summary_qs.filter(bucket_seconds=finest)
+
+        s_before = summary_qs.filter(bucket_start__lte=target_time).order_by('-bucket_start').first()
+        s_after = summary_qs.filter(bucket_start__gte=target_time).order_by('bucket_start').first()
+
+        if s_before and s_after:
+            if (target_time - s_before.bucket_start) <= (s_after.bucket_start - target_time):
+                summary = s_before
+            else:
+                summary = s_after
+        else:
+            summary = s_before or s_after
+
+        if summary:
+            return Response(ScanSummaryAsScanSerializer(summary).data)
+
         return Response({'detail': 'No scans found'}, status=status.HTTP_404_NOT_FOUND)
 
 
