@@ -7,7 +7,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.http import HttpResponse
 from rest_framework import viewsets, status
 from rest_framework.decorators import action, api_view, permission_classes
-from rest_framework.permissions import AllowAny, IsAuthenticated, BasePermission, SAFE_METHODS
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
 from django.contrib.auth import authenticate, login, logout
@@ -18,35 +18,35 @@ from .serializers import (
     DecimatedScanSerializer, ScannerGroupSerializer, ScannerGroupDetailSerializer,
     AccessSerializer
 )
+from .permissions import (
+    ReadOnlyIfShareSession, HasScannerAccess, HasScannerGroupAccess,
+    IsStaffOrReadOnly, get_accessible_scanner_ids, get_accessible_group_ids,
+)
 
 logger = logging.getLogger(__name__)
 
 
-class ReadOnlyIfShareSession(BasePermission):
-    """Allow read-only access for share link sessions, full access for others."""
-
-    def has_permission(self, request, view):
-        # Always allow safe methods (GET, HEAD, OPTIONS)
-        if request.method in SAFE_METHODS:
-            return True
-
-        # Block write operations for readonly sessions
-        if request.session.get('readonly'):
-            return False
-
-        # Allow write operations for normal authenticated users
-        return True
-
-
 class ScannerViewSet(viewsets.ModelViewSet):
-    """API endpoint for scanners."""
+    """API endpoint for scanners.
+
+    Permissions:
+    - List/retrieve: user sees only scanners they have Access grants for (staff sees all)
+    - Write actions (start/stop/push_bands/push_gain): requires rw Access grant
+    """
 
     queryset = Scanner.objects.all()
     serializer_class = ScannerSerializer
-    permission_classes = [IsAuthenticated, ReadOnlyIfShareSession]
+    permission_classes = [IsAuthenticated, ReadOnlyIfShareSession, HasScannerAccess]
 
     def get_queryset(self):
         queryset = super().get_queryset()
+        user = self.request.user
+
+        # Non-staff users only see scanners they have access to
+        if not user.is_staff:
+            accessible_ids = get_accessible_scanner_ids(user)
+            queryset = queryset.filter(id__in=accessible_ids)
+
         group_id = self.request.query_params.get('group')
         if group_id:
             queryset = queryset.filter(scanner_groups__id=group_id)
@@ -628,7 +628,18 @@ class ScannerGroupViewSet(viewsets.ModelViewSet):
 
     queryset = ScannerGroup.objects.all()
     serializer_class = ScannerGroupSerializer
-    permission_classes = [IsAuthenticated, ReadOnlyIfShareSession]
+    permission_classes = [IsAuthenticated, ReadOnlyIfShareSession, HasScannerGroupAccess]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        user = self.request.user
+
+        # Non-staff users only see groups they have access to
+        if not user.is_staff:
+            accessible_ids = get_accessible_group_ids(user)
+            queryset = queryset.filter(id__in=accessible_ids)
+
+        return queryset
 
     def get_serializer_class(self):
         if self.action == 'retrieve':
@@ -636,6 +647,9 @@ class ScannerGroupViewSet(viewsets.ModelViewSet):
         return ScannerGroupSerializer
 
     def perform_create(self, serializer):
+        if not self.request.user.is_staff:
+            from rest_framework.exceptions import PermissionDenied
+            raise PermissionDenied('Staff access required to create groups')
         serializer.save(created_by=self.request.user)
 
     @action(detail=True, methods=['post'])

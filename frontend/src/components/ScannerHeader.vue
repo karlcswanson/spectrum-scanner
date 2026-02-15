@@ -13,6 +13,13 @@ const props = defineProps({
 const store = useScannersStore()
 const auth = useAuthStore()
 
+// Can the current user control this scanner?
+const canWrite = computed(() => {
+  if (auth.isReadonly) return false
+  if (auth.isStaff) return true
+  return props.scanner?.user_permission === 'rw'
+})
+
 // Collapsible settings state
 const showSettings = ref(false)
 
@@ -98,7 +105,7 @@ watch(settings, (newSettings) => {
 
       <div class="flex items-center gap-3">
         <!-- Start/Stop button (hidden for readonly) -->
-        <template v-if="!auth.isReadonly">
+        <template v-if="canWrite">
           <button
             v-if="!scanner.scanning"
             @click="startScanning"
@@ -118,7 +125,7 @@ watch(settings, (newSettings) => {
 
         <!-- Settings toggle -->
         <button
-          v-if="!auth.isReadonly"
+          v-if="canWrite"
           @click="showSettings = !showSettings"
           class="p-2 rounded hover:bg-gray-700 transition-colors"
           :class="showSettings ? 'text-cyan-400' : 'text-gray-400'"
@@ -133,7 +140,7 @@ watch(settings, (newSettings) => {
     </div>
 
     <!-- Collapsible settings panel -->
-    <div v-if="showSettings && !auth.isReadonly" class="border-t border-gray-700 p-4 bg-gray-850">
+    <div v-if="showSettings && canWrite" class="border-t border-gray-700 p-4 bg-gray-850">
       <div class="grid md:grid-cols-2 gap-6">
         <!-- Bands section -->
         <div>

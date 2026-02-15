@@ -137,7 +137,7 @@ function scrollToScanner(scannerId) {
         @click="scrollToScanner(scanner.id)"
         class="px-2 py-1 text-sm rounded bg-green-600/20 text-green-400 hover:bg-green-600/30 hover:text-green-300 cursor-pointer"
       >
-        {{ scanner.name || scanner.id.slice(0, 8) }}
+        {{ scanner.name === scanner.id ? scanner.id.slice(0, 8) : (scanner.name || scanner.id.slice(0, 8)) }}
       </button>
     </div>
 

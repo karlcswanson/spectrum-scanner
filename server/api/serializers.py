@@ -16,15 +16,37 @@ class BandSerializer(serializers.ModelSerializer):
 class ScannerSerializer(serializers.ModelSerializer):
     bands = BandSerializer(many=True, read_only=True)
     scanner_groups = serializers.PrimaryKeyRelatedField(many=True, read_only=True)
+    user_permission = serializers.SerializerMethodField()
 
     class Meta:
         model = Scanner
         fields = [
             'id', 'name', 'scanner_type', 'location', 'description',
             'online', 'scanning', 'current_band', 'last_seen',
-            'bands', 'scanner_groups', 'created_at', 'updated_at'
+            'bands', 'scanner_groups', 'user_permission', 'created_at', 'updated_at'
         ]
         read_only_fields = ['online', 'scanning', 'current_band', 'last_seen', 'bands', 'scanner_groups', 'created_at', 'updated_at']
+
+    def get_user_permission(self, obj):
+        """Return the current user's permission level for this scanner."""
+        request = self.context.get('request')
+        if not request or not request.user.is_authenticated:
+            return None
+        if request.user.is_staff:
+            return 'rw'
+        from api.permissions import get_active_grants
+        grants = get_active_grants(request.user)
+        # Check direct scanner grants
+        scanner_grants = grants.filter(scanner=obj)
+        # Check group grants
+        group_ids = obj.scanner_groups.values_list('id', flat=True)
+        group_grants = grants.filter(scanner_group_id__in=group_ids)
+        all_grants = scanner_grants | group_grants
+        if all_grants.filter(permission='rw').exists():
+            return 'rw'
+        if all_grants.exists():
+            return 'r'
+        return None
 
 
 class ScanSerializer(serializers.ModelSerializer):

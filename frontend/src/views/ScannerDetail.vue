@@ -12,6 +12,13 @@ const auth = useAuthStore()
 
 const scannerId = computed(() => route.params.id)
 const scanner = computed(() => store.scanners[scannerId.value])
+
+// Can the current user control this scanner?
+const canWrite = computed(() => {
+  if (auth.isReadonly) return false
+  if (auth.isStaff) return true
+  return scanner.value?.user_permission === 'rw'
+})
 const scannerBandScans = computed(() => store.bandScans[scannerId.value] || {})
 
 // Get all bands from scanner config, sorted by frequency
@@ -109,7 +116,7 @@ onBeforeUnmount(() => {
           </div>
 
           <!-- Start/Stop Buttons (hidden for readonly users) -->
-          <div v-if="!auth.isReadonly" class="flex gap-2">
+          <div v-if="canWrite" class="flex gap-2">
             <button
               v-if="!scanner.scanning"
               @click="startScanning"
@@ -171,7 +178,7 @@ onBeforeUnmount(() => {
       </div>
 
       <!-- Band Selection (hidden for readonly users) -->
-      <div v-if="!auth.isReadonly && allBands.length > 0" class="bg-gray-800 rounded-lg p-6">
+      <div v-if="canWrite && allBands.length > 0" class="bg-gray-800 rounded-lg p-6">
         <h3 class="text-lg font-semibold text-cyan-400 mb-3">Bands</h3>
         <div class="flex flex-wrap gap-3">
           <label
@@ -195,7 +202,7 @@ onBeforeUnmount(() => {
       </div>
 
       <!-- Gain Settings (hidden for readonly users) -->
-      <div v-if="!auth.isReadonly" class="bg-gray-800 rounded-lg p-6">
+      <div v-if="canWrite" class="bg-gray-800 rounded-lg p-6">
         <h3 class="text-lg font-semibold text-cyan-400 mb-3">Gain Settings</h3>
         <div class="space-y-4">
           <div class="flex items-center gap-4">

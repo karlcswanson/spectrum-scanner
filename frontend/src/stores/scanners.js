@@ -105,14 +105,14 @@ export const useScannersStore = defineStore('scanners', () => {
       // Start the global tick timer
       startTick()
 
-      // Subscribe to all scanner topics (config, status, scan, timeline)
-      // Using wildcard to get all scanners
-      client.subscribe(`${TOPIC_PREFIX}/scanners/+/config`, { qos: 1 })
-      client.subscribe(`${TOPIC_PREFIX}/scanners/+/status`, { qos: 1 })
-      client.subscribe(`${TOPIC_PREFIX}/scanners/+/scan`, { qos: 0 })
-      client.subscribe(`${TOPIC_PREFIX}/scanners/+/timeline`, { qos: 0 })
+      // Re-subscribe to all currently known scanners (handles reconnects)
+      for (const scannerId of subscriptions.value) {
+        subscribeTopics(scannerId)
+      }
 
-      logger.debug('Subscribed to scanner topics')
+      if (subscriptions.value.size > 0) {
+        logger.debug(`MQTT re-subscribed to ${subscriptions.value.size} scanners`)
+      }
     })
 
     client.on('message', (topic, payload) => {
@@ -123,6 +123,9 @@ export const useScannersStore = defineStore('scanners', () => {
         if (parts.length >= 4 && parts[0] === TOPIC_PREFIX && parts[1] === 'scanners') {
           const scannerId = parts[2]
           const messageType = parts[3]
+
+          // Only process messages for scanners we're subscribed to
+          if (!subscriptions.value.has(scannerId)) return
 
           if (messageType === 'scan') {
             handleScan(scannerId, message)
@@ -162,6 +165,7 @@ export const useScannersStore = defineStore('scanners', () => {
     }
     stopTick()
     connected.value = false
+    subscriptions.value.clear()
   }
 
   // ============== Scanner Command Functions ==============
@@ -222,16 +226,36 @@ export const useScannersStore = defineStore('scanners', () => {
     return true
   }
 
-  // Subscribe/unsubscribe are now no-ops since we use wildcard subscription
-  // Keep the API for compatibility with existing components
+  // Subscribe to MQTT topics for a specific scanner
+  function subscribeTopics(scannerId) {
+    if (!client || !client.connected) return
+    client.subscribe(`${TOPIC_PREFIX}/scanners/${scannerId}/config`, { qos: 1 })
+    client.subscribe(`${TOPIC_PREFIX}/scanners/${scannerId}/status`, { qos: 1 })
+    client.subscribe(`${TOPIC_PREFIX}/scanners/${scannerId}/scan`, { qos: 0 })
+    client.subscribe(`${TOPIC_PREFIX}/scanners/${scannerId}/timeline`, { qos: 0 })
+  }
+
+  // Unsubscribe from MQTT topics for a specific scanner
+  function unsubscribeTopics(scannerId) {
+    if (!client || !client.connected) return
+    client.unsubscribe(`${TOPIC_PREFIX}/scanners/${scannerId}/config`)
+    client.unsubscribe(`${TOPIC_PREFIX}/scanners/${scannerId}/status`)
+    client.unsubscribe(`${TOPIC_PREFIX}/scanners/${scannerId}/scan`)
+    client.unsubscribe(`${TOPIC_PREFIX}/scanners/${scannerId}/timeline`)
+  }
+
   function subscribe(scannerId) {
     if (!scannerId) return
+    if (subscriptions.value.has(scannerId)) return
     subscriptions.value.add(scannerId)
+    subscribeTopics(scannerId)
   }
 
   function unsubscribe(scannerId) {
     if (!scannerId) return
+    if (!subscriptions.value.has(scannerId)) return
     subscriptions.value.delete(scannerId)
+    unsubscribeTopics(scannerId)
   }
 
   function handleScan(scannerId, data) {
@@ -637,6 +661,8 @@ export const useScannersStore = defineStore('scanners', () => {
           ...scanners.value[scanner.id],
           ...scanner,
         }
+        // Subscribe to MQTT topics for each accessible scanner
+        subscribe(scanner.id)
       })
     } catch (error) {
       logger.error('Failed to fetch scanners:', error)
