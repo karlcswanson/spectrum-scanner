@@ -1,9 +1,13 @@
 """Core models for Spectrum Server."""
 
+import logging
 import secrets
 import uuid
 
-from django.db import models
+from django.db import models, transaction
+from django.utils import timezone
+
+logger = logging.getLogger(__name__)
 
 
 def generate_auth_token():
@@ -62,6 +66,216 @@ class Scanner(models.Model):
         """Generate a new auth token for this scanner."""
         self.auth_token = generate_auth_token()
         self.save(update_fields=['auth_token'])
+
+    def rollup(self, dry_run=False, batch_size=500):
+        """Roll up scan data into time-bucketed summaries and purge expired data.
+
+        Returns (rolled_count, purged_count) tuple.
+        """
+        from core.retention import (
+            get_retention_tiers,
+            align_to_bucket,
+            elementwise_max,
+            elementwise_mean,
+            weighted_mean,
+        )
+
+        tiers = get_retention_tiers(self)
+        now = timezone.now()
+
+        total_rolled = 0
+        total_purged = 0
+
+        # Process tiers from coarsest to finest (skip the raw tier at index 0)
+        for i in range(len(tiers) - 1, 0, -1):
+            tier = tiers[i]
+            source_tier = tiers[i - 1]
+            bucket_seconds = tier.resolution_seconds
+            source_cutoff = now - source_tier.duration
+
+            if source_tier.resolution_seconds == 1:
+                rolled = self._rollup_scans(
+                    source_cutoff, bucket_seconds, dry_run,
+                    align_to_bucket, elementwise_max, elementwise_mean,
+                )
+                purged = self._purge_scans(source_cutoff, dry_run, batch_size)
+            else:
+                rolled = self._rollup_summaries(
+                    source_tier.resolution_seconds, source_cutoff,
+                    bucket_seconds, dry_run,
+                    align_to_bucket, elementwise_max, weighted_mean,
+                )
+                purged = self._purge_summaries(
+                    source_tier.resolution_seconds, source_cutoff,
+                    dry_run, batch_size,
+                )
+            total_rolled += rolled
+            total_purged += purged
+
+        # Purge the coarsest tier's data beyond its keep duration
+        coarsest = tiers[-1]
+        coarsest_cutoff = now - coarsest.duration
+        total_purged += self._purge_summaries(
+            coarsest.resolution_seconds, coarsest_cutoff, dry_run, batch_size,
+        )
+
+        return total_rolled, total_purged
+
+    def _rollup_scans(self, cutoff, bucket_seconds, dry_run,
+                      align_to_bucket, elementwise_max, elementwise_mean):
+        """Roll up raw Scan rows into ScanSummary buckets."""
+        scans = list(
+            Scan.objects.filter(scanner=self, timestamp__lt=cutoff)
+            .values_list('id', 'band_id', 'timestamp', 'hz_lo', 'hz_hi', 'step_hz', 'power')
+            .order_by('timestamp')
+        )
+
+        if not scans:
+            return 0
+
+        if dry_run:
+            return len(scans)
+
+        # Group by (band_id, bucket_start)
+        buckets = {}
+        for _id, band_id, ts, hz_lo, hz_hi, step_hz, power in scans:
+            bucket_start = align_to_bucket(ts, bucket_seconds)
+            key = (band_id, bucket_start)
+            if key not in buckets:
+                buckets[key] = {
+                    'hz_lo': hz_lo, 'hz_hi': hz_hi, 'step_hz': step_hz,
+                    'power_arrays': [], 'count': 0,
+                }
+            buckets[key]['power_arrays'].append(power)
+            buckets[key]['count'] += 1
+
+        rolled = 0
+        with transaction.atomic():
+            for (band_id, bucket_start), data in buckets.items():
+                power_arrays = [p for p in data['power_arrays'] if p]
+                if not power_arrays:
+                    continue
+
+                ScanSummary.objects.update_or_create(
+                    scanner=self,
+                    band_id=band_id,
+                    bucket_start=bucket_start,
+                    bucket_seconds=bucket_seconds,
+                    defaults={
+                        'hz_lo': data['hz_lo'],
+                        'hz_hi': data['hz_hi'],
+                        'step_hz': data['step_hz'],
+                        'peak_power': elementwise_max(power_arrays),
+                        'avg_power': elementwise_mean(power_arrays),
+                        'scan_count': data['count'],
+                    },
+                )
+                rolled += 1
+
+        return rolled
+
+    def _rollup_summaries(self, source_resolution, cutoff, bucket_seconds, dry_run,
+                          align_to_bucket, elementwise_max, weighted_mean):
+        """Roll up finer ScanSummary rows into coarser buckets."""
+        summaries = list(
+            ScanSummary.objects.filter(
+                scanner=self,
+                bucket_seconds=source_resolution,
+                bucket_start__lt=cutoff,
+            ).order_by('bucket_start')
+        )
+
+        if not summaries:
+            return 0
+
+        if dry_run:
+            return len(summaries)
+
+        # Group by (band_id, bucket_start)
+        buckets = {}
+        for s in summaries:
+            bucket_start = align_to_bucket(s.bucket_start, bucket_seconds)
+            key = (s.band_id, bucket_start)
+            if key not in buckets:
+                buckets[key] = []
+            buckets[key].append(s)
+
+        rolled = 0
+        with transaction.atomic():
+            for (band_id, bucket_start), items in buckets.items():
+                peak_arrays = [s.peak_power for s in items if s.peak_power]
+                if not peak_arrays:
+                    continue
+
+                peak = elementwise_max(peak_arrays)
+                avg, total_count = weighted_mean(items)
+
+                ref = items[0]
+                ScanSummary.objects.update_or_create(
+                    scanner=self,
+                    band_id=band_id,
+                    bucket_start=bucket_start,
+                    bucket_seconds=bucket_seconds,
+                    defaults={
+                        'hz_lo': ref.hz_lo,
+                        'hz_hi': ref.hz_hi,
+                        'step_hz': ref.step_hz,
+                        'peak_power': peak,
+                        'avg_power': avg,
+                        'scan_count': total_count,
+                    },
+                )
+                rolled += 1
+
+        return rolled
+
+    def _purge_scans(self, cutoff, dry_run, batch_size):
+        """Delete raw Scan rows older than cutoff."""
+        qs = Scan.objects.filter(scanner=self, timestamp__lt=cutoff)
+        count = qs.count()
+
+        if count == 0:
+            return 0
+
+        if dry_run:
+            return count
+
+        deleted_total = 0
+        while True:
+            batch_ids = list(qs.order_by('pk').values_list('pk', flat=True)[:batch_size])
+            if not batch_ids:
+                break
+            with transaction.atomic():
+                deleted, _ = Scan.objects.filter(pk__in=batch_ids).delete()
+            deleted_total += deleted
+
+        return deleted_total
+
+    def _purge_summaries(self, resolution, cutoff, dry_run, batch_size):
+        """Delete ScanSummary rows of a given resolution older than cutoff."""
+        qs = ScanSummary.objects.filter(
+            scanner=self,
+            bucket_seconds=resolution,
+            bucket_start__lt=cutoff,
+        )
+        count = qs.count()
+
+        if count == 0:
+            return 0
+
+        if dry_run:
+            return count
+
+        deleted_total = 0
+        while True:
+            batch_ids = list(qs.order_by('pk').values_list('pk', flat=True)[:batch_size])
+            if not batch_ids:
+                break
+            with transaction.atomic():
+                deleted, _ = ScanSummary.objects.filter(pk__in=batch_ids).delete()
+            deleted_total += deleted
+
+        return deleted_total
 
 
 class UserMQTTCredentials(models.Model):

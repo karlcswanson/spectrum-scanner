@@ -11,11 +11,9 @@ Run as a Django management command:
 
 import json
 import logging
-import threading
 from datetime import datetime
 
 import paho.mqtt.client as mqtt
-from django.core.management import call_command
 from django.conf import settings
 from django.utils import timezone
 
@@ -27,9 +25,6 @@ class MQTTBridge:
 
     # Store scans every N seconds
     STORE_INTERVAL_SECONDS = 10
-
-    # Rollup interval
-    ROLLUP_INTERVAL_SECONDS = 300  # 5 minutes
 
     def __init__(self):
         self.client = mqtt.Client(
@@ -52,9 +47,6 @@ class MQTTBridge:
         # Track last store time per scanner/band
         # Key: (scanner_id, band_name), Value: last_store_time
         self.last_store_times = {}
-
-        # Rollup thread
-        self._rollup_stop = threading.Event()
 
     def connect(self):
         """Connect to MQTT broker."""
@@ -283,28 +275,12 @@ class MQTTBridge:
         except Exception as e:
             logger.error(f"Error updating scanner status: {e}")
 
-    def _rollup_loop(self):
-        """Background thread that runs rollup periodically."""
-        logger.info(f"Rollup thread started (every {self.ROLLUP_INTERVAL_SECONDS}s)")
-        while not self._rollup_stop.wait(self.ROLLUP_INTERVAL_SECONDS):
-            try:
-                logger.info("Running scheduled rollup...")
-                call_command('rollup')
-                logger.info("Rollup completed")
-            except Exception as e:
-                logger.error(f"Rollup failed: {e}")
-
     def run(self):
         """Start the MQTT bridge (blocking)."""
-        self._rollup_stop.clear()
-        rollup_thread = threading.Thread(target=self._rollup_loop, daemon=True)
-        rollup_thread.start()
-
         self.connect()
         logger.info("MQTT bridge running...")
         self.client.loop_forever()
 
     def stop(self):
         """Stop the MQTT bridge."""
-        self._rollup_stop.set()
         self.client.disconnect()

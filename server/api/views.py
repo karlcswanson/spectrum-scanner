@@ -177,41 +177,55 @@ class ScannerViewSet(viewsets.ModelViewSet):
             end_time = timezone.now()
             start_time = end_time - timedelta(hours=hours)
 
-        queryset = scanner.scans.filter(
+        scan_qs = scanner.scans.filter(
             timestamp__gte=start_time,
             timestamp__lte=end_time
         ).order_by('timestamp')
 
         if band_name:
-            queryset = queryset.filter(band__name=band_name)
+            scan_qs = scan_qs.filter(band__name=band_name)
 
-        scans = queryset[:limit]
+        scans = list(scan_qs[:limit])
 
+        # Fill gaps with ScanSummary data (finest resolution available)
+        # Only fetch summaries for time ranges not covered by raw scans
         if scans:
-            if decimated:
-                return Response(DecimatedScanSerializer(scans, many=True).data)
-            return Response(ScanSerializer(scans, many=True).data)
+            raw_start = scans[0].timestamp
+        else:
+            raw_start = None
 
-        # Fall back to ScanSummary data (finest resolution available)
         summary_qs = ScanSummary.objects.filter(
             scanner=scanner,
             bucket_start__gte=start_time,
             bucket_start__lte=end_time,
-        ).order_by('bucket_seconds', 'bucket_start')
-
+        )
         if band_name:
             summary_qs = summary_qs.filter(band__name=band_name)
 
-        # Use finest resolution available
-        finest_resolution = summary_qs.values_list('bucket_seconds', flat=True).first()
-        if finest_resolution is not None:
-            summary_qs = summary_qs.filter(bucket_seconds=finest_resolution).order_by('bucket_start')
+        # Exclude time range covered by raw scans
+        if raw_start:
+            summary_qs = summary_qs.filter(bucket_start__lt=raw_start)
 
-        summaries = summary_qs[:limit]
+        finest = summary_qs.order_by('bucket_seconds').values_list('bucket_seconds', flat=True).first()
+        if finest is not None:
+            summary_qs = summary_qs.filter(bucket_seconds=finest).order_by('bucket_start')
 
+        remaining = max(0, limit - len(scans))
+        summaries = list(summary_qs[:remaining]) if remaining > 0 else []
+
+        # Merge: summaries (older) + raw scans (newer)
         if decimated:
-            return Response(DecimatedScanSummarySerializer(summaries, many=True).data)
-        return Response(ScanSummaryAsScanSerializer(summaries, many=True).data)
+            result = (
+                DecimatedScanSummarySerializer(summaries, many=True).data +
+                DecimatedScanSerializer(scans, many=True).data
+            )
+        else:
+            result = (
+                ScanSummaryAsScanSerializer(summaries, many=True).data +
+                ScanSerializer(scans, many=True).data
+            )
+
+        return Response(result)
 
     @action(detail=True, methods=['get'])
     def timeline(self, request, pk=None):
@@ -383,33 +397,26 @@ class ScanViewSet(viewsets.ModelViewSet):
         if target_time.tzinfo is None:
             target_time = target_time.replace(tzinfo=dt_timezone.utc)
 
-        # Find the closest scan to the target time
-        queryset = Scan.objects.filter(scanner_id=scanner_id)
+        # Find closest raw scan
+        scan_qs = Scan.objects.filter(scanner_id=scanner_id)
         if band_name:
-            queryset = queryset.filter(band__name=band_name)
+            scan_qs = scan_qs.filter(band__name=band_name)
 
-        # Get one scan before and one after target time
-        before = queryset.filter(timestamp__lte=target_time).order_by('-timestamp').first()
-        after = queryset.filter(timestamp__gte=target_time).order_by('timestamp').first()
+        before = scan_qs.filter(timestamp__lte=target_time).order_by('-timestamp').first()
+        after = scan_qs.filter(timestamp__gte=target_time).order_by('timestamp').first()
 
-        # Return the closest one
         if before and after:
-            if (target_time - before.timestamp) <= (after.timestamp - target_time):
-                scan = before
-            else:
-                scan = after
+            scan = before if (target_time - before.timestamp) <= (after.timestamp - target_time) else after
         else:
             scan = before or after
 
-        if scan:
-            return Response(ScanSerializer(scan).data)
+        scan_delta = abs(target_time - scan.timestamp) if scan else None
 
-        # Fall back to ScanSummary (finest resolution available)
+        # Find closest ScanSummary (finest resolution available)
         summary_qs = ScanSummary.objects.filter(scanner_id=scanner_id)
         if band_name:
             summary_qs = summary_qs.filter(band__name=band_name)
 
-        # Find finest resolution with data near target time
         finest = summary_qs.order_by('bucket_seconds').values_list('bucket_seconds', flat=True).first()
         if finest is not None:
             summary_qs = summary_qs.filter(bucket_seconds=finest)
@@ -418,14 +425,20 @@ class ScanViewSet(viewsets.ModelViewSet):
         s_after = summary_qs.filter(bucket_start__gte=target_time).order_by('bucket_start').first()
 
         if s_before and s_after:
-            if (target_time - s_before.bucket_start) <= (s_after.bucket_start - target_time):
-                summary = s_before
-            else:
-                summary = s_after
+            summary = s_before if (target_time - s_before.bucket_start) <= (s_after.bucket_start - target_time) else s_after
         else:
             summary = s_before or s_after
 
-        if summary:
+        summary_delta = abs(target_time - summary.bucket_start) if summary else None
+
+        # Return whichever is closer to target time
+        if scan and summary:
+            if scan_delta <= summary_delta:
+                return Response(ScanSerializer(scan).data)
+            return Response(ScanSummaryAsScanSerializer(summary).data)
+        elif scan:
+            return Response(ScanSerializer(scan).data)
+        elif summary:
             return Response(ScanSummaryAsScanSerializer(summary).data)
 
         return Response({'detail': 'No scans found'}, status=status.HTTP_404_NOT_FOUND)
