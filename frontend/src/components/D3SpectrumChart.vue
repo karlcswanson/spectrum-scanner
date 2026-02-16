@@ -192,11 +192,13 @@ let chartCache = {
   startHz: 0,
   stopHz: 0,
   xScale: null,
+  xScaleBase: null,
   yScale: null,
   margin: null,
   plotWidth: 0,
   plotHeight: 0,
   lineGenerator: null,
+  zoomBehavior: null,
 }
 
 // Build or rebuild the chart structure (axes, grid, etc.)
@@ -233,6 +235,19 @@ function buildChartStructure() {
 
   if (!needsRebuild) return true
 
+  // Save zoom transform before clearing SVG so we can restore after resize.
+  // Only restore if frequency range is unchanged (resize case) — if the band
+  // changed the old transform doesn't make sense on a new scale.
+  let savedTransform = null
+  const rangeUnchanged = chartCache.startHz === startHz && chartCache.stopHz === stopHz
+  if (rangeUnchanged) {
+    const existingOverlay = d3.select(svgRef.value).select('.mouse-overlay')
+    if (!existingOverlay.empty()) {
+      const t = d3.zoomTransform(existingOverlay.node())
+      if (t.k !== 1 || t.x !== 0) savedTransform = t
+    }
+  }
+
   const startMHz = startHz / 1e6
   const stopMHz = stopHz / 1e6
   const spanMHz = stopMHz - startMHz
@@ -250,6 +265,13 @@ function buildChartStructure() {
     .attr('height', height)
     .style('background', '#0a0a1a')
 
+  // Clip path so traces don't bleed outside plot area when zoomed
+  svg.append('defs').append('clipPath')
+    .attr('id', 'plot-clip')
+    .append('rect')
+    .attr('width', plotWidth)
+    .attr('height', plotHeight)
+
   const chart = svg
     .append('g')
     .attr('transform', `translate(${margin.left},${margin.top})`)
@@ -262,109 +284,34 @@ function buildChartStructure() {
     .domain([minDb, maxDb])
     .range([plotHeight, 0])
 
-  // Grid
+  // Grid (v-grid redrawn on zoom, h-grid stays fixed)
   const gridGroup = chart.append('g').attr('class', 'grid')
+  const vGridGroup = gridGroup.append('g').attr('class', 'v-grid')
+  const hGridGroup = gridGroup.append('g').attr('class', 'h-grid')
 
-  if (isUHF) {
-    atscChannels.forEach((ch, idx) => {
-      if (ch.start >= startMHz) {
-        gridGroup.append('line')
-          .attr('x1', xScale(ch.start * 1e6)).attr('y1', 0)
-          .attr('x2', xScale(ch.start * 1e6)).attr('y2', plotHeight)
-          .attr('stroke', '#1a1a3e').attr('stroke-width', 1)
-      }
-      if (idx === atscChannels.length - 1 && ch.end <= stopMHz) {
-        gridGroup.append('line')
-          .attr('x1', xScale(ch.end * 1e6)).attr('y1', 0)
-          .attr('x2', xScale(ch.end * 1e6)).attr('y2', plotHeight)
-          .attr('stroke', '#1a1a3e').attr('stroke-width', 1)
-      }
-    })
-  } else if (isWifi24) {
-    wifi24Channels.filter(ch => ch.primary).forEach(ch => {
-      gridGroup.append('rect')
-        .attr('x', xScale(ch.lo * 1e6)).attr('y', 0)
-        .attr('width', xScale(ch.hi * 1e6) - xScale(ch.lo * 1e6))
-        .attr('height', plotHeight)
-        .attr('fill', '#1a2a24').attr('opacity', 0.5)
-    })
-    wifi24Channels.forEach(ch => {
-      const lineColor = ch.primary ? '#2a5a4e' : '#1a1a3e'
-      gridGroup.append('line')
-        .attr('x1', xScale(ch.lo * 1e6)).attr('y1', 0)
-        .attr('x2', xScale(ch.lo * 1e6)).attr('y2', plotHeight)
-        .attr('stroke', lineColor).attr('stroke-width', ch.primary ? 1 : 0.5)
-      gridGroup.append('line')
-        .attr('x1', xScale(ch.hi * 1e6)).attr('y1', 0)
-        .attr('x2', xScale(ch.hi * 1e6)).attr('y2', plotHeight)
-        .attr('stroke', lineColor).attr('stroke-width', ch.primary ? 1 : 0.5)
-    })
-  } else {
-    const freqStep = spanMHz > 100 ? 20 : spanMHz > 50 ? 10 : spanMHz > 20 ? 5 : spanMHz > 10 ? 2 : 1
-    for (let f = Math.ceil(startMHz / freqStep) * freqStep; f <= stopMHz; f += freqStep) {
-      gridGroup.append('line')
-        .attr('x1', xScale(f * 1e6)).attr('y1', 0)
-        .attr('x2', xScale(f * 1e6)).attr('y2', plotHeight)
-        .attr('stroke', '#1a1a3e').attr('stroke-width', 1)
-    }
-  }
+  // Vertical grid lines (will be redrawn on zoom)
+  drawVerticalGrid(vGridGroup, xScale, plotHeight, startMHz, stopMHz, atscChannels, wifi24Channels, isUHF, isWifi24)
 
-  // Horizontal grid
+  // Horizontal grid (fixed, not affected by zoom)
   const dbStep = 20
   for (let db = minDb; db <= maxDb; db += dbStep) {
-    gridGroup.append('line')
+    hGridGroup.append('line')
       .attr('x1', 0).attr('y1', yScale(db))
       .attr('x2', plotWidth).attr('y2', yScale(db))
       .attr('stroke', '#1a1a3e').attr('stroke-width', 1)
   }
 
-  // X-axis
+  // X-axis (redrawn on zoom)
   const xAxisGroup = chart.append('g')
+    .attr('class', 'x-axis')
     .attr('transform', `translate(0,${plotHeight})`)
 
-  if (isUHF) {
-    const tickValues = []
-    atscChannels.forEach((ch, idx) => {
-      if (ch.start >= startMHz) tickValues.push(ch.start * 1e6)
-      if (idx === atscChannels.length - 1 && ch.end <= stopMHz) tickValues.push(ch.end * 1e6)
-    })
-    xAxisGroup.call(d3.axisBottom(xScale).tickValues(tickValues).tickFormat(d => (d / 1e6).toFixed(0)))
+  // Channel labels (redrawn on zoom)
+  const channelGroup = chart.append('g')
+    .attr('class', 'channel-labels')
+    .attr('transform', `translate(0,${plotHeight + 28})`)
 
-    const channelGroup = chart.append('g').attr('transform', `translate(0,${plotHeight + 28})`)
-    atscChannels.forEach(ch => {
-      const x = xScale(ch.center * 1e6)
-      if (x > 10 && x < plotWidth - 10) {
-        channelGroup.append('text')
-          .attr('x', x).attr('y', 0).attr('text-anchor', 'middle')
-          .attr('fill', '#00d4ff').style('font-size', '9px').text(ch.num)
-      }
-    })
-  } else if (isWifi24) {
-    const tickValues = []
-    wifi24Channels.filter(ch => ch.primary).forEach((ch, idx, arr) => {
-      if (ch.lo >= startMHz) tickValues.push(ch.lo * 1e6)
-      if (idx === arr.length - 1 && ch.hi <= stopMHz) tickValues.push(ch.hi * 1e6)
-    })
-    xAxisGroup.call(d3.axisBottom(xScale).tickValues(tickValues).tickFormat(d => (d / 1e6).toFixed(0)))
-
-    const channelGroup = chart.append('g').attr('transform', `translate(0,${plotHeight + 28})`)
-    wifi24Channels.forEach(ch => {
-      const x = xScale(ch.center * 1e6)
-      if (x > 10 && x < plotWidth - 10) {
-        channelGroup.append('text')
-          .attr('x', x).attr('y', 0).attr('text-anchor', 'middle')
-          .attr('fill', ch.primary ? '#22c55e' : '#666')
-          .attr('font-weight', ch.primary ? 'bold' : 'normal')
-          .style('font-size', '9px').text(ch.num)
-      }
-    })
-  } else {
-    xAxisGroup.call(d3.axisBottom(xScale).ticks(10).tickFormat(d => (d / 1e6).toFixed(1)))
-  }
-
-  xAxisGroup.selectAll('text').attr('fill', '#666').style('font-size', '10px')
-  xAxisGroup.selectAll('line').attr('stroke', '#666')
-  xAxisGroup.select('.domain').attr('stroke', '#666')
+  drawXAxis(xAxisGroup, channelGroup, xScale, plotWidth, startMHz, stopMHz, atscChannels, wifi24Channels, isUHF, isWifi24)
 
   // Y-axis
   const yAxisGroup = chart.append('g')
@@ -385,8 +332,9 @@ function buildChartStructure() {
     .attr('text-anchor', 'middle').attr('fill', '#666')
     .style('font-size', '10px').text('MHz')
 
-  // Traces group - will hold reusable path elements
+  // Traces group - clipped to plot area so zoomed traces don't bleed
   chart.append('g').attr('class', 'traces')
+    .attr('clip-path', 'url(#plot-clip)')
 
   // Legend group
   svg.append('g').attr('class', 'legend')
@@ -416,13 +364,162 @@ function buildChartStructure() {
     .y(d => d.y)
     .curve(d3.curveLinear)
 
+  // Store base scale (immutable copy for zoom rescaling)
+  const xScaleBase = xScale.copy()
+
+  // Zoom behavior — x-axis only
+  const zoomBehavior = d3.zoom()
+    .scaleExtent([1, 20])
+    .translateExtent([[0, 0], [plotWidth, plotHeight]])
+    .extent([[0, 0], [plotWidth, plotHeight]])
+    .filter((event) => {
+      // Allow wheel, touch, and mouse drag — block double-click (handled separately)
+      if (event.type === 'dblclick') return false
+      return true
+    })
+    .on('zoom', (event) => {
+      chartCache.xScale = event.transform.rescaleX(xScaleBase)
+      updateAxisAndGrid()
+      updateTraces()
+    })
+
+  svg.select('.mouse-overlay').call(zoomBehavior)
+
+  // Restore zoom transform from before rebuild (e.g. resize)
+  if (savedTransform) {
+    svg.select('.mouse-overlay').call(zoomBehavior.transform, savedTransform)
+  }
+
+  // Double-click to reset zoom
+  svg.select('.mouse-overlay').on('dblclick', () => {
+    svg.select('.mouse-overlay')
+      .transition().duration(300)
+      .call(zoomBehavior.transform, d3.zoomIdentity)
+  })
+
   // Update cache
-  chartCache = { width, height, startHz, stopHz, xScale, yScale, margin, plotWidth, plotHeight, lineGenerator }
+  chartCache = { width, height, startHz, stopHz, xScale, xScaleBase, yScale, margin, plotWidth, plotHeight, lineGenerator, zoomBehavior }
 
   // Setup mouse handlers
   setupMouseHandlers()
 
   return true
+}
+
+// Draw vertical grid lines for the given xScale
+function drawVerticalGrid(group, xScale, plotHeight, startMHz, stopMHz, atscChannels, wifi24Channels, isUHF, isWifi24) {
+  group.selectAll('*').remove()
+  const spanMHz = stopMHz - startMHz
+
+  if (isUHF) {
+    atscChannels.forEach((ch, idx) => {
+      if (ch.start >= startMHz) {
+        group.append('line')
+          .attr('x1', xScale(ch.start * 1e6)).attr('y1', 0)
+          .attr('x2', xScale(ch.start * 1e6)).attr('y2', plotHeight)
+          .attr('stroke', '#1a1a3e').attr('stroke-width', 1)
+      }
+      if (idx === atscChannels.length - 1 && ch.end <= stopMHz) {
+        group.append('line')
+          .attr('x1', xScale(ch.end * 1e6)).attr('y1', 0)
+          .attr('x2', xScale(ch.end * 1e6)).attr('y2', plotHeight)
+          .attr('stroke', '#1a1a3e').attr('stroke-width', 1)
+      }
+    })
+  } else if (isWifi24) {
+    wifi24Channels.filter(ch => ch.primary).forEach(ch => {
+      group.append('rect')
+        .attr('x', xScale(ch.lo * 1e6)).attr('y', 0)
+        .attr('width', xScale(ch.hi * 1e6) - xScale(ch.lo * 1e6))
+        .attr('height', plotHeight)
+        .attr('fill', '#1a2a24').attr('opacity', 0.5)
+    })
+    wifi24Channels.forEach(ch => {
+      const lineColor = ch.primary ? '#2a5a4e' : '#1a1a3e'
+      group.append('line')
+        .attr('x1', xScale(ch.lo * 1e6)).attr('y1', 0)
+        .attr('x2', xScale(ch.lo * 1e6)).attr('y2', plotHeight)
+        .attr('stroke', lineColor).attr('stroke-width', ch.primary ? 1 : 0.5)
+      group.append('line')
+        .attr('x1', xScale(ch.hi * 1e6)).attr('y1', 0)
+        .attr('x2', xScale(ch.hi * 1e6)).attr('y2', plotHeight)
+        .attr('stroke', lineColor).attr('stroke-width', ch.primary ? 1 : 0.5)
+    })
+  } else {
+    const freqStep = spanMHz > 100 ? 20 : spanMHz > 50 ? 10 : spanMHz > 20 ? 5 : spanMHz > 10 ? 2 : 1
+    for (let f = Math.ceil(startMHz / freqStep) * freqStep; f <= stopMHz; f += freqStep) {
+      group.append('line')
+        .attr('x1', xScale(f * 1e6)).attr('y1', 0)
+        .attr('x2', xScale(f * 1e6)).attr('y2', plotHeight)
+        .attr('stroke', '#1a1a3e').attr('stroke-width', 1)
+    }
+  }
+}
+
+// Draw x-axis ticks and channel labels for the given xScale
+function drawXAxis(xAxisGroup, channelGroup, xScale, plotWidth, startMHz, stopMHz, atscChannels, wifi24Channels, isUHF, isWifi24) {
+  xAxisGroup.selectAll('*').remove()
+  channelGroup.selectAll('*').remove()
+
+  if (isUHF) {
+    const tickValues = []
+    atscChannels.forEach((ch, idx) => {
+      if (ch.start >= startMHz) tickValues.push(ch.start * 1e6)
+      if (idx === atscChannels.length - 1 && ch.end <= stopMHz) tickValues.push(ch.end * 1e6)
+    })
+    xAxisGroup.call(d3.axisBottom(xScale).tickValues(tickValues).tickFormat(d => (d / 1e6).toFixed(0)))
+
+    atscChannels.forEach(ch => {
+      const x = xScale(ch.center * 1e6)
+      if (x > 10 && x < plotWidth - 10) {
+        channelGroup.append('text')
+          .attr('x', x).attr('y', 0).attr('text-anchor', 'middle')
+          .attr('fill', '#00d4ff').style('font-size', '9px').text(ch.num)
+      }
+    })
+  } else if (isWifi24) {
+    const tickValues = []
+    wifi24Channels.filter(ch => ch.primary).forEach((ch, idx, arr) => {
+      if (ch.lo >= startMHz) tickValues.push(ch.lo * 1e6)
+      if (idx === arr.length - 1 && ch.hi <= stopMHz) tickValues.push(ch.hi * 1e6)
+    })
+    xAxisGroup.call(d3.axisBottom(xScale).tickValues(tickValues).tickFormat(d => (d / 1e6).toFixed(0)))
+
+    wifi24Channels.forEach(ch => {
+      const x = xScale(ch.center * 1e6)
+      if (x > 10 && x < plotWidth - 10) {
+        channelGroup.append('text')
+          .attr('x', x).attr('y', 0).attr('text-anchor', 'middle')
+          .attr('fill', ch.primary ? '#22c55e' : '#666')
+          .attr('font-weight', ch.primary ? 'bold' : 'normal')
+          .style('font-size', '9px').text(ch.num)
+      }
+    })
+  } else {
+    xAxisGroup.call(d3.axisBottom(xScale).ticks(10).tickFormat(d => (d / 1e6).toFixed(1)))
+  }
+
+  xAxisGroup.selectAll('text').attr('fill', '#666').style('font-size', '10px')
+  xAxisGroup.selectAll('line').attr('stroke', '#666')
+  xAxisGroup.select('.domain').attr('stroke', '#666')
+}
+
+// Redraw axis, vertical grid, and channel labels from current zoomed xScale
+function updateAxisAndGrid() {
+  if (!svgRef.value || !chartCache.xScale) return
+
+  const svg = d3.select(svgRef.value)
+  const { xScale, plotWidth, plotHeight, startHz, stopHz } = chartCache
+  const startMHz = startHz / 1e6
+  const stopMHz = stopHz / 1e6
+
+  const atscChannels = getATSCChannels(startMHz, stopMHz)
+  const wifi24Channels = getWifi24Channels(startMHz, stopMHz)
+  const isUHF = atscChannels.length > 0
+  const isWifi24 = wifi24Channels.length >= 3
+
+  drawVerticalGrid(svg.select('.v-grid'), xScale, plotHeight, startMHz, stopMHz, atscChannels, wifi24Channels, isUHF, isWifi24)
+  drawXAxis(svg.select('.x-axis'), svg.select('.channel-labels'), xScale, plotWidth, startMHz, stopMHz, atscChannels, wifi24Channels, isUHF, isWifi24)
 }
 
 // Update just the trace paths (fast path)
@@ -437,14 +534,27 @@ function updateTraces() {
 
   const { xScale, yScale, lineGenerator, plotWidth } = chartCache
 
-  // Convert power to points
+  // Convert power to points, using visible range for smarter decimation
   function powerToPoints(power, hz_lo, hz_hi) {
     const points = []
     const len = power.length
-    // Data is pre-decimated, but still limit if very wide
-    const step = Math.max(1, Math.floor(len / plotWidth))
+    const hzPerSample = (hz_hi - hz_lo) / len
 
-    for (let i = 0; i < len; i += step) {
+    // Determine visible frequency range from current (possibly zoomed) xScale
+    const visibleLoHz = xScale.domain()[0]
+    const visibleHiHz = xScale.domain()[1]
+
+    // Clamp to data range
+    const loHz = Math.max(hz_lo, visibleLoHz)
+    const hiHz = Math.min(hz_hi, visibleHiHz)
+    const iStart = Math.max(0, Math.floor((loHz - hz_lo) / hzPerSample))
+    const iEnd = Math.min(len - 1, Math.ceil((hiHz - hz_lo) / hzPerSample))
+    const visibleSamples = iEnd - iStart + 1
+
+    // Decimate based on visible samples vs pixel width
+    const step = Math.max(1, Math.floor(visibleSamples / plotWidth))
+
+    for (let i = iStart; i <= iEnd; i += step) {
       const freq = hz_lo + (i / len) * (hz_hi - hz_lo)
       const db = Math.max(minDb, Math.min(maxDb, power[i]))
       points.push({ x: xScale(freq), y: yScale(db) })
@@ -637,9 +747,8 @@ watch(() => [props.showCurrent, props.showAverage, props.showPeak], () => {
 
 // Watch for prop changes (traces always trigger redraw for historical playback)
 watch(() => [props.scan, props.traces], () => {
-  // Force chart rebuild when traces change (may have different frequency range)
-  chartCache.startHz = 0
-  chartCache.stopHz = 0
+  // draw() will rebuild chart structure only if frequency range actually changed,
+  // otherwise just updateTraces() runs — preserving zoom state
   draw()
 }, { deep: true })
 
@@ -673,11 +782,20 @@ function resetPeak(traceId) {
   }
 }
 
+function resetZoom() {
+  if (!svgRef.value || !chartCache.zoomBehavior) return
+  const svg = d3.select(svgRef.value)
+  svg.select('.mouse-overlay')
+    .transition().duration(300)
+    .call(chartCache.zoomBehavior.transform, d3.zoomIdentity)
+}
+
 defineExpose({
   resetPeak,
   resetAllPeaks: () => {
     Object.keys(workerResults).forEach(id => resetPeak(id))
-  }
+  },
+  resetZoom,
 })
 </script>
 
