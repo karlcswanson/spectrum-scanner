@@ -117,11 +117,13 @@ function handleFreqPin({ freqHz, freqMHz }) {
   const tolerance = (props.band.stop_hz - props.band.start_hz) * 0.001
   const existingIdx = pinnedFreqs.value.findIndex(p => Math.abs(p.freqHz - freqHz) < tolerance)
   if (existingIdx >= 0) {
-    pinnedFreqs.value.splice(existingIdx, 1)
+    // Replace array ref so shallow watchers fire
+    pinnedFreqs.value = pinnedFreqs.value.filter((_, i) => i !== existingIdx)
     return
   }
   const color = pinColorPalette[pinnedFreqs.value.length % pinColorPalette.length]
-  pinnedFreqs.value.push({ freqHz, freqMHz, color })
+  // Replace array ref so shallow watchers fire
+  pinnedFreqs.value = [...pinnedFreqs.value, { freqHz, freqMHz, color }]
 
   // Auto-open waterfall if closed so the time-series has data
   if (!showSpectrogram.value) {
@@ -131,8 +133,8 @@ function handleFreqPin({ freqHz, freqMHz }) {
 }
 
 function handleRemoveFreq(pin) {
-  const idx = pinnedFreqs.value.indexOf(pin)
-  if (idx >= 0) pinnedFreqs.value.splice(idx, 1)
+  // Replace array ref so shallow watchers fire
+  pinnedFreqs.value = pinnedFreqs.value.filter(p => p !== pin)
 }
 
 // Spectrogram toggle + lazy-loaded data (not stored globally)
@@ -247,11 +249,15 @@ function formatStep(stepHz) {
 const scanInfo = computed(() => {
   const scan = activeScan.value
   if (!scan?.power) return '--'
-  const points = scan.power.length
+  const power = scan.power
+  const points = power.length
   const step = formatStep(scan.step)
-  const minP = Math.min(...scan.power).toFixed(1)
-  const maxP = Math.max(...scan.power).toFixed(1)
-  return `${points} pts | ${step} | ${minP} to ${maxP} dBm`
+  let minP = power[0], maxP = power[0]
+  for (let i = 1; i < points; i++) {
+    if (power[i] < minP) minP = power[i]
+    if (power[i] > maxP) maxP = power[i]
+  }
+  return `${points} pts | ${step} | ${minP.toFixed(1)} to ${maxP.toFixed(1)} dBm`
 })
 
 const freqRange = computed(() => {
@@ -578,6 +584,8 @@ watch(() => props.band.name, async () => {
       :pinned-freqs="pinnedFreqs"
       :scans="spectrogramData"
       :time-range="freqPlotTimeRange"
+      :live-scan="scan"
+      :is-live="isLive"
       class="mt-1"
       @remove-freq="handleRemoveFreq"
     />

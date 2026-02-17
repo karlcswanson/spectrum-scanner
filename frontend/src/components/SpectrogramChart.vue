@@ -63,8 +63,8 @@ const margin = { top: 2, right: 50, bottom: 2, left: 55 }
 // Scan buffer: index 0 = oldest (top), index N-1 = newest (bottom)
 const scanBuffer = ref([])
 
-// Viridis colormap - 256 RGBA entries in a Uint8Array
-const VIRIDIS = buildViridis()
+// Viridis colormap - 256 entries as both Uint8Array (for legend) and Uint32Array (for fast pixel writes)
+const { VIRIDIS_U8, VIRIDIS_U32 } = buildViridis()
 
 function buildViridis() {
   const colors = [
@@ -108,15 +108,20 @@ function buildViridis() {
     [248,61,158],[248,59,160],[248,58,162],[248,56,164],[248,55,166],[248,54,168],[248,52,170],[248,51,171],
     [248,49,173],[248,48,175],[249,46,177],[249,45,179],[249,43,181],[249,42,183],[249,40,185],[249,39,186],
   ]
+  // Uint8Array for legend rendering
   const lut = new Uint8Array(256 * 4)
+  // Uint32Array for fast single-write pixel fills (ABGR on little-endian)
+  const lut32 = new Uint32Array(256)
   for (let i = 0; i < 256; i++) {
     const c = colors[Math.min(i, colors.length - 1)]
     lut[i * 4] = c[0]
     lut[i * 4 + 1] = c[1]
     lut[i * 4 + 2] = c[2]
     lut[i * 4 + 3] = 255
+    // ABGR byte order for Uint32 on little-endian systems
+    lut32[i] = (255 << 24) | (c[2] << 16) | (c[1] << 8) | c[0]
   }
-  return lut
+  return { VIRIDIS_U8: lut, VIRIDIS_U32: lut32 }
 }
 
 function dbmToIndex(dbm) {
@@ -145,7 +150,7 @@ function getEffectiveRange() {
   return [startHz, stopHz]
 }
 
-// Full redraw of the waterfall from buffer
+// Full redraw of the waterfall from buffer (used for historical load, zoom, resize)
 function renderWaterfall() {
   if (!ctx || canvasWidth === 0 || canvasHeight === 0) return
 
@@ -160,10 +165,8 @@ function renderWaterfall() {
   const hzPerPixel = (renderStopHz - renderStartHz) / canvasWidth
 
   const imgData = ctx.createImageData(canvasWidth, canvasHeight)
-  const data = imgData.data
+  const pixels32 = new Uint32Array(imgData.data.buffer)
 
-  // Flow up: oldest at top (buf[0]), newest at bottom (buf[N-1])
-  // Time-accurate: each scan stretches to fill until the next scan's time
   const oldestTs = buf[0].timestamp
   const newestTs = buf[buf.length - 1].timestamp
   const timeSpan = newestTs - oldestTs || 1
@@ -172,12 +175,10 @@ function renderWaterfall() {
   for (let row = 0; row < canvasHeight; row++) {
     const rowTime = oldestTs + (row / (canvasHeight - 1 || 1)) * timeSpan
 
-    // Advance to the last scan at or before this time
     while (searchIdx < buf.length - 1 && buf[searchIdx + 1].timestamp <= rowTime) {
       searchIdx++
     }
 
-    // Don't stretch beyond 2 minutes — leave gap dark
     if (rowTime - buf[searchIdx].timestamp > 120000) continue
 
     const scan = buf[searchIdx]
@@ -186,7 +187,7 @@ function renderWaterfall() {
     const scanHzHi = scan.hz_hi
     const scanLen = power.length
     const scanHzPerSample = (scanHzHi - scanHzLo) / scanLen
-    const rowOffset = row * canvasWidth * 4
+    const rowOffset = row * canvasWidth
 
     for (let col = 0; col < canvasWidth; col++) {
       const freqHz = renderStartHz + col * hzPerPixel
@@ -197,19 +198,49 @@ function renderWaterfall() {
       } else {
         dbm = power[Math.round(sampleIdx)]
       }
-      const ci = dbmToIndex(dbm)
-      const px = rowOffset + col * 4
-      data[px] = VIRIDIS[ci * 4]
-      data[px + 1] = VIRIDIS[ci * 4 + 1]
-      data[px + 2] = VIRIDIS[ci * 4 + 2]
-      data[px + 3] = 255
+      pixels32[rowOffset + col] = VIRIDIS_U32[dbmToIndex(dbm)]
     }
   }
 
   ctx.putImageData(imgData, 0, 0)
+}
 
-  // Redraw SVG overlays (highlight row, pinned markers) on top
-  drawOverlays()
+// Fast path: shift canvas up by 1 row, paint only the newest scan at the bottom
+function renderLiveRow(scan) {
+  if (!ctx || canvasWidth === 0 || canvasHeight === 0) return
+  if (!scan?.power?.length) return
+
+  const [renderStartHz, renderStopHz] = getEffectiveRange()
+  if (renderStopHz <= renderStartHz) return
+  const hzPerPixel = (renderStopHz - renderStartHz) / canvasWidth
+
+  // Shift existing content up by 1 row
+  const existing = ctx.getImageData(0, 1, canvasWidth, canvasHeight - 1)
+  ctx.putImageData(existing, 0, 0)
+
+  // Paint the new row at the bottom
+  const rowData = ctx.createImageData(canvasWidth, 1)
+  const rowPixels32 = new Uint32Array(rowData.data.buffer)
+
+  const power = scan.power
+  const scanHzLo = scan.hz_lo
+  const scanHzHi = scan.hz_hi
+  const scanLen = power.length
+  const scanHzPerSample = (scanHzHi - scanHzLo) / scanLen
+
+  for (let col = 0; col < canvasWidth; col++) {
+    const freqHz = renderStartHz + col * hzPerPixel
+    const sampleIdx = (freqHz - scanHzLo) / scanHzPerSample
+    let dbm
+    if (sampleIdx < 0 || sampleIdx >= scanLen) {
+      dbm = minDb
+    } else {
+      dbm = power[Math.round(sampleIdx)]
+    }
+    rowPixels32[col] = VIRIDIS_U32[dbmToIndex(dbm)]
+  }
+
+  ctx.putImageData(rowData, 0, canvasHeight - 1)
 }
 
 // Render the color legend gradient
@@ -225,9 +256,9 @@ function renderLegend() {
     const ci = Math.round((1 - y / h) * 255)
     for (let x = 0; x < w; x++) {
       const px = (y * w + x) * 4
-      imgData.data[px] = VIRIDIS[ci * 4]
-      imgData.data[px + 1] = VIRIDIS[ci * 4 + 1]
-      imgData.data[px + 2] = VIRIDIS[ci * 4 + 2]
+      imgData.data[px] = VIRIDIS_U8[ci * 4]
+      imgData.data[px + 1] = VIRIDIS_U8[ci * 4 + 1]
+      imgData.data[px + 2] = VIRIDIS_U8[ci * 4 + 2]
       imgData.data[px + 3] = 255
     }
   }
@@ -443,7 +474,8 @@ function addLiveScan(scan) {
     scanBuffer.value.splice(0, scanBuffer.value.length - max)
   }
 
-  renderWaterfall()
+  // Fast path: only paint the 1 new row instead of full repaint
+  renderLiveRow(scan)
   updateTimeAxis()
 }
 
@@ -490,10 +522,10 @@ watch(() => props.scan, (newScan) => {
   }
 })
 
-// Watch historical scans — always reload (handles async cache arrival in live mode too)
+// Watch historical scans — the array ref is replaced wholesale on load, so shallow watch suffices
 watch(() => props.historicalScans, (scans) => {
   loadHistorical(scans)
-}, { deep: true })
+})
 
 // Watch mode switch — pre-fill from historical in both modes
 watch(() => props.isLive, () => {
@@ -507,6 +539,7 @@ watch(() => props.visibleRange, () => {
     .domain([renderStartHz, renderStopHz])
     .range([0, plotWidth])
   renderWaterfall()
+  drawOverlays()
 })
 
 // External cursor from another chart (e.g. line chart)
@@ -545,7 +578,7 @@ watch(() => props.highlightTime, () => {
 // Pinned frequency markers
 watch(() => props.pinnedFreqs, () => {
   drawOverlays()
-}, { deep: true })
+})
 
 // Draw highlight row and pinned frequency markers on the SVG overlay
 function drawOverlays() {

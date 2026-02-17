@@ -393,6 +393,7 @@ function buildChartStructure() {
       chartCache.xScale = event.transform.rescaleX(xScaleBase)
       updateAxisAndGrid()
       updateTraces()
+      drawPinnedMarkers()
       emit('zoom', chartCache.xScale.domain())
     })
 
@@ -651,14 +652,18 @@ function updateTraces() {
     }
   })
 
-  // Update legend
+  // Update legend only when trace set changes
   updateLegend(traces)
-
-  // Redraw pinned frequency markers on top
-  drawPinnedMarkers()
 }
 
+let lastLegendKey = ''
+
 function updateLegend(traces) {
+  // Build a key from trace IDs+names — skip rebuild if unchanged
+  const key = traces.map(t => `${t.id}:${t.name}:${t.color}`).join('|')
+  if (key === lastLegendKey) return
+  lastLegendKey = key
+
   const svg = d3.select(svgRef.value)
   const legendGroup = svg.select('.legend')
   legendGroup.selectAll('*').remove()
@@ -778,12 +783,13 @@ watch(() => [props.showCurrent, props.showAverage, props.showPeak], () => {
   updateTraces()
 })
 
-// Watch for prop changes (traces always trigger redraw for historical playback)
+// Watch for prop changes — traces array is replaced by reference in BandChart computed,
+// so shallow watch catches all meaningful changes without expensive deep comparison
 watch(() => [props.scan, props.traces], () => {
   // draw() will rebuild chart structure only if frequency range actually changed,
   // otherwise just updateTraces() runs — preserving zoom state
   draw()
-}, { deep: true })
+})
 
 // External cursor from another chart (e.g. spectrogram)
 watch(() => props.cursorFreq, (freqHz) => {
@@ -810,7 +816,7 @@ watch(() => props.cursorFreq, (freqHz) => {
 // Draw pinned frequency markers
 watch(() => props.pinnedFreqs, () => {
   drawPinnedMarkers()
-}, { deep: true })
+})
 
 function drawPinnedMarkers() {
   if (!svgRef.value || !chartCache.xScale) return
