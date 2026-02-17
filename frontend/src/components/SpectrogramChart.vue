@@ -146,19 +146,30 @@ function renderWaterfall() {
   const data = imgData.data
 
   // Flow up: oldest at top (buf[0]), newest at bottom (buf[N-1])
-  const bufLen = Math.min(buf.length, canvasHeight)
-  const bufStart = buf.length - bufLen
-  const canvasOffset = canvasHeight - bufLen // empty rows at top if buffer < canvas
+  // Time-accurate: each scan stretches to fill until the next scan's time
+  const oldestTs = buf[0].timestamp
+  const newestTs = buf[buf.length - 1].timestamp
+  const timeSpan = newestTs - oldestTs || 1
 
-  for (let i = 0; i < bufLen; i++) {
-    const scan = buf[bufStart + i]
+  let searchIdx = 0
+  for (let row = 0; row < canvasHeight; row++) {
+    const rowTime = oldestTs + (row / (canvasHeight - 1 || 1)) * timeSpan
+
+    // Advance to the last scan at or before this time
+    while (searchIdx < buf.length - 1 && buf[searchIdx + 1].timestamp <= rowTime) {
+      searchIdx++
+    }
+
+    // Don't stretch beyond 2 minutes — leave gap dark
+    if (rowTime - buf[searchIdx].timestamp > 120000) continue
+
+    const scan = buf[searchIdx]
     const power = scan.power
     const scanHzLo = scan.hz_lo
     const scanHzHi = scan.hz_hi
     const scanLen = power.length
     const scanHzPerSample = (scanHzHi - scanHzLo) / scanLen
-    const canvasRow = canvasOffset + i
-    const rowOffset = canvasRow * canvasWidth * 4
+    const rowOffset = row * canvasWidth * 4
 
     for (let col = 0; col < canvasWidth; col++) {
       const freqHz = renderStartHz + col * hzPerPixel
@@ -352,7 +363,7 @@ function addLiveScan(scan) {
   }
 
   scanBuffer.value.push(entry)
-  const max = canvasHeight || 160
+  const max = 2000 // ~30 min of live data at 1 scan/sec
   if (scanBuffer.value.length > max) {
     scanBuffer.value.splice(0, scanBuffer.value.length - max)
   }
@@ -376,18 +387,7 @@ function loadHistorical(scans) {
     return tsA - tsB
   })
 
-  // Decimate if more scans than pixel rows
-  const max = canvasHeight || 160
-  let picked = sorted
-  if (sorted.length > max) {
-    picked = []
-    const step = sorted.length / max
-    for (let i = 0; i < max; i++) {
-      picked.push(sorted[Math.floor(i * step)])
-    }
-  }
-
-  scanBuffer.value = picked.map(s => {
+  scanBuffer.value = sorted.map(s => {
     const scan = s.scan || s
     return {
       timestamp: s.timestamp || new Date(scan.timestamp).getTime(),

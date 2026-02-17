@@ -123,19 +123,13 @@ async function loadSpectrogramData() {
     const rangeOpts = currentTimeRange.value
     let fetchOpts
     if (rangeOpts.start && rangeOpts.end) {
-      const diffHours = (rangeOpts.end - rangeOpts.start) / 3600000
       fetchOpts = {
         start: rangeOpts.start,
         end: rangeOpts.end,
-        limit: diffHours > 168 ? 5000 : diffHours > 24 ? 2000 : 1000,
-        decimated: true,
       }
     } else {
-      const hours = rangeOpts.hours || props.timelineHours
       fetchOpts = {
-        hours,
-        limit: hours > 168 ? 5000 : hours > 24 ? 2000 : 1000,
-        decimated: true,
+        hours: rangeOpts.hours || props.timelineHours,
       }
     }
     const scans = await store.fetchHistory(props.scannerId, props.band.name, fetchOpts)
