@@ -4,6 +4,7 @@ import { useScannersStore } from '../stores/scanners'
 import D3SpectrumChart from './D3SpectrumChart.vue'
 import SpectrogramChart from './SpectrogramChart.vue'
 import TimeScrubber from './TimeScrubber.vue'
+import FrequencyTimePlot from './FrequencyTimePlot.vue'
 
 const props = defineProps({
   scannerId: {
@@ -74,10 +75,77 @@ const historicalScan = ref(null)
 // Zoom range from line chart (shared with spectrogram)
 const zoomRange = ref(null)
 
+// Shared cursor frequency between line chart and spectrogram
+const sharedCursorFreq = ref(null)
+let cursorSource = null // 'line' or 'spectrogram' — prevents feedback loops
+
+function handleLineCursorMove(freqHz) {
+  cursorSource = 'line'
+  sharedCursorFreq.value = freqHz
+}
+
+function handleSpectrogramCursorMove(freqHz) {
+  cursorSource = 'spectrogram'
+  sharedCursorFreq.value = freqHz
+}
+
+// Cursor freq to pass to each chart (null when that chart owns the cursor)
+const cursorFreqForLine = computed(() => cursorSource === 'spectrogram' ? sharedCursorFreq.value : null)
+const cursorFreqForSpectrogram = computed(() => cursorSource === 'line' ? sharedCursorFreq.value : null)
+
+// Click spectrogram row → show that scan in line chart
+function handleSpectrogramSelect({ timestamp, scan }) {
+  isLive.value = false
+  historicalScan.value = scan
+}
+
+// Highlight time for spectrogram (timestamp of currently displayed scan)
+const highlightTime = computed(() => {
+  if (isLive.value) return null
+  const scan = historicalScan.value
+  if (!scan?.timestamp) return null
+  // Ensure it's a numeric timestamp
+  return typeof scan.timestamp === 'number' ? scan.timestamp : new Date(scan.timestamp).getTime()
+})
+
+// Pinned frequencies for time-series
+const pinnedFreqs = ref([])
+const pinColorPalette = ['#ff8c00', '#ff00ff', '#00ff00', '#ff4444', '#00bfff', '#ffff00', '#ff69b4', '#7fff00']
+
+function handleFreqPin({ freqHz, freqMHz }) {
+  // Toggle: remove if already pinned (within 0.1% tolerance)
+  const tolerance = (props.band.stop_hz - props.band.start_hz) * 0.001
+  const existingIdx = pinnedFreqs.value.findIndex(p => Math.abs(p.freqHz - freqHz) < tolerance)
+  if (existingIdx >= 0) {
+    pinnedFreqs.value.splice(existingIdx, 1)
+    return
+  }
+  const color = pinColorPalette[pinnedFreqs.value.length % pinColorPalette.length]
+  pinnedFreqs.value.push({ freqHz, freqMHz, color })
+
+  // Auto-open waterfall if closed so the time-series has data
+  if (!showSpectrogram.value) {
+    showSpectrogram.value = true
+    // loadSpectrogramData() fires via the watch on showSpectrogram
+  }
+}
+
+function handleRemoveFreq(pin) {
+  const idx = pinnedFreqs.value.indexOf(pin)
+  if (idx >= 0) pinnedFreqs.value.splice(idx, 1)
+}
+
 // Spectrogram toggle + lazy-loaded data (not stored globally)
 const showSpectrogram = ref(false)
 const spectrogramData = ref([])
 const spectrogramLoading = ref(false)
+
+// Time range for the frequency time-series plot, derived from spectrogram data
+const freqPlotTimeRange = computed(() => {
+  const data = spectrogramData.value
+  if (data.length < 2) return null
+  return [data[0].timestamp, data[data.length - 1].timestamp]
+})
 
 // Get timeline from store (reactive - updates via MQTT)
 const timeline = computed(() => {
@@ -464,7 +532,11 @@ watch(() => props.band.name, async () => {
       :show-current="showCurrent"
       :show-average="showAverage"
       :show-peak="showPeak"
+      :cursor-freq="cursorFreqForLine"
+      :pinned-freqs="pinnedFreqs"
       @zoom="handleZoom"
+      @cursor-move="handleLineCursorMove"
+      @freq-pin="handleFreqPin"
     />
 
     <!-- Spectrogram toggle -->
@@ -491,7 +563,23 @@ watch(() => props.band.name, async () => {
       :historical-scans="spectrogramData"
       :is-live="isLive"
       :visible-range="zoomRange"
+      :cursor-freq="cursorFreqForSpectrogram"
+      :highlight-time="highlightTime"
+      :pinned-freqs="pinnedFreqs"
       class="mt-1"
+      @cursor-move="handleSpectrogramCursorMove"
+      @select="handleSpectrogramSelect"
+      @freq-pin="handleFreqPin"
+    />
+
+    <!-- Frequency time-series plot for pinned frequencies -->
+    <FrequencyTimePlot
+      v-if="pinnedFreqs.length > 0"
+      :pinned-freqs="pinnedFreqs"
+      :scans="spectrogramData"
+      :time-range="freqPlotTimeRange"
+      class="mt-1"
+      @remove-freq="handleRemoveFreq"
     />
 
     <!-- Time scrubber for historical playback -->

@@ -28,7 +28,24 @@ const props = defineProps({
     type: Array,
     default: null,
   },
+  // External cursor frequency (Hz) from another chart
+  cursorFreq: {
+    type: Number,
+    default: null,
+  },
+  // Timestamp of currently displayed scan (for highlight row)
+  highlightTime: {
+    type: Number,
+    default: null,
+  },
+  // Pinned frequencies for time-series: [{ freqHz, freqMHz, color }]
+  pinnedFreqs: {
+    type: Array,
+    default: () => [],
+  },
 })
+
+const emit = defineEmits(['cursor-move', 'select', 'freq-pin'])
 
 const container = ref(null)
 const canvasRef = ref(null)
@@ -190,6 +207,9 @@ function renderWaterfall() {
   }
 
   ctx.putImageData(imgData, 0, 0)
+
+  // Redraw SVG overlays (highlight row, pinned markers) on top
+  drawOverlays()
 }
 
 // Render the color legend gradient
@@ -270,6 +290,9 @@ function buildAxes() {
     .attr('stroke', '#666').attr('stroke-width', 1)
     .attr('stroke-dasharray', '4,4').attr('opacity', 0)
 
+  // Overlays group for highlight row and pinned markers (below mouse overlay)
+  chart.append('g').attr('class', 'chart-overlays')
+
   // Mouse overlay for cursor
   chart.append('rect').attr('class', 'mouse-overlay')
     .attr('width', plotWidth).attr('height', plotHeight)
@@ -327,6 +350,9 @@ function updateTimeAxis(yAxisGroup) {
   yAxisGroup.select('.domain').attr('stroke', '#666')
 }
 
+// Track the last frequency we emitted so we can avoid reacting to our own prop update
+let lastEmittedCursorFreq = null
+
 function setupMouseHandlers() {
   const svg = d3.select(svgRef.value)
   const mouseOverlay = svg.select('.mouse-overlay')
@@ -344,10 +370,59 @@ function setupMouseHandlers() {
         x: mx + margin.left,
         freqMHz: freqMHz.toFixed(3),
       }
+
+      // Emit cursor position for synced charts
+      lastEmittedCursorFreq = freqHz
+      emit('cursor-move', freqHz)
     })
     .on('mouseleave', () => {
       cursorLine.attr('opacity', 0)
       cursorInfo.value = null
+      lastEmittedCursorFreq = null
+      emit('cursor-move', null)
+    })
+    .on('click', (event) => {
+      if (event.metaKey || event.ctrlKey) {
+        // Ctrl+click: pin a frequency
+        if (!effectiveXScale) return
+        const [mx] = d3.pointer(event)
+        const freqHz = effectiveXScale.invert(mx)
+        const freqMHz = freqHz / 1e6
+        emit('freq-pin', { freqHz, freqMHz })
+        return
+      }
+
+      // Normal click: map click row to a scan in the buffer
+      const buf = scanBuffer.value
+      if (buf.length < 2) return
+
+      const [, my] = d3.pointer(event)
+      const oldestTs = buf[0].timestamp
+      const newestTs = buf[buf.length - 1].timestamp
+      const timeSpan = newestTs - oldestTs || 1
+      const clickTime = oldestTs + (my / (plotHeight - 1 || 1)) * timeSpan
+
+      // Find the closest scan to the click time
+      let closest = buf[0]
+      let closestDist = Math.abs(clickTime - closest.timestamp)
+      for (let i = 1; i < buf.length; i++) {
+        const dist = Math.abs(clickTime - buf[i].timestamp)
+        if (dist < closestDist) {
+          closest = buf[i]
+          closestDist = dist
+        }
+      }
+
+      emit('select', {
+        timestamp: closest.timestamp,
+        scan: {
+          hz_lo: closest.hz_lo,
+          hz_hi: closest.hz_hi,
+          step: closest.step || (closest.hz_hi - closest.hz_lo) / closest.power.length,
+          power: closest.power,
+          timestamp: closest.timestamp,
+        },
+      })
     })
 }
 
@@ -433,6 +508,91 @@ watch(() => props.visibleRange, () => {
     .range([0, plotWidth])
   renderWaterfall()
 })
+
+// External cursor from another chart (e.g. line chart)
+watch(() => props.cursorFreq, (freqHz) => {
+  if (!svgRef.value || !effectiveXScale) return
+  const svg = d3.select(svgRef.value)
+  const cursorLine = svg.select('.cursor-line')
+
+  // Ignore if this is our own emitted value bouncing back
+  if (freqHz !== null && freqHz === lastEmittedCursorFreq) return
+
+  if (freqHz === null) {
+    cursorLine.attr('opacity', 0)
+    cursorInfo.value = null
+    return
+  }
+
+  const mx = effectiveXScale(freqHz)
+  if (mx >= 0 && mx <= plotWidth) {
+    cursorLine.attr('x1', mx).attr('x2', mx).attr('opacity', 0.6)
+    cursorInfo.value = {
+      x: mx + margin.left,
+      freqMHz: (freqHz / 1e6).toFixed(3),
+    }
+  } else {
+    cursorLine.attr('opacity', 0)
+    cursorInfo.value = null
+  }
+})
+
+// Highlight row matching the currently displayed scan
+watch(() => props.highlightTime, () => {
+  drawOverlays()
+})
+
+// Pinned frequency markers
+watch(() => props.pinnedFreqs, () => {
+  drawOverlays()
+}, { deep: true })
+
+// Draw highlight row and pinned frequency markers on the SVG overlay
+function drawOverlays() {
+  if (!svgRef.value || !effectiveXScale) return
+  const svg = d3.select(svgRef.value)
+
+  // Ensure overlay group exists
+  let overlayGroup = svg.select('.chart-overlays')
+  if (overlayGroup.empty()) {
+    const chart = svg.select('g')
+    if (chart.empty()) return
+    overlayGroup = chart.append('g').attr('class', 'chart-overlays')
+  }
+  overlayGroup.selectAll('*').remove()
+
+  // Highlight row
+  if (props.highlightTime !== null) {
+    const buf = scanBuffer.value
+    if (buf.length >= 2) {
+      const oldestTs = buf[0].timestamp
+      const newestTs = buf[buf.length - 1].timestamp
+      const timeSpan = newestTs - oldestTs || 1
+      const rowY = ((props.highlightTime - oldestTs) / timeSpan) * (plotHeight - 1)
+      if (rowY >= 0 && rowY <= plotHeight) {
+        overlayGroup.append('line')
+          .attr('x1', 0).attr('y1', rowY)
+          .attr('x2', plotWidth).attr('y2', rowY)
+          .attr('stroke', 'rgba(0, 255, 255, 0.6)')
+          .attr('stroke-width', 2)
+      }
+    }
+  }
+
+  // Pinned frequency vertical markers
+  for (const pin of props.pinnedFreqs) {
+    const x = effectiveXScale(pin.freqHz)
+    if (x >= 0 && x <= plotWidth) {
+      overlayGroup.append('line')
+        .attr('x1', x).attr('y1', 0)
+        .attr('x2', x).attr('y2', plotHeight)
+        .attr('stroke', pin.color)
+        .attr('stroke-width', 1)
+        .attr('stroke-dasharray', '4,2')
+        .attr('opacity', 0.7)
+    }
+  }
+}
 
 // Resize handling
 let resizeObserver = null

@@ -51,9 +51,19 @@ const props = defineProps({
     type: Function,
     default: null,
   },
+  // External cursor frequency (Hz) from another chart
+  cursorFreq: {
+    type: Number,
+    default: null,
+  },
+  // Pinned frequencies for time-series: [{ freqHz, freqMHz, color }]
+  pinnedFreqs: {
+    type: Array,
+    default: () => [],
+  },
 })
 
-const emit = defineEmits(['zoom'])
+const emit = defineEmits(['zoom', 'cursor-move', 'freq-pin'])
 
 const container = ref(null)
 const svgRef = ref(null)
@@ -643,6 +653,9 @@ function updateTraces() {
 
   // Update legend
   updateLegend(traces)
+
+  // Redraw pinned frequency markers on top
+  drawPinnedMarkers()
 }
 
 function updateLegend(traces) {
@@ -663,6 +676,9 @@ function updateLegend(traces) {
     })
   }
 }
+
+// Track the last frequency we emitted so we can avoid reacting to our own prop update
+let lastEmittedCursorFreq = null
 
 function setupMouseHandlers() {
   const svg = d3.select(svgRef.value)
@@ -688,6 +704,10 @@ function setupMouseHandlers() {
       const freqMHz = freqHz / 1e6
       const powerDbm = getPowerAtFreq(freqHz)
 
+      // Emit cursor position for synced charts
+      lastEmittedCursorFreq = freqHz
+      emit('cursor-move', freqHz)
+
       if (powerDbm !== null) {
         const powerY = chartCache.yScale(powerDbm)
         cursorLineV.attr('x1', mx).attr('x2', mx).attr('opacity', 0.6)
@@ -706,6 +726,16 @@ function setupMouseHandlers() {
       cursorLineH.attr('opacity', 0)
       cursorDot.attr('opacity', 0)
       cursorInfo.value = null
+      lastEmittedCursorFreq = null
+      emit('cursor-move', null)
+    })
+    .on('click', (event) => {
+      if (event.metaKey || event.ctrlKey) {
+        const [mx] = d3.pointer(event)
+        const freqHz = chartCache.xScale.invert(mx)
+        const freqMHz = freqHz / 1e6
+        emit('freq-pin', { freqHz, freqMHz })
+      }
     })
 }
 
@@ -754,6 +784,57 @@ watch(() => [props.scan, props.traces], () => {
   // otherwise just updateTraces() runs — preserving zoom state
   draw()
 }, { deep: true })
+
+// External cursor from another chart (e.g. spectrogram)
+watch(() => props.cursorFreq, (freqHz) => {
+  if (!svgRef.value || !chartCache.xScale) return
+  const svg = d3.select(svgRef.value)
+  const cursorLineV = svg.select('.cursor-line-v')
+
+  // Ignore if this is our own emitted value bouncing back
+  if (freqHz !== null && freqHz === lastEmittedCursorFreq) return
+
+  if (freqHz === null) {
+    cursorLineV.attr('opacity', 0)
+    return
+  }
+
+  const mx = chartCache.xScale(freqHz)
+  if (mx >= 0 && mx <= chartCache.plotWidth) {
+    cursorLineV.attr('x1', mx).attr('x2', mx).attr('opacity', 0.6)
+  } else {
+    cursorLineV.attr('opacity', 0)
+  }
+})
+
+// Draw pinned frequency markers
+watch(() => props.pinnedFreqs, () => {
+  drawPinnedMarkers()
+}, { deep: true })
+
+function drawPinnedMarkers() {
+  if (!svgRef.value || !chartCache.xScale) return
+  const svg = d3.select(svgRef.value)
+  let group = svg.select('.pinned-markers')
+  if (group.empty()) {
+    group = svg.select('.traces').append('g').attr('class', 'pinned-markers')
+  }
+  group.selectAll('*').remove()
+
+  const { xScale, plotHeight } = chartCache
+  for (const pin of props.pinnedFreqs) {
+    const x = xScale(pin.freqHz)
+    if (x >= 0 && x <= chartCache.plotWidth) {
+      group.append('line')
+        .attr('x1', x).attr('y1', 0)
+        .attr('x2', x).attr('y2', plotHeight)
+        .attr('stroke', pin.color)
+        .attr('stroke-width', 1)
+        .attr('stroke-dasharray', '4,2')
+        .attr('opacity', 0.7)
+    }
+  }
+}
 
 onMounted(() => {
   initWorker()
