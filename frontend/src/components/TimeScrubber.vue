@@ -66,6 +66,8 @@ const timeRangeOptions = [
   { label: '1 hour', hours: 1 },
   { label: '6 hours', hours: 6 },
   { label: '24 hours', hours: 24 },
+  { label: '7 days', hours: 168 },
+  { label: '30 days', hours: 720 },
 ]
 
 // Selected time range

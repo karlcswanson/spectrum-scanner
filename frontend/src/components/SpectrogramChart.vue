@@ -1,0 +1,544 @@
+<script setup>
+import { ref, watch, onMounted, onUnmounted, computed, nextTick } from 'vue'
+import * as d3 from 'd3'
+
+const props = defineProps({
+  band: {
+    type: Object,
+    default: null,
+  },
+  height: {
+    type: Number,
+    default: 200,
+  },
+  scan: {
+    type: Object,
+    default: null,
+  },
+  historicalScans: {
+    type: Array,
+    default: () => [],
+  },
+  isLive: {
+    type: Boolean,
+    default: true,
+  },
+  // Visible frequency range from line chart zoom [loHz, hiHz]
+  visibleRange: {
+    type: Array,
+    default: null,
+  },
+})
+
+const container = ref(null)
+const canvasRef = ref(null)
+const svgRef = ref(null)
+const legendCanvas = ref(null)
+
+// dBm range for color mapping
+const minDb = -110
+const maxDb = -20
+const dbRange = maxDb - minDb
+
+// Match D3SpectrumChart left/right margins for x-axis alignment. No own x-axis.
+const margin = { top: 2, right: 50, bottom: 2, left: 55 }
+
+// Scan buffer: index 0 = oldest (top), index N-1 = newest (bottom)
+const scanBuffer = ref([])
+
+// Viridis colormap - 256 RGBA entries in a Uint8Array
+const VIRIDIS = buildViridis()
+
+function buildViridis() {
+  const colors = [
+    [68,1,84],[68,2,86],[69,4,87],[69,5,89],[70,7,90],[70,8,92],[70,10,93],[70,11,94],
+    [71,13,96],[71,14,97],[71,16,99],[71,17,100],[71,19,101],[72,20,103],[72,22,104],[72,23,105],
+    [72,24,106],[72,26,108],[72,27,109],[72,28,110],[72,29,111],[72,31,112],[72,32,113],[72,33,115],
+    [72,35,116],[72,36,117],[72,37,118],[72,38,119],[72,40,120],[72,41,121],[71,42,122],[71,44,122],
+    [71,45,123],[71,46,124],[71,47,125],[70,48,126],[70,50,126],[70,51,127],[69,52,128],[69,53,129],
+    [69,55,129],[68,56,130],[68,57,131],[67,58,131],[67,60,132],[66,61,132],[66,62,133],[65,63,133],
+    [65,64,134],[64,66,134],[63,67,134],[63,68,135],[62,69,135],[61,71,135],[61,72,136],[60,73,136],
+    [59,74,136],[58,75,136],[58,76,137],[57,77,137],[56,78,137],[56,79,137],[55,80,137],[54,81,137],
+    [53,82,138],[53,83,138],[52,84,138],[51,85,138],[50,86,138],[50,87,138],[49,88,138],[48,89,138],
+    [47,90,138],[46,91,138],[46,92,138],[45,93,138],[44,94,138],[43,95,138],[42,96,138],[42,97,137],
+    [41,98,137],[40,99,137],[39,100,137],[39,101,137],[38,102,137],[37,103,136],[36,104,136],[35,105,136],
+    [35,106,136],[34,107,135],[33,108,135],[32,109,135],[32,110,134],[31,111,134],[30,112,134],[30,113,133],
+    [29,114,133],[28,115,132],[28,116,132],[27,117,131],[27,118,131],[26,119,130],[26,120,130],[25,121,129],
+    [25,122,129],[24,123,128],[24,124,127],[24,125,127],[23,126,126],[23,127,125],[23,128,125],[23,129,124],
+    [23,130,123],[23,131,122],[23,132,122],[23,133,121],[23,134,120],[23,134,119],[24,135,118],[24,136,118],
+    [24,137,117],[25,138,116],[25,139,115],[26,140,114],[26,141,113],[27,141,112],[28,142,111],[29,143,110],
+    [29,144,109],[30,144,108],[31,145,107],[32,146,106],[33,146,105],[34,147,104],[36,148,103],[37,148,102],
+    [38,149,101],[40,150,100],[41,150,99],[42,151,97],[44,151,96],[45,152,95],[47,152,94],[49,153,93],
+    [50,153,92],[52,154,90],[53,154,89],[55,155,88],[57,155,87],[59,156,85],[61,156,84],[62,157,83],
+    [64,157,82],[66,157,80],[68,158,79],[70,158,78],[72,159,76],[74,159,75],[76,159,74],[78,160,73],
+    [80,160,71],[82,161,70],[84,161,69],[86,161,67],[88,161,66],[90,162,65],[92,162,63],[94,162,62],
+    [96,162,61],[98,163,59],[100,163,58],[102,163,57],[104,163,55],[106,163,54],[108,164,53],[110,164,51],
+    [112,164,50],[114,164,49],[116,164,47],[118,164,46],[120,164,45],[122,164,43],[124,165,42],[126,165,41],
+    [128,165,39],[130,165,38],[132,165,37],[134,165,36],[136,165,34],[138,165,33],[140,165,32],[142,165,31],
+    [144,165,30],[146,165,29],[148,165,28],[150,165,27],[152,165,26],[154,164,26],[155,164,25],[157,164,24],
+    [159,164,24],[161,163,24],[163,163,23],[165,163,23],[167,162,23],[168,162,23],[170,161,23],[172,161,24],
+    [174,160,24],[176,160,24],[177,159,25],[179,158,25],[181,158,26],[183,157,27],[184,156,27],[186,156,28],
+    [188,155,29],[189,154,30],[191,153,31],[193,153,32],[194,152,33],[196,151,34],[197,150,35],[199,149,36],
+    [200,149,37],[202,148,38],[203,147,39],[205,146,41],[206,145,42],[207,144,43],[209,143,44],[210,142,46],
+    [211,141,47],[213,140,48],[214,139,50],[215,138,51],[217,137,53],[218,136,54],[219,135,55],[220,134,57],
+    [221,133,58],[222,132,60],[223,130,62],[224,129,63],[225,128,65],[226,127,66],[227,126,68],[228,125,69],
+    [229,124,71],[230,122,73],[230,121,74],[231,120,76],[232,119,78],[233,118,79],[234,116,81],[235,115,83],
+    [235,114,84],[236,113,86],[237,112,88],[237,110,90],[238,109,91],[238,108,93],[239,107,95],[239,105,97],
+    [240,104,99],[240,103,100],[241,102,102],[241,100,104],[242,99,106],[242,98,108],[242,96,110],[243,95,111],
+    [243,94,113],[243,92,115],[244,91,117],[244,90,119],[244,88,121],[244,87,123],[245,86,125],[245,84,126],
+    [245,83,128],[245,82,130],[246,80,132],[246,79,134],[246,78,136],[246,76,138],[246,75,140],[247,73,141],
+    [247,72,143],[247,71,145],[247,69,147],[247,68,149],[247,66,151],[247,65,153],[247,64,155],[248,62,156],
+    [248,61,158],[248,59,160],[248,58,162],[248,56,164],[248,55,166],[248,54,168],[248,52,170],[248,51,171],
+    [248,49,173],[248,48,175],[249,46,177],[249,45,179],[249,43,181],[249,42,183],[249,40,185],[249,39,186],
+  ]
+  const lut = new Uint8Array(256 * 4)
+  for (let i = 0; i < 256; i++) {
+    const c = colors[Math.min(i, colors.length - 1)]
+    lut[i * 4] = c[0]
+    lut[i * 4 + 1] = c[1]
+    lut[i * 4 + 2] = c[2]
+    lut[i * 4 + 3] = 255
+  }
+  return lut
+}
+
+function dbmToIndex(dbm) {
+  const clamped = Math.max(minDb, Math.min(maxDb, dbm))
+  return Math.round(((clamped - minDb) / dbRange) * 255)
+}
+
+// Chart dimensions
+let plotWidth = 0
+let plotHeight = 0
+let canvasWidth = 0
+let canvasHeight = 0
+
+// Full band frequency range (from band prop)
+let startHz = 0
+let stopHz = 0
+
+let ctx = null
+let effectiveXScale = null
+
+const cursorInfo = ref(null)
+
+// Effective frequency range (zoomed or full band)
+function getEffectiveRange() {
+  if (props.visibleRange) return props.visibleRange
+  return [startHz, stopHz]
+}
+
+// Full redraw of the waterfall from buffer
+function renderWaterfall() {
+  if (!ctx || canvasWidth === 0 || canvasHeight === 0) return
+
+  const buf = scanBuffer.value
+  if (buf.length === 0) {
+    ctx.clearRect(0, 0, canvasWidth, canvasHeight)
+    return
+  }
+
+  const [renderStartHz, renderStopHz] = getEffectiveRange()
+  if (renderStopHz <= renderStartHz) return
+  const hzPerPixel = (renderStopHz - renderStartHz) / canvasWidth
+
+  const imgData = ctx.createImageData(canvasWidth, canvasHeight)
+  const data = imgData.data
+
+  // Flow up: oldest at top (buf[0]), newest at bottom (buf[N-1])
+  const bufLen = Math.min(buf.length, canvasHeight)
+  const bufStart = buf.length - bufLen
+  const canvasOffset = canvasHeight - bufLen // empty rows at top if buffer < canvas
+
+  for (let i = 0; i < bufLen; i++) {
+    const scan = buf[bufStart + i]
+    const power = scan.power
+    const scanHzLo = scan.hz_lo
+    const scanHzHi = scan.hz_hi
+    const scanLen = power.length
+    const scanHzPerSample = (scanHzHi - scanHzLo) / scanLen
+    const canvasRow = canvasOffset + i
+    const rowOffset = canvasRow * canvasWidth * 4
+
+    for (let col = 0; col < canvasWidth; col++) {
+      const freqHz = renderStartHz + col * hzPerPixel
+      const sampleIdx = (freqHz - scanHzLo) / scanHzPerSample
+      let dbm
+      if (sampleIdx < 0 || sampleIdx >= scanLen) {
+        dbm = minDb
+      } else {
+        dbm = power[Math.round(sampleIdx)]
+      }
+      const ci = dbmToIndex(dbm)
+      const px = rowOffset + col * 4
+      data[px] = VIRIDIS[ci * 4]
+      data[px + 1] = VIRIDIS[ci * 4 + 1]
+      data[px + 2] = VIRIDIS[ci * 4 + 2]
+      data[px + 3] = 255
+    }
+  }
+
+  ctx.putImageData(imgData, 0, 0)
+}
+
+// Render the color legend gradient
+function renderLegend() {
+  if (!legendCanvas.value) return
+  const lctx = legendCanvas.value.getContext('2d')
+  const h = legendCanvas.value.height
+  const w = legendCanvas.value.width
+  if (h === 0 || w === 0) return
+
+  const imgData = lctx.createImageData(w, h)
+  for (let y = 0; y < h; y++) {
+    const ci = Math.round((1 - y / h) * 255)
+    for (let x = 0; x < w; x++) {
+      const px = (y * w + x) * 4
+      imgData.data[px] = VIRIDIS[ci * 4]
+      imgData.data[px + 1] = VIRIDIS[ci * 4 + 1]
+      imgData.data[px + 2] = VIRIDIS[ci * 4 + 2]
+      imgData.data[px + 3] = 255
+    }
+  }
+  lctx.putImageData(imgData, 0, 0)
+}
+
+// Build SVG overlay (time axis + cursor only, no frequency axis)
+function buildAxes() {
+  if (!svgRef.value || !container.value) return
+
+  const rect = container.value.getBoundingClientRect()
+  const totalWidth = rect.width
+  const totalHeight = props.height
+
+  plotWidth = totalWidth - margin.left - margin.right
+  plotHeight = totalHeight - margin.top - margin.bottom
+  canvasWidth = Math.max(1, Math.floor(plotWidth))
+  canvasHeight = Math.max(1, Math.floor(plotHeight))
+
+  if (props.band) {
+    startHz = props.band.start_hz
+    stopHz = props.band.stop_hz
+  } else {
+    startHz = 470e6
+    stopHz = 608e6
+  }
+
+  // Effective x scale (respects zoom from line chart)
+  const [renderStartHz, renderStopHz] = getEffectiveRange()
+  effectiveXScale = d3.scaleLinear()
+    .domain([renderStartHz, renderStopHz])
+    .range([0, plotWidth])
+
+  // Size canvas to plot area
+  if (canvasRef.value) {
+    canvasRef.value.width = canvasWidth
+    canvasRef.value.height = canvasHeight
+    canvasRef.value.style.width = canvasWidth + 'px'
+    canvasRef.value.style.height = canvasHeight + 'px'
+    canvasRef.value.style.left = margin.left + 'px'
+    canvasRef.value.style.top = margin.top + 'px'
+    ctx = canvasRef.value.getContext('2d')
+  }
+
+  const svg = d3.select(svgRef.value)
+  svg.selectAll('*').remove()
+  svg.attr('width', totalWidth).attr('height', totalHeight)
+
+  const chart = svg.append('g')
+    .attr('transform', `translate(${margin.left},${margin.top})`)
+
+  // Y-axis (time) on left side
+  const yAxisGroup = chart.append('g').attr('class', 'y-axis')
+  updateTimeAxis(yAxisGroup)
+
+  // Cursor line
+  const cursorGroup = chart.append('g').attr('class', 'cursor-overlay')
+  cursorGroup.append('line').attr('class', 'cursor-line')
+    .attr('y1', 0).attr('y2', plotHeight)
+    .attr('stroke', '#666').attr('stroke-width', 1)
+    .attr('stroke-dasharray', '4,4').attr('opacity', 0)
+
+  // Mouse overlay for cursor
+  chart.append('rect').attr('class', 'mouse-overlay')
+    .attr('width', plotWidth).attr('height', plotHeight)
+    .attr('fill', 'transparent').attr('pointer-events', 'all')
+
+  setupMouseHandlers()
+}
+
+function updateTimeAxis(yAxisGroup) {
+  if (!yAxisGroup) {
+    const svg = d3.select(svgRef.value)
+    yAxisGroup = svg.select('.y-axis')
+  }
+  if (yAxisGroup.empty()) return
+
+  yAxisGroup.selectAll('*').remove()
+
+  const buf = scanBuffer.value
+  if (buf.length < 2) return
+
+  // Flow up: buf[0] = oldest (top), buf[N-1] = newest (bottom)
+  const oldestTs = buf[0]?.timestamp || Date.now()
+  const newestTs = buf[buf.length - 1]?.timestamp || Date.now()
+
+  const tickCount = Math.min(5, Math.max(2, Math.floor(plotHeight / 40)))
+
+  if (props.isLive) {
+    const spanSec = (newestTs - oldestTs) / 1000
+    const yScale = d3.scaleLinear()
+      .domain([-spanSec, 0]) // past at top, "Now" at bottom
+      .range([0, plotHeight])
+
+    yAxisGroup.call(
+      d3.axisLeft(yScale)
+        .ticks(tickCount)
+        .tickFormat(d => {
+          if (d === 0) return 'Now'
+          return `${d.toFixed(0)}s`
+        })
+    )
+  } else {
+    const yScale = d3.scaleTime()
+      .domain([new Date(oldestTs), new Date(newestTs)])
+      .range([0, plotHeight])
+
+    yAxisGroup.call(
+      d3.axisLeft(yScale)
+        .ticks(tickCount)
+        .tickFormat(d3.timeFormat('%H:%M:%S'))
+    )
+  }
+
+  yAxisGroup.selectAll('text').attr('fill', '#666').style('font-size', '9px')
+  yAxisGroup.selectAll('line').attr('stroke', '#666')
+  yAxisGroup.select('.domain').attr('stroke', '#666')
+}
+
+function setupMouseHandlers() {
+  const svg = d3.select(svgRef.value)
+  const mouseOverlay = svg.select('.mouse-overlay')
+  const cursorLine = svg.select('.cursor-line')
+
+  mouseOverlay
+    .on('mousemove', (event) => {
+      if (!effectiveXScale) return
+      const [mx] = d3.pointer(event)
+      const freqHz = effectiveXScale.invert(mx)
+      const freqMHz = freqHz / 1e6
+
+      cursorLine.attr('x1', mx).attr('x2', mx).attr('opacity', 0.6)
+      cursorInfo.value = {
+        x: mx + margin.left,
+        freqMHz: freqMHz.toFixed(3),
+      }
+    })
+    .on('mouseleave', () => {
+      cursorLine.attr('opacity', 0)
+      cursorInfo.value = null
+    })
+}
+
+// Append a live scan (flow up: push to end = bottom of canvas)
+function addLiveScan(scan) {
+  if (!scan?.power?.length) return
+
+  const entry = {
+    timestamp: Date.now(),
+    power: scan.power,
+    hz_lo: scan.hz_lo,
+    hz_hi: scan.hz_hi,
+  }
+
+  scanBuffer.value.push(entry)
+  const max = canvasHeight || 160
+  if (scanBuffer.value.length > max) {
+    scanBuffer.value.splice(0, scanBuffer.value.length - max)
+  }
+
+  renderWaterfall()
+  updateTimeAxis()
+}
+
+// Load scans into buffer (sorted chronologically, oldest first)
+function loadHistorical(scans) {
+  if (!scans || scans.length === 0) {
+    scanBuffer.value = []
+    if (ctx) ctx.clearRect(0, 0, canvasWidth, canvasHeight)
+    return
+  }
+
+  // Sort oldest first (flow up: oldest at top)
+  const sorted = [...scans].sort((a, b) => {
+    const tsA = a.timestamp || (a.scan?.timestamp ? new Date(a.scan.timestamp).getTime() : 0)
+    const tsB = b.timestamp || (b.scan?.timestamp ? new Date(b.scan.timestamp).getTime() : 0)
+    return tsA - tsB
+  })
+
+  // Decimate if more scans than pixel rows
+  const max = canvasHeight || 160
+  let picked = sorted
+  if (sorted.length > max) {
+    picked = []
+    const step = sorted.length / max
+    for (let i = 0; i < max; i++) {
+      picked.push(sorted[Math.floor(i * step)])
+    }
+  }
+
+  scanBuffer.value = picked.map(s => {
+    const scan = s.scan || s
+    return {
+      timestamp: s.timestamp || new Date(scan.timestamp).getTime(),
+      power: scan.power,
+      hz_lo: scan.hz_lo,
+      hz_hi: scan.hz_hi,
+    }
+  })
+
+  renderWaterfall()
+  updateTimeAxis()
+}
+
+function clear() {
+  scanBuffer.value = []
+  if (ctx) ctx.clearRect(0, 0, canvasWidth, canvasHeight)
+}
+
+defineExpose({ clear })
+
+// Watch live scans
+watch(() => props.scan, (newScan) => {
+  if (props.isLive && newScan?.power?.length) {
+    addLiveScan(newScan)
+  }
+})
+
+// Watch historical scans — always reload (handles async cache arrival in live mode too)
+watch(() => props.historicalScans, (scans) => {
+  loadHistorical(scans)
+}, { deep: true })
+
+// Watch mode switch — pre-fill from historical in both modes
+watch(() => props.isLive, () => {
+  loadHistorical(props.historicalScans)
+})
+
+// Watch zoom changes from line chart
+watch(() => props.visibleRange, () => {
+  const [renderStartHz, renderStopHz] = getEffectiveRange()
+  effectiveXScale = d3.scaleLinear()
+    .domain([renderStartHz, renderStopHz])
+    .range([0, plotWidth])
+  renderWaterfall()
+})
+
+// Resize handling
+let resizeObserver = null
+
+function handleResize() {
+  buildAxes()
+  renderWaterfall()
+  renderLegend()
+}
+
+onMounted(() => {
+  nextTick(() => {
+    buildAxes()
+    renderLegend()
+    // Pre-fill from historical data (works for both live and historical mode)
+    loadHistorical(props.historicalScans)
+  })
+
+  if (container.value) {
+    resizeObserver = new ResizeObserver(() => handleResize())
+    resizeObserver.observe(container.value)
+  }
+})
+
+onUnmounted(() => {
+  if (resizeObserver) resizeObserver.disconnect()
+})
+
+// Color legend labels
+const legendLabels = computed(() => {
+  const labels = []
+  const step = 30
+  for (let db = maxDb; db >= minDb; db -= step) {
+    labels.push(db)
+  }
+  return labels
+})
+</script>
+
+<template>
+  <div ref="container" class="spectrogram-chart w-full relative" :style="{ height: `${height}px` }">
+    <!-- Canvas for heatmap (positioned in plot area) -->
+    <canvas
+      ref="canvasRef"
+      class="absolute"
+      style="image-rendering: pixelated;"
+    />
+
+    <!-- SVG overlay for time axis + cursor -->
+    <svg
+      ref="svgRef"
+      class="absolute top-0 left-0 w-full"
+      :style="{ height: `${height}px` }"
+    />
+
+    <!-- Color scale legend -->
+    <div
+      class="absolute flex flex-col items-center"
+      :style="{
+        right: '4px',
+        top: `${margin.top}px`,
+        height: `${height - margin.top - margin.bottom}px`,
+        width: '16px',
+      }"
+    >
+      <canvas
+        ref="legendCanvas"
+        class="w-full h-full rounded-sm"
+        width="12"
+        :height="height - margin.top - margin.bottom"
+        style="image-rendering: pixelated;"
+      />
+    </div>
+    <div
+      class="absolute flex flex-col justify-between text-right"
+      :style="{
+        right: '22px',
+        top: `${margin.top}px`,
+        height: `${height - margin.top - margin.bottom}px`,
+        width: '28px',
+      }"
+    >
+      <span
+        v-for="db in legendLabels"
+        :key="db"
+        class="text-gray-500 leading-none"
+        style="font-size: 8px;"
+      >{{ db }}</span>
+    </div>
+
+    <!-- Cursor tooltip -->
+    <div
+      v-if="cursorInfo"
+      class="absolute pointer-events-none bg-gray-900/90 border border-cyan-500/50 rounded px-2 py-1 text-xs"
+      :style="{
+        left: `${cursorInfo.x + 10}px`,
+        top: '4px',
+      }"
+    >
+      <span class="text-cyan-400 font-mono">{{ cursorInfo.freqMHz }} MHz</span>
+    </div>
+  </div>
+</template>
+
+<style scoped>
+.spectrogram-chart {
+  position: relative;
+}
+</style>

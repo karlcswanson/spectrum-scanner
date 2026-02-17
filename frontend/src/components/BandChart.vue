@@ -2,6 +2,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useScannersStore } from '../stores/scanners'
 import D3SpectrumChart from './D3SpectrumChart.vue'
+import SpectrogramChart from './SpectrogramChart.vue'
 import TimeScrubber from './TimeScrubber.vue'
 
 const props = defineProps({
@@ -59,6 +60,7 @@ const emit = defineEmits(['update:selected'])
 
 const store = useScannersStore()
 const chartRef = ref(null)
+const spectrogramRef = ref(null)
 
 // Trace display modes
 const showCurrent = ref(true)
@@ -68,6 +70,14 @@ const showPeak = ref(false)
 // Historical playback state
 const isLive = ref(true)
 const historicalScan = ref(null)
+
+// Zoom range from line chart (shared with spectrogram)
+const zoomRange = ref(null)
+
+// Spectrogram toggle + lazy-loaded data (not stored globally)
+const showSpectrogram = ref(false)
+const spectrogramData = ref([])
+const spectrogramLoading = ref(false)
 
 // Get timeline from store (reactive - updates via MQTT)
 const timeline = computed(() => {
@@ -104,6 +114,64 @@ const activeScan = computed(() => {
   // Fall back to historical if no live data
   return historicalScan.value
 })
+
+// Lazy-load spectrogram historical data (local, not in store)
+async function loadSpectrogramData() {
+  if (!showSpectrogram.value) return
+  spectrogramLoading.value = true
+  try {
+    const rangeOpts = currentTimeRange.value
+    let fetchOpts
+    if (rangeOpts.start && rangeOpts.end) {
+      const diffHours = (rangeOpts.end - rangeOpts.start) / 3600000
+      fetchOpts = {
+        start: rangeOpts.start,
+        end: rangeOpts.end,
+        limit: diffHours > 168 ? 5000 : diffHours > 24 ? 2000 : 1000,
+        decimated: true,
+      }
+    } else {
+      const hours = rangeOpts.hours || props.timelineHours
+      fetchOpts = {
+        hours,
+        limit: hours > 168 ? 5000 : hours > 24 ? 2000 : 1000,
+        decimated: true,
+      }
+    }
+    const scans = await store.fetchHistory(props.scannerId, props.band.name, fetchOpts)
+    if (scans && scans.length > 0) {
+      spectrogramData.value = scans.map(s => ({
+        timestamp: new Date(s.timestamp).getTime(),
+        scan: {
+          hz_lo: s.hz_lo,
+          hz_hi: s.hz_hi,
+          step: s.step_hz,
+          power: s.power,
+          timestamp: s.timestamp,
+        }
+      })).sort((a, b) => a.timestamp - b.timestamp)
+    } else {
+      spectrogramData.value = []
+    }
+  } catch (err) {
+    spectrogramData.value = []
+  } finally {
+    spectrogramLoading.value = false
+  }
+}
+
+// Load when toggled on, clear when toggled off
+watch(showSpectrogram, (open) => {
+  if (open) {
+    loadSpectrogramData()
+  } else {
+    spectrogramData.value = []
+  }
+})
+
+function handleZoom(domain) {
+  zoomRange.value = domain
+}
 
 // Format step size for display
 function formatStep(stepHz) {
@@ -223,7 +291,7 @@ async function loadTimeline(options = null) {
     const rangeOpts = options || currentTimeRange.value
     // Fetch initial timeline data - store handles MQTT updates after this
     await store.fetchTimeline(props.scannerId, props.band.name, rangeOpts)
-    // Load decimated cache for fast scrubbing preview (pass full range options)
+    // Load decimated cache matching scrubber range (API auto-fills with rollup data)
     await store.loadDecimatedCache(props.scannerId, props.band.name, rangeOpts)
   }
 }
@@ -232,6 +300,10 @@ async function loadTimeline(options = null) {
 async function handleRangeChange(rangeOpts) {
   currentTimeRange.value = rangeOpts
   await loadTimeline(rangeOpts)
+  // Reload spectrogram data for new range if open
+  if (showSpectrogram.value) {
+    loadSpectrogramData()
+  }
 }
 
 // Preview handler (while dragging) - use decimated cache
@@ -268,6 +340,7 @@ async function handleTimeSelect(time) {
 function handleLive() {
   isLive.value = true
   historicalScan.value = null
+  // Spectrogram handles mode switch via isLive watcher (pre-fills from historical)
 }
 
 // Check if we have valid live scan data
@@ -305,6 +378,10 @@ onMounted(async () => {
 // Reload timeline when band changes
 watch(() => props.band.name, async () => {
   await loadTimeline()
+  // Reload spectrogram data if open
+  if (showSpectrogram.value) {
+    loadSpectrogramData()
+  }
   // Load latest historical if no live scan
   if (!hasLiveScan()) {
     loadLatestHistorical()
@@ -393,6 +470,34 @@ watch(() => props.band.name, async () => {
       :show-current="showCurrent"
       :show-average="showAverage"
       :show-peak="showPeak"
+      @zoom="handleZoom"
+    />
+
+    <!-- Spectrogram toggle -->
+    <div class="flex items-center mt-1">
+      <button
+        @click="showSpectrogram = !showSpectrogram"
+        class="flex items-center gap-1 px-2 py-0.5 rounded text-xs transition-colors"
+        :class="showSpectrogram
+          ? 'bg-cyan-600/20 text-cyan-400 hover:bg-cyan-600/30'
+          : 'bg-gray-700 text-gray-500 hover:bg-gray-600'"
+      >
+        <span class="text-[10px]">{{ showSpectrogram ? '&#9660;' : '&#9654;' }}</span>
+        Waterfall
+        <span v-if="spectrogramLoading" class="text-gray-500">(loading...)</span>
+      </button>
+    </div>
+
+    <SpectrogramChart
+      v-if="showSpectrogram"
+      ref="spectrogramRef"
+      :band="band"
+      :height="200"
+      :scan="scan"
+      :historical-scans="spectrogramData"
+      :is-live="isLive"
+      :visible-range="zoomRange"
+      class="mt-1"
     />
 
     <!-- Time scrubber for historical playback -->

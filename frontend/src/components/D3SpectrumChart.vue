@@ -53,6 +53,8 @@ const props = defineProps({
   },
 })
 
+const emit = defineEmits(['zoom'])
+
 const container = ref(null)
 const svgRef = ref(null)
 
@@ -381,6 +383,7 @@ function buildChartStructure() {
       chartCache.xScale = event.transform.rescaleX(xScaleBase)
       updateAxisAndGrid()
       updateTraces()
+      emit('zoom', chartCache.xScale.domain())
     })
 
   svg.select('.mouse-overlay').call(zoomBehavior)
