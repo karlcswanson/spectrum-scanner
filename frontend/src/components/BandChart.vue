@@ -461,11 +461,11 @@ watch(() => props.band.name, async () => {
 
 <template>
   <div
-    class="bg-gray-800 rounded-lg p-4 transition-all"
+    class="bg-gray-800 rounded-lg p-2 sm:p-4 transition-all"
     :class="selected ? 'ring-2 ring-cyan-500' : ''"
   >
-    <div class="flex justify-between items-start mb-3">
-      <div class="flex items-start gap-3">
+    <div class="flex flex-col gap-2 sm:flex-row sm:justify-between sm:items-start mb-3">
+      <div class="flex items-start gap-2 sm:gap-3 min-w-0">
         <!-- Selection checkbox -->
         <label v-if="selectable" class="flex items-center mt-1 cursor-pointer">
           <input
@@ -476,24 +476,24 @@ watch(() => props.band.name, async () => {
           />
         </label>
 
-        <div>
-          <h2 class="text-lg font-semibold text-cyan-400">
+        <div class="min-w-0">
+          <h2 class="text-base sm:text-lg font-semibold text-cyan-400">
             {{ band.name }}
-            <span class="text-gray-500 font-normal text-sm ml-2">
+            <span class="text-gray-500 font-normal text-xs sm:text-sm ml-1 sm:ml-2">
               ({{ freqRange }})
             </span>
-            <span v-if="!showingLive && activeScan" class="text-yellow-400 text-xs ml-2">
+            <span v-if="!showingLive && activeScan" class="text-yellow-400 text-xs ml-1 sm:ml-2">
               Historical
             </span>
           </h2>
-          <p class="text-xs text-gray-500">
+          <p class="text-xs text-gray-500 truncate">
             <span v-if="showScanner && scannerName" class="mr-3">{{ scannerName }}</span>
             {{ scanInfo }}
           </p>
         </div>
       </div>
 
-      <div class="flex items-center gap-3">
+      <div class="flex items-center gap-2 flex-wrap">
         <!-- Trace mode toggles -->
         <div class="flex items-center gap-2 text-xs">
           <label class="flex items-center gap-1 cursor-pointer">
@@ -520,12 +520,12 @@ watch(() => props.band.name, async () => {
         <button
           @click="exportCSV"
           :disabled="!activeScan"
-          class="px-4 py-2 rounded text-sm font-semibold transition-colors"
+          class="px-3 py-1.5 rounded text-xs font-semibold transition-colors"
           :class="activeScan
             ? 'bg-green-500 hover:bg-green-600 text-black'
             : 'bg-gray-600 text-gray-400 cursor-not-allowed'"
         >
-          Export CSV
+          Export
         </button>
       </div>
     </div>

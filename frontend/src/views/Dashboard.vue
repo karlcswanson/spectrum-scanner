@@ -76,8 +76,8 @@ function scrollToScanner(scannerId) {
 <template>
   <div>
     <!-- Header with connection status -->
-    <div class="flex items-center justify-between mb-4">
-      <h1 class="text-2xl font-bold">Dashboard</h1>
+    <div class="flex flex-wrap items-center justify-between gap-2 mb-4">
+      <h1 class="text-xl sm:text-2xl font-bold">Dashboard</h1>
       <div class="flex items-center gap-4">
         <!-- Error indicator -->
         <div
@@ -104,7 +104,7 @@ function scrollToScanner(scannerId) {
     </div>
 
     <!-- Group filter pills -->
-    <div v-if="store.groups.length > 0" class="flex items-center gap-2 mb-4">
+    <div v-if="store.groups.length > 0" class="flex flex-wrap items-center gap-2 mb-4">
       <button
         @click="setGroup(null)"
         class="px-3 py-1.5 text-sm rounded-full transition-colors"
@@ -129,7 +129,7 @@ function scrollToScanner(scannerId) {
     </div>
 
     <!-- Online scanners quick links -->
-    <div v-if="onlineScanners.length" class="flex items-center gap-2 mb-6">
+    <div v-if="onlineScanners.length" class="flex flex-wrap items-center gap-2 mb-6">
       <span class="text-gray-500 text-sm">Online:</span>
       <button
         v-for="scanner in onlineScanners"

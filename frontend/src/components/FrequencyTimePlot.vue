@@ -230,29 +230,33 @@ function updateChart() {
     .attr('d', d => d.points.length >= 2 ? lineGen(d.points) : null)
 }
 
-// Watch for data changes — shallow watch + debounce
+// Unified debounced redraw — single timer prevents redundant double-draws
 let drawTimer = null
-watch(() => [props.pinnedFreqs, props.scans, props.timeRange], () => {
-  // Historical data changed — clear live buffer to avoid overlap
-  liveBuffer = {}
+function scheduleRedraw(delayMs = 200) {
   if (drawTimer) clearTimeout(drawTimer)
-  drawTimer = setTimeout(updateChart, 200)
+  drawTimer = setTimeout(updateChart, delayMs)
+}
+
+// Historical data or time range changed — clear live buffer to avoid overlap
+watch(() => [props.scans, props.timeRange], () => {
+  liveBuffer = {}
+  scheduleRedraw()
 })
 
-// Watch pinnedFreqs changes to prune stale keys from liveBuffer
+// Pinned frequencies changed — prune stale keys, keep live data for remaining pins
 watch(() => props.pinnedFreqs, (pins) => {
   if (!pins || pins.length === 0) {
     liveBuffer = {}
-    return
+  } else {
+    const validKeys = new Set(pins.map(p => p.freqHz))
+    for (const key of Object.keys(liveBuffer)) {
+      if (!validKeys.has(Number(key))) delete liveBuffer[key]
+    }
   }
-  const validKeys = new Set(pins.map(p => p.freqHz))
-  for (const key of Object.keys(liveBuffer)) {
-    if (!validKeys.has(Number(key))) delete liveBuffer[key]
-  }
+  scheduleRedraw()
 })
 
 // Live scan watcher — append new data point for each pinned frequency
-let liveDrawTimer = null
 watch(() => props.liveScan, (scan) => {
   if (!scan || !props.isLive || props.pinnedFreqs.length === 0) return
 
@@ -266,13 +270,10 @@ watch(() => props.liveScan, (scan) => {
     if (!liveBuffer[pin.freqHz]) liveBuffer[pin.freqHz] = []
     const buf = liveBuffer[pin.freqHz]
     buf.push(pt)
-    // Trim to max size
     if (buf.length > LIVE_BUFFER_MAX) buf.splice(0, buf.length - LIVE_BUFFER_MAX)
   }
 
-  // Debounce chart redraw for live updates (faster than historical — 100ms)
-  if (liveDrawTimer) clearTimeout(liveDrawTimer)
-  liveDrawTimer = setTimeout(updateChart, 100)
+  scheduleRedraw(100) // faster debounce for live updates
 })
 
 // Resize handling
@@ -292,7 +293,6 @@ onMounted(() => {
 onUnmounted(() => {
   if (resizeObserver) resizeObserver.disconnect()
   if (drawTimer) clearTimeout(drawTimer)
-  if (liveDrawTimer) clearTimeout(liveDrawTimer)
 })
 </script>
 
@@ -325,5 +325,6 @@ onUnmounted(() => {
 <style scoped>
 .frequency-time-plot {
   position: relative;
+  touch-action: manipulation;
 }
 </style>

@@ -229,8 +229,12 @@ function buildChartStructure() {
   const validTraces = getTracesForDraw().filter(t => t.scan?.power?.length > 0)
 
   if (validTraces.length > 0) {
-    startHz = Math.min(...validTraces.map(t => t.scan.hz_lo))
-    stopHz = Math.max(...validTraces.map(t => t.scan.hz_hi))
+    startHz = validTraces[0].scan.hz_lo
+    stopHz = validTraces[0].scan.hz_hi
+    for (let i = 1; i < validTraces.length; i++) {
+      if (validTraces[i].scan.hz_lo < startHz) startHz = validTraces[i].scan.hz_lo
+      if (validTraces[i].scan.hz_hi > stopHz) stopHz = validTraces[i].scan.hz_hi
+    }
   } else if (props.band) {
     startHz = props.band.start_hz
     stopHz = props.band.stop_hz
@@ -652,6 +656,21 @@ function updateTraces() {
     }
   })
 
+  // Remove stale trace paths from removed traces
+  const activeClasses = new Set()
+  for (const t of traces) {
+    const sid = sanitizeClass(t.id)
+    activeClasses.add(`trace-current-${sid}`)
+    activeClasses.add(`trace-peak-${sid}`)
+    activeClasses.add(`trace-avg-${sid}`)
+  }
+  tracesGroup.selectAll('path').each(function() {
+    const cls = d3.select(this).attr('class')
+    if (cls && cls.startsWith('trace-') && !activeClasses.has(cls)) {
+      d3.select(this).remove()
+    }
+  })
+
   // Update legend only when trace set changes
   updateLegend(traces)
 }
@@ -741,6 +760,36 @@ function setupMouseHandlers() {
         const freqMHz = freqHz / 1e6
         emit('freq-pin', { freqHz, freqMHz })
       }
+    })
+
+  // Long-press for touch devices (iPad — no ctrl/cmd key)
+  let longPressTimer = null
+  let longPressX = null
+
+  mouseOverlay
+    .on('touchstart.longpress', (event) => {
+      if (event.touches.length !== 1) return
+      const [mx] = d3.pointer(event.touches[0], mouseOverlay.node())
+      longPressX = mx
+      longPressTimer = setTimeout(() => {
+        if (longPressX === null || !chartCache.xScale) return
+        const freqHz = chartCache.xScale.invert(longPressX)
+        const freqMHz = freqHz / 1e6
+        emit('freq-pin', { freqHz, freqMHz })
+        longPressX = null
+      }, 500)
+    })
+    .on('touchmove.longpress', (event) => {
+      if (longPressX === null) return
+      const [mx] = d3.pointer(event.touches[0], mouseOverlay.node())
+      if (Math.abs(mx - longPressX) > 10) {
+        clearTimeout(longPressTimer)
+        longPressX = null
+      }
+    })
+    .on('touchend.longpress touchcancel.longpress', () => {
+      clearTimeout(longPressTimer)
+      longPressX = null
     })
 }
 
@@ -910,5 +959,6 @@ defineExpose({
 <style scoped>
 .d3-spectrum-chart {
   position: relative;
+  touch-action: manipulation;
 }
 </style>

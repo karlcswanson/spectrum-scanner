@@ -29,11 +29,11 @@ async function handleLogout() {
   <div class="min-h-screen">
     <!-- Only show header on non-login pages -->
     <header v-if="route.path !== '/login'" class="bg-gray-800 border-b border-gray-700">
-      <div class="w-full px-4 py-4">
-        <div class="flex items-center justify-between">
-          <router-link to="/" class="flex items-center gap-3">
-            <img src="/logo.png" alt="Micboard" class="h-8" />
-            <span class="text-xl font-bold text-white">Spectrum Server</span>
+      <div class="w-full px-2 py-2 sm:px-4 sm:py-4">
+        <div class="flex items-center justify-between gap-2">
+          <router-link to="/" class="flex items-center gap-2 sm:gap-3 min-w-0">
+            <img src="/logo.png" alt="Micboard" class="h-7 sm:h-8" />
+            <span class="text-base sm:text-xl font-bold text-white truncate">Spectrum Server</span>
           </router-link>
           <div class="flex items-center space-x-4">
             <nav class="flex space-x-4">
@@ -59,7 +59,7 @@ async function handleLogout() {
       </div>
     </header>
 
-    <main :class="route.path !== '/login' ? 'w-full px-4 py-6' : ''">
+    <main :class="route.path !== '/login' ? 'w-full px-2 py-3 sm:px-4 sm:py-6' : ''">
       <RouterView />
     </main>
   </div>

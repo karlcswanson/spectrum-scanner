@@ -24,8 +24,6 @@ services:
       - "9001:9001"
     volumes:
       - ./mosquitto/mosquitto.conf:/etc/mosquitto/mosquitto.conf
-      - mosquitto_data:/mosquitto/data
-      - mosquitto_log:/mosquitto/log
     depends_on:
       server:
         condition: service_started
@@ -117,6 +115,4 @@ services:
 
 volumes:
   postgres_data:
-  mosquitto_data:
-  mosquitto_log:
   frontend_modules:

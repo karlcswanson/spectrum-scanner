@@ -570,35 +570,12 @@ const selectedTimeDisplay = computed(() => {
 
 <template>
   <div class="time-scrubber bg-gray-900 rounded p-2 relative">
-    <div class="flex items-center justify-between mb-2">
-      <div class="text-xs text-gray-500">
-        <span v-if="isLive" class="text-green-400 font-semibold">● LIVE</span>
-        <span v-else-if="isCustomRange" class="text-purple-400">{{ customRangeDisplay }}</span>
-        <span v-else class="text-yellow-400">{{ selectedTimeDisplay }}</span>
-      </div>
+    <div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 mb-2">
       <div class="flex items-center gap-2">
-        <!-- Time range selector -->
-        <div class="flex items-center gap-1 border-r border-gray-700 pr-2 mr-1">
-          <button
-            v-for="opt in timeRangeOptions"
-            :key="opt.hours"
-            @click="setTimeRange(opt.hours)"
-            class="px-2 py-0.5 rounded text-xs transition-colors"
-            :class="selectedRange === opt.hours && !isCustomRange
-              ? 'bg-cyan-600 text-white'
-              : 'bg-gray-800 hover:bg-gray-700 text-gray-400'"
-          >
-            {{ opt.label }}
-          </button>
-          <button
-            @click="toggleDatePicker"
-            class="px-2 py-0.5 rounded text-xs transition-colors"
-            :class="isCustomRange
-              ? 'bg-purple-600 text-white'
-              : 'bg-gray-800 hover:bg-gray-700 text-gray-400'"
-          >
-            Custom
-          </button>
+        <div class="text-xs text-gray-500">
+          <span v-if="isLive" class="text-green-400 font-semibold">● LIVE</span>
+          <span v-else-if="isCustomRange" class="text-purple-400">{{ customRangeDisplay }}</span>
+          <span v-else class="text-yellow-400">{{ selectedTimeDisplay }}</span>
         </div>
         <span class="text-xs text-gray-600">{{ filteredTimeline.length }} scans
           <template v-if="summaryCount > 0">
@@ -615,6 +592,29 @@ const selectedTimeDisplay = computed(() => {
           Live
         </button>
       </div>
+      <!-- Time range selector -->
+      <div class="flex flex-wrap items-center gap-1">
+        <button
+          v-for="opt in timeRangeOptions"
+          :key="opt.hours"
+          @click="setTimeRange(opt.hours)"
+          class="px-1.5 py-0.5 rounded text-[11px] transition-colors"
+          :class="selectedRange === opt.hours && !isCustomRange
+            ? 'bg-cyan-600 text-white'
+            : 'bg-gray-800 hover:bg-gray-700 text-gray-400'"
+        >
+          {{ opt.label }}
+        </button>
+        <button
+          @click="toggleDatePicker"
+          class="px-1.5 py-0.5 rounded text-[11px] transition-colors"
+          :class="isCustomRange
+            ? 'bg-purple-600 text-white'
+            : 'bg-gray-800 hover:bg-gray-700 text-gray-400'"
+        >
+          Custom
+        </button>
+      </div>
     </div>
 
     <!-- Custom date range picker -->
@@ -623,14 +623,14 @@ const selectedTimeDisplay = computed(() => {
       class="absolute top-full left-0 right-0 mt-1 bg-gray-800 border border-gray-700 rounded-lg p-3 z-50 shadow-xl"
     >
       <div class="text-xs text-gray-400 mb-2 font-semibold">Custom Date Range</div>
-      <div class="flex items-center gap-4">
-        <div class="flex-1">
+      <div class="grid grid-cols-1 sm:grid-cols-[1fr_auto_1fr_auto] items-end gap-2 sm:gap-4">
+        <div>
           <label class="text-xs text-gray-500 block mb-1">Start</label>
           <div class="flex gap-1">
             <input
               v-model="customStartDate"
               type="date"
-              class="bg-gray-700 text-white text-xs rounded px-2 py-1 w-28"
+              class="bg-gray-700 text-white text-xs rounded px-2 py-1 flex-1 min-w-0"
             />
             <input
               v-model="customStartTime"
@@ -639,14 +639,14 @@ const selectedTimeDisplay = computed(() => {
             />
           </div>
         </div>
-        <div class="text-gray-600">→</div>
-        <div class="flex-1">
+        <div class="hidden sm:block text-gray-600 pb-1">→</div>
+        <div>
           <label class="text-xs text-gray-500 block mb-1">End</label>
           <div class="flex gap-1">
             <input
               v-model="customEndDate"
               type="date"
-              class="bg-gray-700 text-white text-xs rounded px-2 py-1 w-28"
+              class="bg-gray-700 text-white text-xs rounded px-2 py-1 flex-1 min-w-0"
             />
             <input
               v-model="customEndTime"

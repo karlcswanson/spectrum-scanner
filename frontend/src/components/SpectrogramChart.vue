@@ -455,6 +455,36 @@ function setupMouseHandlers() {
         },
       })
     })
+
+  // Long-press for touch devices (iPad — no ctrl/cmd key)
+  let longPressTimer = null
+  let longPressX = null
+
+  mouseOverlay
+    .on('touchstart.longpress', (event) => {
+      if (event.touches.length !== 1) return
+      const [mx] = d3.pointer(event.touches[0], mouseOverlay.node())
+      longPressX = mx
+      longPressTimer = setTimeout(() => {
+        if (longPressX === null || !effectiveXScale) return
+        const freqHz = effectiveXScale.invert(longPressX)
+        const freqMHz = freqHz / 1e6
+        emit('freq-pin', { freqHz, freqMHz })
+        longPressX = null
+      }, 500)
+    })
+    .on('touchmove.longpress', (event) => {
+      if (longPressX === null) return
+      const [mx] = d3.pointer(event.touches[0], mouseOverlay.node())
+      if (Math.abs(mx - longPressX) > 10) {
+        clearTimeout(longPressTimer)
+        longPressX = null
+      }
+    })
+    .on('touchend.longpress touchcancel.longpress', () => {
+      clearTimeout(longPressTimer)
+      longPressX = null
+    })
 }
 
 // Append a live scan (flow up: push to end = bottom of canvas)
@@ -477,6 +507,7 @@ function addLiveScan(scan) {
   // Fast path: only paint the 1 new row instead of full repaint
   renderLiveRow(scan)
   updateTimeAxis()
+  drawOverlays()
 }
 
 // Load scans into buffer (sorted chronologically, oldest first)
@@ -506,6 +537,7 @@ function loadHistorical(scans) {
 
   renderWaterfall()
   updateTimeAxis()
+  drawOverlays()
 }
 
 function clear() {
@@ -634,6 +666,7 @@ function handleResize() {
   buildAxes()
   renderWaterfall()
   renderLegend()
+  drawOverlays()
 }
 
 onMounted(() => {
@@ -733,5 +766,6 @@ const legendLabels = computed(() => {
 <style scoped>
 .spectrogram-chart {
   position: relative;
+  touch-action: manipulation;
 }
 </style>
