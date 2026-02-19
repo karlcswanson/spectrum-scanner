@@ -1,8 +1,10 @@
 """
-Management command that runs APScheduler for per-scanner rollup jobs.
+Management command that runs APScheduler for periodic background jobs.
 
-Schedules are built from the Scanner table on startup — no extra persistence
-needed. A sync job periodically adds/removes schedules for new/deleted scanners.
+Jobs:
+- Per-scanner data rollup (every 5 minutes)
+- Scanner schedule sync (every 10 minutes)
+- DynSec full sync (every 10 minutes)
 
 Usage:
     python manage.py scheduler
@@ -69,15 +71,29 @@ def sync_schedules(scheduler: BlockingScheduler):
             )
 
 
+def run_dynsec_sync():
+    """Full idempotent sync of dynsec state with Django DB."""
+    from realtime.dynsec import DynSecClient, full_sync
+
+    dynsec = DynSecClient()
+    try:
+        full_sync(dynsec)
+        logger.info("DynSec periodic sync complete")
+    except Exception as e:
+        logger.error(f"DynSec periodic sync failed: {e}")
+    finally:
+        dynsec.close()
+
+
 class Command(BaseCommand):
-    help = "Run APScheduler for per-scanner rollup jobs"
+    help = "Run APScheduler for background jobs"
 
     def handle(self, *args, **options):
         from core.models import Scanner
 
         scheduler = BlockingScheduler()
 
-        # Initial schedule setup
+        # Initial rollup schedule setup
         scanners = Scanner.objects.all()
         for scanner in scanners:
             job_id = f"rollup-{scanner.id}"
@@ -91,13 +107,22 @@ class Command(BaseCommand):
                 replace_existing=True,
             )
 
-        # Sync job to pick up new/deleted scanners
+        # Periodic schedule sync (pick up new/deleted scanners)
         scheduler.add_job(
             sync_schedules,
             "interval",
             minutes=SYNC_INTERVAL_MINUTES,
             id="sync-schedules",
             args=[scheduler],
+            replace_existing=True,
+        )
+
+        # Periodic dynsec full sync (catches expired grants, drift)
+        scheduler.add_job(
+            run_dynsec_sync,
+            "interval",
+            minutes=SYNC_INTERVAL_MINUTES,
+            id="dynsec-sync",
             replace_existing=True,
         )
 

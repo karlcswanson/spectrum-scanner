@@ -3,8 +3,6 @@
 import logging
 from datetime import timedelta
 from django.utils import timezone
-from django.views.decorators.csrf import csrf_exempt
-from django.http import HttpResponse
 from rest_framework import viewsets, status
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -444,184 +442,12 @@ class ScanViewSet(viewsets.ModelViewSet):
         return Response({'detail': 'No scans found'}, status=status.HTTP_404_NOT_FOUND)
 
 
-@csrf_exempt
-@api_view(['POST'])
-@permission_classes([AllowAny])
-def mqtt_auth(request):
-    """Authenticate MQTT client connections.
-
-    Called by mosquitto-go-auth plugin to validate credentials.
-    Supports both scanners (publish) and frontend clients (subscribe-only).
-
-    Expected POST data (form-encoded):
-    - username: UUID (scanner or frontend client)
-    - password: Auth token
-
-    Returns:
-    - 200 OK: Authentication successful
-    - 403 Forbidden: Authentication failed
-    """
-    username = request.data.get('username', '')
-    password = request.data.get('password', '')
-
-    if not username or not password:
-        logger.debug("MQTT auth: missing credentials, rejected")
-        return HttpResponse(status=403)
-
-    # Try bridge service account first (internal service for storing scans)
-    from django.conf import settings
-    bridge_username = getattr(settings, 'MQTT_BRIDGE_USERNAME', '')
-    bridge_password = getattr(settings, 'MQTT_BRIDGE_PASSWORD', '')
-    if bridge_username and username == bridge_username and password == bridge_password:
-        logger.info(f"MQTT auth: bridge service authenticated")
-        return HttpResponse(status=200)
-
-    # Try scanner
-    try:
-        scanner = Scanner.objects.get(id=username)
-        if scanner.enabled and scanner.auth_token == password:
-            logger.info(f"MQTT auth: scanner {scanner.name} ({username[:8]}...) authenticated")
-            return HttpResponse(status=200)
-        else:
-            reason = "disabled" if not scanner.enabled else "invalid token"
-            logger.warning(f"MQTT auth: scanner {username[:8]}... rejected ({reason})")
-            return HttpResponse(status=403)
-    except Scanner.DoesNotExist:
-        pass
-
-    # Try user MQTT credentials
-    try:
-        creds = UserMQTTCredentials.objects.select_related('user').get(mqtt_id=username)
-        if creds.user.is_active and creds.auth_token == password:
-            logger.info(f"MQTT auth: user {creds.user.username} ({username[:8]}...) authenticated")
-            return HttpResponse(status=200)
-        else:
-            reason = "user inactive" if not creds.user.is_active else "invalid token"
-            logger.warning(f"MQTT auth: user {username[:8]}... rejected ({reason})")
-            return HttpResponse(status=403)
-    except UserMQTTCredentials.DoesNotExist:
-        pass
-
-    logger.warning(f"MQTT auth: unknown client {username[:8] if len(username) >= 8 else username}...")
-    return HttpResponse(status=403)
-
-
-@csrf_exempt
-@api_view(['POST'])
-@permission_classes([AllowAny])
-def mqtt_acl(request):
-    """Check MQTT topic ACLs.
-
-    Called by mosquitto-go-auth plugin to validate publish/subscribe permissions.
-
-    Expected POST data (form-encoded):
-    - username: UUID (scanner or frontend client)
-    - topic: MQTT topic being accessed
-    - acc: Access type (1=subscribe, 2=publish)
-
-    Returns:
-    - 200 OK: Access allowed
-    - 403 Forbidden: Access denied
-    """
-    username = request.data.get('username', '')
-    topic = request.data.get('topic', '')
-    acc = request.data.get('acc', '1')  # 1=sub, 2=pub
-
-    logger.debug(f"MQTT ACL check: user={username}, topic={topic}, acc={acc}")
-
-    topic_prefix = 'spectrum'
-
-    # mosquitto-go-auth access types:
-    # 1 = read, 2 = write, 3 = readwrite, 4 = subscribe, 5 = unsubscribe
-    # acc can come as string or int depending on how it's sent
-    acc_str = str(acc)
-    is_subscribe = acc_str in ('1', '4')  # read or subscribe
-    is_publish = acc_str == '2'
-
-    # Check if this is the bridge service
-    from django.conf import settings
-    bridge_username = getattr(settings, 'MQTT_BRIDGE_USERNAME', '')
-    if bridge_username and username == bridge_username:
-        # Bridge can subscribe to scanner topics (to receive scans)
-        if is_subscribe and topic.startswith(f"{topic_prefix}/scanners/"):
-            logger.debug(f"MQTT ACL: bridge service subscribe to {topic} allowed")
-            return HttpResponse(status=200)
-        # Bridge can publish to timeline topics (to notify frontend of stored scans)
-        if is_publish and topic.startswith(f"{topic_prefix}/scanners/") and topic.endswith("/timeline"):
-            logger.debug(f"MQTT ACL: bridge service publish to {topic} allowed")
-            return HttpResponse(status=200)
-        # Bridge can publish to command topics (to control scanners from API)
-        if is_publish and topic.startswith(f"{topic_prefix}/commands/"):
-            logger.debug(f"MQTT ACL: bridge service publish to {topic} allowed")
-            return HttpResponse(status=200)
-        logger.warning(f"MQTT ACL: bridge service access to {topic} (acc={acc}) denied")
-        return HttpResponse(status=403)
-
-    # Check if this is a user
-    try:
-        from uuid import UUID
-        mqtt_uuid = UUID(username)
-        is_user = UserMQTTCredentials.objects.filter(mqtt_id=mqtt_uuid).exists()
-        logger.debug(f"MQTT ACL: UUID lookup for {username}: is_user={is_user}")
-        if is_user:
-            # Users can subscribe to all topics
-            if is_subscribe:
-                logger.debug(f"MQTT ACL: user {username[:8]}... subscribe to {topic} allowed")
-                return HttpResponse(status=200)
-            # Users can publish to command topics (to control scanners)
-            if is_publish and f"{topic_prefix}/commands/" in topic:
-                logger.debug(f"MQTT ACL: user {username[:8]}... publish to {topic} allowed")
-                return HttpResponse(status=200)
-            logger.debug(f"MQTT ACL: user {username[:8]}... publish to {topic} denied")
-            return HttpResponse(status=403)
-    except (ValueError, TypeError) as e:
-        logger.debug(f"MQTT ACL: UUID parse error for {username}: {e}")
-
-    # Check if this is a scanner
-    try:
-        is_scanner = Scanner.objects.filter(id=username).exists()
-    except Exception:
-        is_scanner = False
-
-    if is_scanner:
-        # Scanners can:
-        # - Publish to their own topics: spectrum/scanners/{their-uuid}/#
-        # - Subscribe to command topics: spectrum/commands/{their-uuid}/#
-        scanner_topic_prefix = f"{topic_prefix}/scanners/{username}/"
-        command_topic_prefix = f"{topic_prefix}/commands/{username}/"
-
-        if is_publish:
-            if topic.startswith(scanner_topic_prefix):
-                logger.debug(f"MQTT ACL: scanner {username[:8]}... publish to {topic} allowed")
-                return HttpResponse(status=200)
-        elif is_subscribe:
-            if topic.startswith(command_topic_prefix) or topic.startswith(scanner_topic_prefix):
-                logger.debug(f"MQTT ACL: scanner {username[:8]}... subscribe to {topic} allowed")
-                return HttpResponse(status=200)
-
-    logger.warning(f"MQTT ACL: {username[:8]}... access to {topic} (acc={acc}) denied")
-    return HttpResponse(status=403)
-
-
-@csrf_exempt
-@api_view(['POST'])
-@permission_classes([AllowAny])
-def mqtt_superuser(request):
-    """Check if user is MQTT superuser.
-
-    Called by mosquitto-go-auth plugin. We don't use superusers.
-
-    Returns:
-    - 403 Forbidden: No superusers
-    """
-    return HttpResponse(status=403)
-
-
 @api_view(['GET'])
 def mqtt_credentials(request):
     """Get MQTT credentials for the current user.
 
     Returns the user's MQTT credentials, creating them if they don't exist.
+    Also lazily provisions the user's dynsec client and roles.
     User must be authenticated.
     """
     if not request.user.is_authenticated:
@@ -631,6 +457,15 @@ def mqtt_credentials(request):
     creds, created = UserMQTTCredentials.objects.get_or_create(user=request.user)
     if created:
         logger.info(f"Created MQTT credentials for user {request.user.username}")
+
+    # Lazily provision dynsec client and sync roles
+    try:
+        from realtime.dynsec import get_dynsec_client, sync_user_roles
+        dynsec = get_dynsec_client()
+        access_id = request.session.get('access_id')
+        sync_user_roles(request.user, dynsec, access_id=access_id)
+    except Exception as e:
+        logger.error(f"Dynsec sync failed for {request.user.username}: {e}")
 
     return Response({
         'username': str(creds.mqtt_id),
