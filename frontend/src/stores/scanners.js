@@ -87,19 +87,20 @@ export const useScannersStore = defineStore('scanners', () => {
     }
 
     const mqttUrl = getMqttUrl()
-    logger.debug('Connecting to MQTT:', mqttUrl)
+    logger.info('MQTT connecting to:', mqttUrl, 'as', credentials.username)
 
     client = mqtt.connect(mqttUrl, {
       clientId: `spectrum-frontend-${Math.random().toString(16).substring(2, 10)}`,
       username: credentials.username,
       password: credentials.password,
       clean: true,
+      keepalive: 15,
       reconnectPeriod: 2000,
       connectTimeout: 10000,
     })
 
     client.on('connect', () => {
-      logger.debug('MQTT connected')
+      logger.info('MQTT connected')
       connected.value = true
 
       // Start the global tick timer
@@ -143,18 +144,30 @@ export const useScannersStore = defineStore('scanners', () => {
     })
 
     client.on('close', () => {
-      logger.debug('MQTT disconnected')
+      logger.info('MQTT disconnected')
       connected.value = false
     })
 
     client.on('error', (error) => {
-      logger.error('MQTT error:', error)
+      logger.error('MQTT error:', error.message || error, error.code || '')
       lastError.value = { message: `MQTT: ${error.message || error}`, timestamp: Date.now() }
     })
 
     client.on('reconnect', () => {
-      logger.debug('MQTT reconnecting...')
+      logger.info('MQTT reconnecting...')
       lastError.value = { message: 'MQTT reconnecting...', timestamp: Date.now() }
+    })
+
+    client.on('offline', () => {
+      logger.info('MQTT offline')
+    })
+
+    // iOS Safari freezes WebSockets when backgrounded — force reconnect on resume
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && client && !client.connected) {
+        logger.debug('Page visible, MQTT disconnected — forcing reconnect')
+        client.reconnect()
+      }
     })
   }
 

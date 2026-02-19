@@ -24,7 +24,8 @@ class DynSecClient:
     """Synchronous client for Mosquitto's Dynamic Security plugin."""
 
     def __init__(self):
-        self._client = mqtt.Client(client_id='spectrum-dynsec-admin')
+        import uuid
+        self._client = mqtt.Client(client_id=f'spectrum-dynsec-{uuid.uuid4().hex[:8]}')
         self._client.username_pw_set(
             settings.MQTT_DYNSEC_USERNAME,
             settings.MQTT_DYNSEC_PASSWORD,
@@ -101,7 +102,8 @@ class DynSecClient:
 
     # ── Client operations ──
 
-    def create_client(self, username: str, password: str, roles: list[dict] | None = None):
+    def create_client(self, username: str, password: str, roles: list[dict] | None = None,
+                      update_password: bool = False):
         cmd = {
             'command': 'createClient',
             'username': username,
@@ -111,8 +113,10 @@ class DynSecClient:
             cmd['roles'] = roles
         resp = self._send_command(cmd)
         if resp.get('error') == 'Client already exists':
-            self.set_client_password(username, password)
-            # Ensure desired roles are assigned (idempotent)
+            # Only update password when explicitly requested (token regeneration).
+            # setClientPassword disconnects existing sessions.
+            if update_password:
+                self.set_client_password(username, password)
             if roles:
                 for role in roles:
                     self.add_client_role(username, role['rolename'], role.get('priority', -1))
@@ -280,7 +284,7 @@ def ensure_bridge_client(dynsec: DynSecClient):
     )
 
 
-def ensure_scanner_roles(dynsec: DynSecClient, scanner):
+def ensure_scanner_roles(dynsec: DynSecClient, scanner, update_password: bool = False):
     """Create per-scanner roles and device client.
 
     If the scanner is disabled, deletes its dynsec client (preventing
@@ -299,6 +303,7 @@ def ensure_scanner_roles(dynsec: DynSecClient, scanner):
             sid,
             scanner.auth_token,
             roles=[{'rolename': f'scanner-device-{sid}', 'priority': -1}],
+            update_password=update_password,
         )
     else:
         # Disabled scanner — remove its MQTT client so it can't connect
@@ -340,8 +345,8 @@ def sync_user_roles(user, dynsec: DynSecClient, access_id: str | None = None):
     creds, created = UserMQTTCredentials.objects.get_or_create(user=user)
     mqtt_username = str(creds.mqtt_id)
 
-    # Ensure client exists
-    dynsec.create_client(mqtt_username, creds.auth_token)
+    # Ensure client exists (only set password on first creation)
+    dynsec.create_client(mqtt_username, creds.auth_token, update_password=created)
 
     # Inactive users get all managed roles removed
     if not user.is_active:

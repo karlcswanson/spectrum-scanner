@@ -37,11 +37,11 @@ def _get_dynsec():
 
 # ── Background work functions (run in executor) ──
 
-def _do_scanner_sync(scanner_id):
+def _do_scanner_sync(scanner_id, update_password=False):
     from realtime.dynsec import ensure_scanner_roles
     scanner = Scanner.objects.get(pk=scanner_id)
     dynsec = _get_dynsec()
-    ensure_scanner_roles(dynsec, scanner)
+    ensure_scanner_roles(dynsec, scanner, update_password=update_password)
     logger.info(f'DynSec: synced scanner {scanner.name} ({scanner.id})')
 
 
@@ -112,7 +112,8 @@ def on_scanner_save(sender, instance, created, **kwargs):
         STATUS_FIELDS = {'online', 'last_seen', 'scanning', 'current_band'}
         if set(update_fields) <= STATUS_FIELDS:
             return
-    _dispatch(_do_scanner_sync, instance.pk)
+    password_changed = update_fields is not None and 'auth_token' in update_fields
+    _dispatch(_do_scanner_sync, instance.pk, update_password=password_changed or created)
 
 
 def on_scanner_delete(sender, instance, **kwargs):
