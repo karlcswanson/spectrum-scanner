@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, onBeforeUnmount, computed, ref, watch } from 'vue'
+import { onMounted, onUnmounted, computed, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useScannersStore } from '../stores/scanners'
 import { useAuthStore } from '../stores/auth'
@@ -77,12 +77,16 @@ watch(settings, (newSettings) => {
   gainMode.value = mode || 'manual'
 }, { immediate: true })
 
-onMounted(() => {
-  store.subscribe(scannerId.value)
-})
+// Subscribe to MQTT for this scanner (lazy: only while viewing)
+let subscribedId = null
 
-onBeforeUnmount(() => {
-  store.unsubscribe(scannerId.value)
+watch(scannerId, (newId, oldId) => {
+  if (oldId) store.unsubscribe(oldId)
+  if (newId) { store.subscribe(newId); subscribedId = newId }
+}, { immediate: true })
+
+onUnmounted(() => {
+  if (subscribedId) store.unsubscribe(subscribedId)
 })
 </script>
 

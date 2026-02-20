@@ -17,3 +17,6 @@ export * from './scanApi.js'
 
 // Logging utility
 export { logger } from './logger.js'
+
+// MQTT client
+export { MqttClient, TOPIC_PREFIX } from './mqttClient.js'

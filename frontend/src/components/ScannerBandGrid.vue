@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, ref, watch, onUnmounted } from 'vue'
 import { useScannersStore } from '../stores/scanners'
 import { SCRUBBER_HOURS } from '../constants'
 import ScannerHeader from './ScannerHeader.vue'
@@ -15,6 +15,29 @@ const props = defineProps({
 })
 
 const store = useScannersStore()
+
+// --- MQTT subscription management (subscribe on view, unsubscribe on hide) ---
+const subscribedIds = new Set()
+
+watch(
+  () => props.scanners.map(s => s.id),
+  (newIds, oldIds = []) => {
+    const newSet = new Set(newIds)
+    const oldSet = new Set(oldIds)
+    for (const id of newSet) {
+      if (!oldSet.has(id)) { store.subscribe(id); subscribedIds.add(id) }
+    }
+    for (const id of oldSet) {
+      if (!newSet.has(id)) { store.unsubscribe(id); subscribedIds.delete(id) }
+    }
+  },
+  { immediate: true }
+)
+
+onUnmounted(() => {
+  for (const id of subscribedIds) store.unsubscribe(id)
+  subscribedIds.clear()
+})
 
 // Track which bands are selected for overlay comparison
 // Key format: "scannerId:bandName"

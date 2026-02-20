@@ -225,9 +225,10 @@ function draw() {
 
   const rect = container.value.getBoundingClientRect()
   const width = rect.width
+  if (width < 1) return // Not laid out yet (e.g. hidden or initial mount on mobile)
   const height = props.height
   const margin = { top: 5, right: 50, bottom: 25, left: 15 }
-  const plotWidth = width - margin.left - margin.right
+  const plotWidth = Math.max(1, width - margin.left - margin.right)
   const plotHeight = height - margin.top - margin.bottom
 
   const svg = d3.select(svgRef.value)
@@ -296,7 +297,7 @@ function draw() {
     densityBar.selectAll('*').remove()
 
     // Create bins for density calculation
-    const numBins = Math.min(plotWidth / 4, 100) // 4px per bin minimum
+    const numBins = Math.max(1, Math.floor(Math.min(plotWidth / 4, 100)))
     const binWidth = plotWidth / numBins
     const rawBins = new Array(numBins).fill(0)
     const summaryBins = new Array(numBins).fill(0)
