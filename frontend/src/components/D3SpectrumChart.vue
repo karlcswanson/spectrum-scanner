@@ -211,6 +211,7 @@ let chartCache = {
   plotHeight: 0,
   lineGenerator: null,
   zoomBehavior: null,
+  isNarrow: false,
 }
 
 // Build or rebuild the chart structure (axes, grid, etc.)
@@ -220,7 +221,13 @@ function buildChartStructure() {
   const rect = container.value.getBoundingClientRect()
   const width = rect.width
   const height = props.height
-  const margin = { top: 20, right: 50, bottom: 50, left: 55 }
+  const isNarrow = width < 500
+  const margin = {
+    top: isNarrow ? 15 : 20,
+    right: isNarrow ? 15 : 50,
+    bottom: isNarrow ? 35 : 50,
+    left: isNarrow ? 35 : 55,
+  }
   const plotWidth = width - margin.left - margin.right
   const plotHeight = height - margin.top - margin.bottom
 
@@ -325,28 +332,30 @@ function buildChartStructure() {
   // Channel labels (redrawn on zoom)
   const channelGroup = chart.append('g')
     .attr('class', 'channel-labels')
-    .attr('transform', `translate(0,${plotHeight + 28})`)
+    .attr('transform', `translate(0,${plotHeight + (isNarrow ? 20 : 28)})`)
 
   drawXAxis(xAxisGroup, channelGroup, xScale, plotWidth, startMHz, stopMHz, atscChannels, wifi24Channels, isUHF, isWifi24)
 
   // Y-axis
   const yAxisGroup = chart.append('g')
-  yAxisGroup.call(d3.axisLeft(yScale).tickValues(d3.range(minDb, maxDb + 1, dbStep)).tickFormat(d => `${d}`))
-  yAxisGroup.selectAll('text').attr('fill', '#666').style('font-size', '10px')
+  const axisFontSize = isNarrow ? '8px' : '10px'
+  const yTickStep = isNarrow ? 30 : dbStep
+  yAxisGroup.call(d3.axisLeft(yScale).tickValues(d3.range(minDb, maxDb + 1, yTickStep)).tickFormat(d => `${d}`))
+  yAxisGroup.selectAll('text').attr('fill', '#666').style('font-size', axisFontSize)
   yAxisGroup.selectAll('line').attr('stroke', '#666')
   yAxisGroup.select('.domain').attr('stroke', '#666')
 
   // Axis labels
   chart.append('text')
     .attr('transform', 'rotate(-90)')
-    .attr('x', -plotHeight / 2).attr('y', -40)
+    .attr('x', -plotHeight / 2).attr('y', isNarrow ? -25 : -40)
     .attr('text-anchor', 'middle').attr('fill', '#666')
-    .style('font-size', '10px').text('dBm')
+    .style('font-size', axisFontSize).text('dBm')
 
   chart.append('text')
-    .attr('x', plotWidth / 2).attr('y', plotHeight + 42)
+    .attr('x', plotWidth / 2).attr('y', plotHeight + (isNarrow ? 28 : 42))
     .attr('text-anchor', 'middle').attr('fill', '#666')
-    .style('font-size', '10px').text('MHz')
+    .style('font-size', axisFontSize).text('MHz')
 
   // Traces group - clipped to plot area so zoomed traces don't bleed
   chart.append('g').attr('class', 'traces')
@@ -416,7 +425,7 @@ function buildChartStructure() {
   })
 
   // Update cache
-  chartCache = { width, height, startHz, stopHz, xScale, xScaleBase, yScale, margin, plotWidth, plotHeight, lineGenerator, zoomBehavior }
+  chartCache = { width, height, startHz, stopHz, xScale, xScaleBase, yScale, margin, plotWidth, plotHeight, lineGenerator, zoomBehavior, isNarrow }
 
   // Setup mouse handlers
   setupMouseHandlers()
@@ -487,12 +496,13 @@ function drawXAxis(xAxisGroup, channelGroup, xScale, plotWidth, startMHz, stopMH
     })
     xAxisGroup.call(d3.axisBottom(xScale).tickValues(tickValues).tickFormat(d => (d / 1e6).toFixed(0)))
 
+    const chFontSize = chartCache.isNarrow ? '7px' : '9px'
     atscChannels.forEach(ch => {
       const x = xScale(ch.center * 1e6)
       if (x > 10 && x < plotWidth - 10) {
         channelGroup.append('text')
           .attr('x', x).attr('y', 0).attr('text-anchor', 'middle')
-          .attr('fill', '#00d4ff').style('font-size', '9px').text(ch.num)
+          .attr('fill', '#00d4ff').style('font-size', chFontSize).text(ch.num)
       }
     })
   } else if (isWifi24) {
@@ -503,6 +513,7 @@ function drawXAxis(xAxisGroup, channelGroup, xScale, plotWidth, startMHz, stopMH
     })
     xAxisGroup.call(d3.axisBottom(xScale).tickValues(tickValues).tickFormat(d => (d / 1e6).toFixed(0)))
 
+    const wiFontSize = chartCache.isNarrow ? '7px' : '9px'
     wifi24Channels.forEach(ch => {
       const x = xScale(ch.center * 1e6)
       if (x > 10 && x < plotWidth - 10) {
@@ -510,14 +521,16 @@ function drawXAxis(xAxisGroup, channelGroup, xScale, plotWidth, startMHz, stopMH
           .attr('x', x).attr('y', 0).attr('text-anchor', 'middle')
           .attr('fill', ch.primary ? '#22c55e' : '#666')
           .attr('font-weight', ch.primary ? 'bold' : 'normal')
-          .style('font-size', '9px').text(ch.num)
+          .style('font-size', wiFontSize).text(ch.num)
       }
     })
   } else {
-    xAxisGroup.call(d3.axisBottom(xScale).ticks(10).tickFormat(d => (d / 1e6).toFixed(1)))
+    const tickCount = chartCache.isNarrow ? 5 : 10
+    xAxisGroup.call(d3.axisBottom(xScale).ticks(tickCount).tickFormat(d => (d / 1e6).toFixed(1)))
   }
 
-  xAxisGroup.selectAll('text').attr('fill', '#666').style('font-size', '10px')
+  const xFontSize = chartCache.isNarrow ? '8px' : '10px'
+  xAxisGroup.selectAll('text').attr('fill', '#666').style('font-size', xFontSize)
   xAxisGroup.selectAll('line').attr('stroke', '#666')
   xAxisGroup.select('.domain').attr('stroke', '#666')
 }

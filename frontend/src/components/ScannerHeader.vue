@@ -81,29 +81,29 @@ watch(settings, (newSettings) => {
 <template>
   <div class="bg-gray-800 rounded-lg overflow-hidden">
     <!-- Main header bar -->
-    <div class="p-4 flex items-center justify-between">
-      <div class="flex items-center gap-4">
+    <div class="px-3 py-2 sm:p-4 flex flex-wrap items-center justify-between gap-2">
+      <div class="flex items-center gap-2 sm:gap-4 min-w-0">
         <!-- Scanner name as link to detail page -->
         <router-link
           :to="`/scanner/${scanner.id}`"
-          class="text-lg font-semibold hover:text-cyan-400 transition-colors"
+          class="text-base sm:text-lg font-semibold hover:text-cyan-400 transition-colors truncate"
         >
           {{ scanner.name }}
         </router-link>
-        <span v-if="scanner.location" class="text-gray-400 text-sm">
+        <span v-if="scanner.location" class="text-gray-400 text-xs sm:text-sm hidden sm:inline">
           {{ scanner.location }}
         </span>
         <!-- Status badge -->
-        <div class="flex items-center gap-2">
-          <span class="w-2 h-2 rounded-full" :class="statusColor"></span>
-          <span class="text-sm text-gray-400">{{ statusText }}</span>
-          <span v-if="scanner.scanning && scanner.current_band" class="text-sm text-gray-500">
+        <div class="flex items-center gap-1.5">
+          <span class="w-2 h-2 rounded-full shrink-0" :class="statusColor"></span>
+          <span class="text-xs sm:text-sm text-gray-400">{{ statusText }}</span>
+          <span v-if="scanner.scanning && scanner.current_band" class="text-xs sm:text-sm text-gray-500 hidden sm:inline">
             ({{ scanner.current_band }})
           </span>
         </div>
       </div>
 
-      <div class="flex items-center gap-3">
+      <div class="flex items-center gap-2 sm:gap-3">
         <!-- Start/Stop button (hidden for readonly) -->
         <template v-if="canWrite">
           <button
@@ -140,8 +140,8 @@ watch(settings, (newSettings) => {
     </div>
 
     <!-- Collapsible settings panel -->
-    <div v-if="showSettings && canWrite" class="border-t border-gray-700 p-4 bg-gray-850">
-      <div class="grid md:grid-cols-2 gap-6">
+    <div v-if="showSettings && canWrite" class="border-t border-gray-700 px-3 py-3 sm:p-4 bg-gray-850">
+      <div class="grid md:grid-cols-2 gap-4 sm:gap-6">
         <!-- Bands section -->
         <div>
           <h4 class="text-sm font-medium text-gray-300 mb-3">Bands</h4>

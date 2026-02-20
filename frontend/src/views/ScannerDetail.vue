@@ -100,8 +100,8 @@ onUnmounted(() => {
 
     <div v-if="scanner" class="space-y-6">
       <!-- Scanner Info & Controls -->
-      <div class="bg-gray-800 rounded-lg p-6">
-        <div class="flex justify-between items-start">
+      <div class="bg-gray-800 rounded-lg p-3 sm:p-6">
+        <div class="flex flex-col sm:flex-row sm:justify-between sm:items-start gap-3">
           <div>
             <h1 class="text-2xl font-bold mb-2">{{ scanner.name }}</h1>
             <div class="text-gray-400">
@@ -148,7 +148,7 @@ onUnmounted(() => {
             <span class="transform transition-transform" :class="showDetails ? 'rotate-90' : ''">&#9654;</span>
             Scanner Details
           </button>
-          <div v-if="showDetails" class="mt-3 grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+          <div v-if="showDetails" class="mt-3 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4 text-sm">
             <div>
               <span class="text-gray-500">Scanner ID</span>
               <p class="font-mono text-xs text-gray-300 break-all">{{ scannerId }}</p>
@@ -182,7 +182,7 @@ onUnmounted(() => {
       </div>
 
       <!-- Band Selection (hidden for readonly users) -->
-      <div v-if="canWrite && allBands.length > 0" class="bg-gray-800 rounded-lg p-6">
+      <div v-if="canWrite && allBands.length > 0" class="bg-gray-800 rounded-lg p-3 sm:p-6">
         <h3 class="text-lg font-semibold text-cyan-400 mb-3">Bands</h3>
         <div class="flex flex-wrap gap-3">
           <label
@@ -206,11 +206,11 @@ onUnmounted(() => {
       </div>
 
       <!-- Gain Settings (hidden for readonly users) -->
-      <div v-if="canWrite" class="bg-gray-800 rounded-lg p-6">
+      <div v-if="canWrite" class="bg-gray-800 rounded-lg p-3 sm:p-6">
         <h3 class="text-lg font-semibold text-cyan-400 mb-3">Gain Settings</h3>
-        <div class="space-y-4">
-          <div class="flex items-center gap-4">
-            <label class="text-gray-400 w-28">RX Gain (dB)</label>
+        <div class="space-y-3 sm:space-y-4">
+          <div class="flex items-center gap-2 sm:gap-4">
+            <label class="text-gray-400 text-sm sm:text-base w-20 sm:w-28 shrink-0">RX Gain (dB)</label>
             <input
               type="range"
               v-model.number="gainValue"
@@ -226,11 +226,11 @@ onUnmounted(() => {
               class="w-20 px-2 py-1 bg-gray-900 border border-gray-600 rounded text-center"
             />
           </div>
-          <div class="flex items-center gap-4">
-            <label class="text-gray-400 w-28">Gain Mode</label>
+          <div class="flex items-center gap-2 sm:gap-4">
+            <label class="text-gray-400 text-sm sm:text-base w-20 sm:w-28 shrink-0">Gain Mode</label>
             <select
               v-model="gainMode"
-              class="flex-1 max-w-xs px-3 py-2 bg-gray-900 border border-gray-600 rounded"
+              class="flex-1 max-w-xs px-2 sm:px-3 py-2 bg-gray-900 border border-gray-600 rounded text-sm sm:text-base"
             >
               <option value="manual">Manual (recommended)</option>
               <option value="slow_attack">Slow Attack (AGC)</option>

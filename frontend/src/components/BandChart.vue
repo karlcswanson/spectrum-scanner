@@ -63,6 +63,14 @@ const store = useScannersStore()
 const chartRef = ref(null)
 const spectrogramRef = ref(null)
 
+// Responsive chart height — smaller on phone-sized screens
+const responsiveHeight = computed(() => {
+  if (typeof window !== 'undefined' && window.innerWidth < 500) {
+    return Math.min(props.height, 200)
+  }
+  return props.height
+})
+
 // Trace display modes
 const showCurrent = ref(true)
 const showAverage = ref(false)
@@ -464,7 +472,7 @@ watch(() => props.band.name, async () => {
     class="bg-gray-800 rounded-lg p-2 sm:p-4 transition-all"
     :class="selected ? 'ring-2 ring-cyan-500' : ''"
   >
-    <div class="flex flex-col gap-2 sm:flex-row sm:justify-between sm:items-start mb-3">
+    <div class="flex flex-wrap items-start justify-between gap-x-3 gap-y-1 mb-3">
       <div class="flex items-start gap-2 sm:gap-3 min-w-0">
         <!-- Selection checkbox -->
         <label v-if="selectable" class="flex items-center mt-1 cursor-pointer">
@@ -493,7 +501,7 @@ watch(() => props.band.name, async () => {
         </div>
       </div>
 
-      <div class="flex items-center gap-2 flex-wrap">
+      <div class="flex items-center gap-2 flex-wrap ml-auto">
         <!-- Trace mode toggles -->
         <div class="flex items-center gap-2 text-xs">
           <label class="flex items-center gap-1 cursor-pointer">
@@ -534,7 +542,7 @@ watch(() => props.band.name, async () => {
       ref="chartRef"
       :traces="traces"
       :band="band"
-      :height="height"
+      :height="responsiveHeight"
       :show-current="showCurrent"
       :show-average="showAverage"
       :show-peak="showPeak"
@@ -556,12 +564,21 @@ watch(() => props.band.name, async () => {
       >
         <span class="text-[10px]">{{ showSpectrogram ? '&#9660;' : '&#9654;' }}</span>
         Waterfall
-        <span v-if="spectrogramLoading" class="text-gray-500">(loading...)</span>
       </button>
     </div>
 
-    <SpectrogramChart
-      v-if="showSpectrogram"
+    <div v-if="showSpectrogram" class="relative mt-1">
+      <!-- Loading overlay -->
+      <div
+        v-if="spectrogramLoading"
+        class="absolute inset-0 z-10 flex items-center justify-center bg-gray-900/60 rounded"
+      >
+        <svg class="animate-spin h-6 w-6 text-cyan-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+        </svg>
+      </div>
+      <SpectrogramChart
       ref="spectrogramRef"
       :band="band"
       :height="200"
@@ -572,11 +589,11 @@ watch(() => props.band.name, async () => {
       :cursor-freq="cursorFreqForSpectrogram"
       :highlight-time="highlightTime"
       :pinned-freqs="pinnedFreqs"
-      class="mt-1"
       @cursor-move="handleSpectrogramCursorMove"
       @select="handleSpectrogramSelect"
       @freq-pin="handleFreqPin"
     />
+    </div>
 
     <!-- Frequency time-series plot for pinned frequencies -->
     <FrequencyTimePlot

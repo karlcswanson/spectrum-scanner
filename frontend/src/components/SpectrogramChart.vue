@@ -58,6 +58,7 @@ const maxDb = -20
 const dbRange = maxDb - minDb
 
 // Match D3SpectrumChart left/right margins for x-axis alignment. No own x-axis.
+// Updated dynamically in buildAxes() for narrow screens.
 const margin = { top: 2, right: 50, bottom: 2, left: 55 }
 
 // Scan buffer: index 0 = oldest (top), index N-1 = newest (bottom)
@@ -272,6 +273,11 @@ function buildAxes() {
   const rect = container.value.getBoundingClientRect()
   const totalWidth = rect.width
   const totalHeight = props.height
+
+  // Responsive margins matching D3SpectrumChart
+  const isNarrow = totalWidth < 500
+  margin.left = isNarrow ? 35 : 55
+  margin.right = isNarrow ? 30 : 50
 
   plotWidth = totalWidth - margin.left - margin.right
   plotHeight = totalHeight - margin.top - margin.bottom

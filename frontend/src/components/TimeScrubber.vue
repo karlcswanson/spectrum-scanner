@@ -227,7 +227,8 @@ function draw() {
   const width = rect.width
   if (width < 1) return // Not laid out yet (e.g. hidden or initial mount on mobile)
   const height = props.height
-  const margin = { top: 5, right: 50, bottom: 25, left: 15 }
+  const isNarrow = width < 500
+  const margin = { top: 5, right: isNarrow ? 10 : 50, bottom: 25, left: isNarrow ? 5 : 15 }
   const plotWidth = Math.max(1, width - margin.left - margin.right)
   const plotHeight = height - margin.top - margin.bottom
 
@@ -285,7 +286,7 @@ function draw() {
     .call(xAxis)
     .selectAll('text')
     .attr('fill', '#666')
-    .style('font-size', '10px')
+    .style('font-size', isNarrow ? '8px' : '10px')
 
   chart.selectAll('.domain, .tick line')
     .attr('stroke', '#333')
@@ -571,7 +572,8 @@ const selectedTimeDisplay = computed(() => {
 
 <template>
   <div class="time-scrubber bg-gray-900 rounded p-2 relative">
-    <div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 mb-2">
+    <!-- Row 1: status left, Live button right -->
+    <div class="flex items-center justify-between gap-2 mb-1">
       <div class="flex items-center gap-2">
         <div class="text-xs text-gray-500">
           <span v-if="isLive" class="text-green-400 font-semibold">● LIVE</span>
@@ -583,39 +585,39 @@ const selectedTimeDisplay = computed(() => {
             (<span class="text-amber-500">{{ summaryCount }} avg</span>)
           </template>
         </span>
-        <button
-          @click="goLive"
-          class="px-3 py-1 rounded text-xs font-semibold transition-colors"
-          :class="isLive
-            ? 'bg-green-600 text-white'
-            : 'bg-gray-700 hover:bg-gray-600 text-gray-300'"
-        >
-          Live
-        </button>
       </div>
-      <!-- Time range selector -->
-      <div class="flex flex-wrap items-center gap-1">
-        <button
-          v-for="opt in timeRangeOptions"
-          :key="opt.hours"
-          @click="setTimeRange(opt.hours)"
-          class="px-1.5 py-0.5 rounded text-[11px] transition-colors"
-          :class="selectedRange === opt.hours && !isCustomRange
-            ? 'bg-cyan-600 text-white'
-            : 'bg-gray-800 hover:bg-gray-700 text-gray-400'"
-        >
-          {{ opt.label }}
-        </button>
-        <button
-          @click="toggleDatePicker"
-          class="px-1.5 py-0.5 rounded text-[11px] transition-colors"
-          :class="isCustomRange
-            ? 'bg-purple-600 text-white'
-            : 'bg-gray-800 hover:bg-gray-700 text-gray-400'"
-        >
-          Custom
-        </button>
-      </div>
+      <button
+        @click="goLive"
+        class="px-2.5 py-0.5 rounded text-[11px] font-semibold transition-colors shrink-0"
+        :class="isLive
+          ? 'bg-green-600 text-white'
+          : 'bg-gray-700 hover:bg-gray-600 text-gray-300'"
+      >
+        Live
+      </button>
+    </div>
+    <!-- Row 2: time range presets, right-aligned -->
+    <div class="flex flex-wrap justify-end gap-1 mb-2">
+      <button
+        v-for="opt in timeRangeOptions"
+        :key="opt.hours"
+        @click="setTimeRange(opt.hours)"
+        class="px-1.5 py-0.5 rounded text-[11px] transition-colors"
+        :class="selectedRange === opt.hours && !isCustomRange
+          ? 'bg-cyan-600 text-white'
+          : 'bg-gray-800 hover:bg-gray-700 text-gray-400'"
+      >
+        {{ opt.label }}
+      </button>
+      <button
+        @click="toggleDatePicker"
+        class="px-1.5 py-0.5 rounded text-[11px] transition-colors"
+        :class="isCustomRange
+          ? 'bg-purple-600 text-white'
+          : 'bg-gray-800 hover:bg-gray-700 text-gray-400'"
+      >
+        Custom
+      </button>
     </div>
 
     <!-- Custom date range picker -->

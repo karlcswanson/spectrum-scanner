@@ -36,6 +36,7 @@ const container = ref(null)
 const svgRef = ref(null)
 
 const margin = { top: 10, right: 50, bottom: 30, left: 55 }
+// Updated dynamically in buildStructure() for narrow screens
 const height = 150
 
 // Cached chart structure — built once, updated incrementally
@@ -125,6 +126,12 @@ function buildStructure() {
 
   const rect = container.value.getBoundingClientRect()
   const width = rect.width
+
+  // Responsive margins matching D3SpectrumChart
+  const isNarrow = width < 500
+  margin.left = isNarrow ? 35 : 55
+  margin.right = isNarrow ? 15 : 50
+
   const plotWidth = width - margin.left - margin.right
   const plotHeight = height - margin.top - margin.bottom
 
