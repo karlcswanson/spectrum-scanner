@@ -52,10 +52,31 @@ const canvasRef = ref(null)
 const svgRef = ref(null)
 const legendCanvas = ref(null)
 
-// dBm range for color mapping
-const minDb = -110
-const maxDb = -20
-const dbRange = maxDb - minDb
+// dBm range for color mapping (adjustable per-instance, persisted per band)
+const DEFAULT_MIN_DB = -110
+const DEFAULT_MAX_DB = -20
+
+function storageKey() {
+  return props.band?.name ? `wf-color:${props.band.name}` : null
+}
+
+function loadColorScale() {
+  const key = storageKey()
+  if (!key) return [DEFAULT_MIN_DB, DEFAULT_MAX_DB]
+  try {
+    const saved = JSON.parse(localStorage.getItem(key))
+    if (saved && typeof saved.min === 'number' && typeof saved.max === 'number') {
+      return [saved.min, saved.max]
+    }
+  } catch {}
+  return [DEFAULT_MIN_DB, DEFAULT_MAX_DB]
+}
+
+const [initMin, initMax] = loadColorScale()
+const colorMin = ref(initMin)
+const colorMax = ref(initMax)
+const dbRange = computed(() => colorMax.value - colorMin.value)
+const legendExpanded = ref(false)
 
 // Match D3SpectrumChart left/right margins for x-axis alignment. No own x-axis.
 // Updated dynamically in buildAxes() for narrow screens.
@@ -126,8 +147,8 @@ function buildViridis() {
 }
 
 function dbmToIndex(dbm) {
-  const clamped = Math.max(minDb, Math.min(maxDb, dbm))
-  return Math.round(((clamped - minDb) / dbRange) * 255)
+  const clamped = Math.max(colorMin.value, Math.min(colorMax.value, dbm))
+  return Math.round(((clamped - colorMin.value) / dbRange.value) * 255)
 }
 
 // Chart dimensions
@@ -195,7 +216,7 @@ function renderWaterfall() {
       const sampleIdx = (freqHz - scanHzLo) / scanHzPerSample
       let dbm
       if (sampleIdx < 0 || sampleIdx >= scanLen) {
-        dbm = minDb
+        dbm = colorMin.value
       } else {
         dbm = power[Math.round(sampleIdx)]
       }
@@ -234,7 +255,7 @@ function renderLiveRow(scan) {
     const sampleIdx = (freqHz - scanHzLo) / scanHzPerSample
     let dbm
     if (sampleIdx < 0 || sampleIdx >= scanLen) {
-      dbm = minDb
+      dbm = colorMin.value
     } else {
       dbm = power[Math.round(sampleIdx)]
     }
@@ -624,6 +645,16 @@ watch(() => props.isLive, () => {
   loadHistorical(props.historicalScans)
 })
 
+// Re-render when color scale range changes
+watch([colorMin, colorMax], () => {
+  renderWaterfall()
+  renderLegend()
+  const key = storageKey()
+  if (key) {
+    localStorage.setItem(key, JSON.stringify({ min: colorMin.value, max: colorMax.value }))
+  }
+})
+
 // Watch zoom changes from line chart
 watch(() => props.visibleRange, () => {
   const [renderStartHz, renderStopHz] = getEffectiveRange()
@@ -730,6 +761,12 @@ function handleResize() {
   drawOverlays()
 }
 
+function onDocumentClick(e) {
+  if (legendExpanded.value && container.value && !e.target.closest('.legend-panel')) {
+    legendExpanded.value = false
+  }
+}
+
 onMounted(() => {
   nextTick(() => {
     buildAxes()
@@ -742,21 +779,31 @@ onMounted(() => {
     resizeObserver = new ResizeObserver(() => handleResize())
     resizeObserver.observe(container.value)
   }
+  document.addEventListener('click', onDocumentClick)
 })
 
 onUnmounted(() => {
   if (resizeObserver) resizeObserver.disconnect()
+  document.removeEventListener('click', onDocumentClick)
 })
 
 // Color legend labels
 const legendLabels = computed(() => {
   const labels = []
-  const step = 30
-  for (let db = maxDb; db >= minDb; db -= step) {
+  const range = colorMax.value - colorMin.value
+  const step = Math.max(10, Math.round(range / 3 / 10) * 10)
+  for (let db = colorMax.value; db >= colorMin.value; db -= step) {
     labels.push(db)
   }
   return labels
 })
+
+function resetColorScale() {
+  colorMin.value = DEFAULT_MIN_DB
+  colorMax.value = DEFAULT_MAX_DB
+  const key = storageKey()
+  if (key) localStorage.removeItem(key)
+}
 </script>
 
 <template>
@@ -777,30 +824,67 @@ const legendLabels = computed(() => {
 
     <!-- Color scale legend (floats over waterfall plot area) -->
     <div
-      class="absolute flex items-center gap-0.5 rounded-sm pointer-events-none"
+      class="absolute rounded-sm legend-panel"
+      :class="legendExpanded ? 'legend-expanded' : ''"
       :style="{
         right: `${margin.right + 4}px`,
         top: `${margin.top + 4}px`,
-        height: `${Math.min(height - margin.top - margin.bottom - 8, 80)}px`,
-        background: 'rgba(10, 10, 26, 0.7)',
-        padding: '2px 3px',
+        background: 'rgba(10, 10, 26, 0.85)',
+        padding: legendExpanded ? '6px 8px' : '2px 3px',
       }"
+      @click.stop
     >
-      <div class="flex flex-col justify-between text-right h-full" style="width: 20px;">
-        <span
-          v-for="db in legendLabels"
-          :key="db"
-          class="text-gray-400 leading-none"
-          style="font-size: 7px;"
-        >{{ db }}</span>
+      <!-- Collapsed: gradient + labels (tap to expand) -->
+      <div
+        class="flex items-center gap-0.5 cursor-pointer"
+        :style="{ height: `${Math.min(height - margin.top - margin.bottom - 8, 80)}px` }"
+        @click="legendExpanded = !legendExpanded"
+      >
+        <div class="flex flex-col justify-between text-right h-full" style="width: 20px;">
+          <span
+            v-for="db in legendLabels"
+            :key="db"
+            class="text-gray-400 leading-none"
+            style="font-size: 7px;"
+          >{{ db }}</span>
+        </div>
+        <canvas
+          ref="legendCanvas"
+          class="h-full rounded-sm"
+          width="8"
+          :height="Math.min(height - margin.top - margin.bottom - 8, 80)"
+          style="image-rendering: pixelated; width: 8px;"
+        />
       </div>
-      <canvas
-        ref="legendCanvas"
-        class="h-full rounded-sm"
-        width="8"
-        :height="Math.min(height - margin.top - margin.bottom - 8, 80)"
-        style="image-rendering: pixelated; width: 8px;"
-      />
+
+      <!-- Expanded: sliders + reset -->
+      <div v-if="legendExpanded" class="legend-controls" @click.stop>
+        <label class="legend-slider-row">
+          <span class="legend-slider-label">Max</span>
+          <input
+            type="range"
+            :min="colorMin + 10"
+            max="-10"
+            :value="colorMax"
+            @input="colorMax = Number($event.target.value)"
+            class="legend-slider"
+          />
+          <span class="legend-slider-value">{{ colorMax }}</span>
+        </label>
+        <label class="legend-slider-row">
+          <span class="legend-slider-label">Min</span>
+          <input
+            type="range"
+            min="-130"
+            :max="colorMax - 10"
+            :value="colorMin"
+            @input="colorMin = Number($event.target.value)"
+            class="legend-slider"
+          />
+          <span class="legend-slider-value">{{ colorMin }}</span>
+        </label>
+        <button class="legend-reset" @click="resetColorScale">Reset</button>
+      </div>
     </div>
 
     <!-- Cursor tooltip -->
@@ -828,5 +912,62 @@ const legendLabels = computed(() => {
   -webkit-touch-callout: none;
   -webkit-user-select: none;
   user-select: none;
+}
+
+.legend-panel {
+  transition: padding 0.15s ease;
+  z-index: 10;
+}
+
+.legend-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+  min-width: 120px;
+}
+
+.legend-slider-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.legend-slider-label {
+  font-size: 8px;
+  color: #9ca3af;
+  width: 20px;
+  text-align: right;
+}
+
+.legend-slider {
+  flex: 1;
+  height: 14px;
+  accent-color: #06b6d4;
+  cursor: pointer;
+}
+
+.legend-slider-value {
+  font-size: 8px;
+  color: #67e8f9;
+  font-family: monospace;
+  width: 24px;
+  text-align: right;
+}
+
+.legend-reset {
+  font-size: 8px;
+  color: #9ca3af;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 3px;
+  padding: 1px 6px;
+  cursor: pointer;
+  align-self: flex-end;
+}
+
+.legend-reset:hover {
+  color: #e5e7eb;
+  background: rgba(255, 255, 255, 0.15);
 }
 </style>

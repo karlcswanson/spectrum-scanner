@@ -14,7 +14,7 @@ export const useScannersStore = defineStore('scanners', () => {
   const connected = ref(false)
   const lastError = ref(null)       // { message, timestamp } - most recent error
   const apiErrors = ref(0)          // Count of API errors (resets on success)
-  const soloState = ref({})         // { [scannerId]: { originalBands, soloBand } }
+  // Solo is computed: scanner has >1 band but only 1 enabled
 
   // Global tick for timeline redraws (updates every 500ms)
   const tick = ref(0)
@@ -130,13 +130,7 @@ export const useScannersStore = defineStore('scanners', () => {
     return !!ok
   }
 
-  let _soloBypass = false
-
   function sendBandsCommand(scannerId, bands) {
-    // Clear solo if an external caller (e.g. toggleBand) changes bands
-    if (!_soloBypass && soloState.value[scannerId]) {
-      delete soloState.value[scannerId]
-    }
     const topic = `${TOPIC_PREFIX}/commands/${scannerId}/bands`
     const payload = bands.map(b => ({
       name: b.name,
@@ -730,37 +724,22 @@ export const useScannersStore = defineStore('scanners', () => {
   function soloBand(scannerId, bandName) {
     const scanner = scanners.value[scannerId]
     if (!scanner?.bands) return
-    soloState.value[scannerId] = {
-      originalBands: scanner.bands.map(b => ({ name: b.name, enabled: b.enabled })),
-      soloBand: bandName,
-    }
     const bands = scanner.bands.map(b => ({ ...b, enabled: b.name === bandName }))
-    _soloBypass = true
     sendBandsCommand(scannerId, bands)
-    _soloBypass = false
   }
 
   function unsoloBand(scannerId) {
-    const saved = soloState.value[scannerId]
-    if (!saved) return
     const scanner = scanners.value[scannerId]
     if (!scanner?.bands) return
-    const bands = scanner.bands.map(b => {
-      const orig = saved.originalBands.find(o => o.name === b.name)
-      return { ...b, enabled: orig ? orig.enabled : b.enabled }
-    })
-    delete soloState.value[scannerId]
-    _soloBypass = true
+    const bands = scanner.bands.map(b => ({ ...b, enabled: true }))
     sendBandsCommand(scannerId, bands)
-    _soloBypass = false
   }
 
   function isSoloed(scannerId, bandName) {
-    return soloState.value[scannerId]?.soloBand === bandName
-  }
-
-  function getSoloState(scannerId) {
-    return soloState.value[scannerId] || null
+    const scanner = scanners.value[scannerId]
+    if (!scanner?.bands || scanner.bands.length <= 1) return false
+    const enabledBands = scanner.bands.filter(b => b.enabled)
+    return enabledBands.length === 1 && enabledBands[0].name === bandName
   }
 
   return {
@@ -800,10 +779,8 @@ export const useScannersStore = defineStore('scanners', () => {
     sendBandsCommand,
     sendGainCommand,
     // Solo band
-    soloState,
     soloBand,
     unsoloBand,
     isSoloed,
-    getSoloState,
   }
 })
