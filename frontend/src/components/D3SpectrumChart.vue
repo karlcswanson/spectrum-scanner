@@ -197,6 +197,37 @@ function getWifi24Channels(startMHz, stopMHz) {
   return channels
 }
 
+// DECT carriers — 1.728 MHz spacing on the ETSI grid
+// Works for: EU (1880-1900), US/UPCS (1920-1930), Brazil (1910-1920),
+// Japan (1893-1906), and expanded bands (e.g. EU+US 1880-1930)
+function getDECTChannels(startMHz, stopMHz) {
+  // Only activate for bands overlapping the DECT range (1880-1935 MHz)
+  const dectLo = 1880
+  const dectHi = 1935
+  if (startMHz > dectHi || stopMHz < dectLo) return []
+
+  const spacing = 1.728
+  const gridBase = 1881.792 // ETSI carrier 9 center (lowest EU carrier)
+  const channels = []
+
+  // Clamp search to the DECT range
+  const lo = Math.max(startMHz, dectLo)
+  const hi = Math.min(stopMHz, dectHi)
+
+  const firstN = Math.ceil((lo - gridBase + spacing / 2) / spacing)
+  const lastN = Math.floor((hi - gridBase - spacing / 2) / spacing)
+
+  for (let n = firstN; n <= lastN; n++) {
+    const center = gridBase + n * spacing
+    const cLo = center - spacing / 2
+    const cHi = center + spacing / 2
+    if (cHi > startMHz && cLo < stopMHz) {
+      channels.push({ num: channels.length + 1, center, lo: cLo, hi: cHi })
+    }
+  }
+  return channels
+}
+
 // Cache for chart structure
 let chartCache = {
   width: 0,
@@ -277,8 +308,10 @@ function buildChartStructure() {
 
   const atscChannels = getATSCChannels(startMHz, stopMHz)
   const wifi24Channels = getWifi24Channels(startMHz, stopMHz)
+  const dectChannels = getDECTChannels(startMHz, stopMHz)
   const isUHF = atscChannels.length > 0
   const isWifi24 = wifi24Channels.length >= 3
+  const isDECT = dectChannels.length >= 3
 
   const svg = d3.select(svgRef.value)
   svg.selectAll('*').remove()
@@ -313,7 +346,7 @@ function buildChartStructure() {
   const hGridGroup = gridGroup.append('g').attr('class', 'h-grid')
 
   // Vertical grid lines (will be redrawn on zoom)
-  drawVerticalGrid(vGridGroup, xScale, plotHeight, startMHz, stopMHz, atscChannels, wifi24Channels, isUHF, isWifi24)
+  drawVerticalGrid(vGridGroup, xScale, plotHeight, startMHz, stopMHz, atscChannels, wifi24Channels, dectChannels, isUHF, isWifi24, isDECT)
 
   // Horizontal grid (fixed, not affected by zoom)
   const dbStep = 20
@@ -334,7 +367,7 @@ function buildChartStructure() {
     .attr('class', 'channel-labels')
     .attr('transform', `translate(0,${plotHeight + (isNarrow ? 20 : 28)})`)
 
-  drawXAxis(xAxisGroup, channelGroup, xScale, plotWidth, startMHz, stopMHz, atscChannels, wifi24Channels, isUHF, isWifi24)
+  drawXAxis(xAxisGroup, channelGroup, xScale, plotWidth, startMHz, stopMHz, atscChannels, wifi24Channels, dectChannels, isUHF, isWifi24, isDECT)
 
   // Y-axis
   const yAxisGroup = chart.append('g')
@@ -435,7 +468,7 @@ function buildChartStructure() {
 }
 
 // Draw vertical grid lines for the given xScale
-function drawVerticalGrid(group, xScale, plotHeight, startMHz, stopMHz, atscChannels, wifi24Channels, isUHF, isWifi24) {
+function drawVerticalGrid(group, xScale, plotHeight, startMHz, stopMHz, atscChannels, wifi24Channels, dectChannels, isUHF, isWifi24, isDECT) {
   group.selectAll('*').remove()
   const spanMHz = stopMHz - startMHz
 
@@ -454,6 +487,30 @@ function drawVerticalGrid(group, xScale, plotHeight, startMHz, stopMHz, atscChan
           .attr('stroke', '#1a1a3e').attr('stroke-width', 1)
       }
     })
+  } else if (isDECT) {
+    dectChannels.forEach(ch => {
+      // Carrier boundary lines
+      group.append('line')
+        .attr('x1', xScale(ch.lo * 1e6)).attr('y1', 0)
+        .attr('x2', xScale(ch.lo * 1e6)).attr('y2', plotHeight)
+        .attr('stroke', '#2a1a3e').attr('stroke-width', 1)
+      // Subtle carrier fill on odd carriers for visual separation
+      if (ch.num % 2 === 0) {
+        group.append('rect')
+          .attr('x', xScale(ch.lo * 1e6)).attr('y', 0)
+          .attr('width', xScale(ch.hi * 1e6) - xScale(ch.lo * 1e6))
+          .attr('height', plotHeight)
+          .attr('fill', '#1a1a2e').attr('opacity', 0.4)
+      }
+    })
+    // Final boundary
+    const last = dectChannels[dectChannels.length - 1]
+    if (last) {
+      group.append('line')
+        .attr('x1', xScale(last.hi * 1e6)).attr('y1', 0)
+        .attr('x2', xScale(last.hi * 1e6)).attr('y2', plotHeight)
+        .attr('stroke', '#2a1a3e').attr('stroke-width', 1)
+    }
   } else if (isWifi24) {
     wifi24Channels.filter(ch => ch.primary).forEach(ch => {
       group.append('rect')
@@ -485,7 +542,7 @@ function drawVerticalGrid(group, xScale, plotHeight, startMHz, stopMHz, atscChan
 }
 
 // Draw x-axis ticks and channel labels for the given xScale
-function drawXAxis(xAxisGroup, channelGroup, xScale, plotWidth, startMHz, stopMHz, atscChannels, wifi24Channels, isUHF, isWifi24) {
+function drawXAxis(xAxisGroup, channelGroup, xScale, plotWidth, startMHz, stopMHz, atscChannels, wifi24Channels, dectChannels, isUHF, isWifi24, isDECT) {
   xAxisGroup.selectAll('*').remove()
   channelGroup.selectAll('*').remove()
 
@@ -504,6 +561,25 @@ function drawXAxis(xAxisGroup, channelGroup, xScale, plotWidth, startMHz, stopMH
         channelGroup.append('text')
           .attr('x', x).attr('y', 0).attr('text-anchor', 'middle')
           .attr('fill', '#00d4ff').style('font-size', chFontSize).text(ch.num)
+      }
+    })
+  } else if (isDECT) {
+    // Tick at each carrier boundary
+    const tickValues = []
+    dectChannels.forEach((ch, idx) => {
+      tickValues.push(ch.lo * 1e6)
+      if (idx === dectChannels.length - 1) tickValues.push(ch.hi * 1e6)
+    })
+    xAxisGroup.call(d3.axisBottom(xScale).tickValues(tickValues).tickFormat(d => (d / 1e6).toFixed(1)))
+
+    // Carrier number labels
+    const chFontSize = chartCache.isNarrow ? '7px' : '9px'
+    dectChannels.forEach(ch => {
+      const x = xScale(ch.center * 1e6)
+      if (x > 10 && x < plotWidth - 10) {
+        channelGroup.append('text')
+          .attr('x', x).attr('y', 0).attr('text-anchor', 'middle')
+          .attr('fill', '#a855f7').style('font-size', chFontSize).text(`C${ch.num}`)
       }
     })
   } else if (isWifi24) {
@@ -547,11 +623,13 @@ function updateAxisAndGrid() {
 
   const atscChannels = getATSCChannels(startMHz, stopMHz)
   const wifi24Channels = getWifi24Channels(startMHz, stopMHz)
+  const dectChannels = getDECTChannels(startMHz, stopMHz)
   const isUHF = atscChannels.length > 0
   const isWifi24 = wifi24Channels.length >= 3
+  const isDECT = dectChannels.length >= 3
 
-  drawVerticalGrid(svg.select('.v-grid'), xScale, plotHeight, startMHz, stopMHz, atscChannels, wifi24Channels, isUHF, isWifi24)
-  drawXAxis(svg.select('.x-axis'), svg.select('.channel-labels'), xScale, plotWidth, startMHz, stopMHz, atscChannels, wifi24Channels, isUHF, isWifi24)
+  drawVerticalGrid(svg.select('.v-grid'), xScale, plotHeight, startMHz, stopMHz, atscChannels, wifi24Channels, dectChannels, isUHF, isWifi24, isDECT)
+  drawXAxis(svg.select('.x-axis'), svg.select('.channel-labels'), xScale, plotWidth, startMHz, stopMHz, atscChannels, wifi24Channels, dectChannels, isUHF, isWifi24, isDECT)
 }
 
 // Update just the trace paths (fast path)
