@@ -55,6 +55,10 @@ const props = defineProps({
     type: Boolean,
     default: false,
   },
+  canWrite: {
+    type: Boolean,
+    default: false,
+  },
 })
 
 const emit = defineEmits(['update:selected'])
@@ -62,6 +66,8 @@ const emit = defineEmits(['update:selected'])
 const store = useScannersStore()
 const chartRef = ref(null)
 const spectrogramRef = ref(null)
+
+const soloed = computed(() => store.isSoloed(props.scannerId, props.band.name))
 
 // Responsive chart height — smaller on phone-sized screens
 const responsiveHeight = computed(() => {
@@ -470,7 +476,10 @@ watch(() => props.band.name, async () => {
 <template>
   <div
     class="bg-gray-800 rounded-lg p-2 sm:p-4 transition-all"
-    :class="selected ? 'ring-2 ring-cyan-500' : ''"
+    :class="[
+      selected ? 'ring-2 ring-cyan-500' : '',
+      !band.enabled ? 'border border-gray-700 opacity-60' : '',
+    ]"
   >
     <div class="flex flex-wrap items-start justify-between gap-x-3 gap-y-1 mb-3">
       <div class="flex items-start gap-2 sm:gap-3 min-w-0">
@@ -485,10 +494,18 @@ watch(() => props.band.name, async () => {
         </label>
 
         <div class="min-w-0">
-          <h2 class="text-base sm:text-lg font-semibold text-cyan-400">
-            {{ band.name }}
+          <h2 class="text-base sm:text-lg font-semibold">
+            <router-link
+              :to="`/scanner/${scannerId}/band/${band.name}`"
+              class="text-cyan-400 hover:text-cyan-300"
+            >
+              {{ band.name }}
+            </router-link>
             <span class="text-gray-500 font-normal text-xs sm:text-sm ml-1 sm:ml-2">
               ({{ freqRange }})
+            </span>
+            <span v-if="!band.enabled" class="text-gray-500 text-xs ml-1 sm:ml-2 bg-gray-700 px-1.5 py-0.5 rounded">
+              Disabled
             </span>
             <span v-if="!showingLive && activeScan" class="text-yellow-400 text-xs ml-1 sm:ml-2">
               Historical
@@ -524,6 +541,17 @@ watch(() => props.band.name, async () => {
             Reset
           </button>
         </div>
+
+        <button
+          v-if="canWrite"
+          @click="soloed ? store.unsoloBand(scannerId) : store.soloBand(scannerId, band.name)"
+          class="px-3 py-1.5 rounded text-xs font-semibold transition-colors"
+          :class="soloed
+            ? 'solo-flash hover:brightness-125 text-white'
+            : 'bg-gray-700 hover:bg-gray-600 text-gray-300'"
+        >
+          {{ soloed ? 'Clear Solo' : 'Solo' }}
+        </button>
 
         <button
           @click="exportCSV"
@@ -627,3 +655,14 @@ watch(() => props.band.name, async () => {
     />
   </div>
 </template>
+
+<style scoped>
+.solo-flash {
+  animation: solo-pulse 1s step-end infinite;
+}
+
+@keyframes solo-pulse {
+  0%, 50% { background-color: #ef4444; }
+  50.01%, 100% { background-color: #7f1d1d; }
+}
+</style>

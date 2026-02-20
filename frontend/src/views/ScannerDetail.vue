@@ -11,6 +11,7 @@ const store = useScannersStore()
 const auth = useAuthStore()
 
 const scannerId = computed(() => route.params.id)
+const bandNameParam = computed(() => route.params.bandName || null)
 const scanner = computed(() => store.scanners[scannerId.value])
 
 // Can the current user control this scanner?
@@ -28,8 +29,13 @@ const allBands = computed(() => {
 })
 
 // Get enabled bands from scanner config, sorted by frequency
+// When viewing a single band, filter to just that band
 const enabledBands = computed(() => {
-  return allBands.value.filter(b => b.enabled)
+  const enabled = allBands.value.filter(b => b.enabled)
+  if (bandNameParam.value) {
+    return enabled.filter(b => b.name === bandNameParam.value)
+  }
+  return enabled
 })
 
 // Settings from scanner config
@@ -93,7 +99,14 @@ onUnmounted(() => {
 <template>
   <div>
     <div class="mb-6">
-      <router-link to="/" class="text-blue-400 hover:text-blue-300">
+      <router-link
+        v-if="bandNameParam"
+        :to="`/scanner/${scannerId}`"
+        class="text-blue-400 hover:text-blue-300"
+      >
+        &larr; Back to all bands
+      </router-link>
+      <router-link v-else to="/" class="text-blue-400 hover:text-blue-300">
         &larr; Back to Dashboard
       </router-link>
     </div>
@@ -177,6 +190,50 @@ onUnmounted(() => {
               <span class="text-gray-500">Description</span>
               <p class="text-gray-300">{{ scanner.description }}</p>
             </div>
+
+            <!-- Gain Settings (inside details, hidden for readonly users) -->
+            <template v-if="canWrite">
+              <div class="col-span-full border-t border-gray-700 pt-3 mt-1">
+                <h4 class="text-sm font-semibold text-gray-400 mb-2">Gain Settings</h4>
+                <div class="space-y-3">
+                  <div class="flex items-center gap-2 sm:gap-4">
+                    <label class="text-gray-400 text-sm w-20 sm:w-28 shrink-0">RX Gain (dB)</label>
+                    <input
+                      type="range"
+                      v-model.number="gainValue"
+                      min="0"
+                      max="73"
+                      class="flex-1 max-w-xs accent-cyan-400"
+                    />
+                    <input
+                      type="number"
+                      v-model.number="gainValue"
+                      min="0"
+                      max="73"
+                      class="w-20 px-2 py-1 bg-gray-900 border border-gray-600 rounded text-center"
+                    />
+                  </div>
+                  <div class="flex items-center gap-2 sm:gap-4">
+                    <label class="text-gray-400 text-sm w-20 sm:w-28 shrink-0">Gain Mode</label>
+                    <select
+                      v-model="gainMode"
+                      class="flex-1 max-w-xs px-2 sm:px-3 py-2 bg-gray-900 border border-gray-600 rounded text-sm sm:text-base"
+                    >
+                      <option value="manual">Manual (recommended)</option>
+                      <option value="slow_attack">Slow Attack (AGC)</option>
+                      <option value="fast_attack">Fast Attack (AGC)</option>
+                      <option value="hybrid">Hybrid</option>
+                    </select>
+                  </div>
+                  <button
+                    @click="applyGain"
+                    class="px-4 py-2 bg-cyan-500 hover:bg-cyan-600 text-black font-semibold rounded"
+                  >
+                    Apply Gain
+                  </button>
+                </div>
+              </div>
+            </template>
           </div>
         </div>
       </div>
@@ -205,48 +262,6 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <!-- Gain Settings (hidden for readonly users) -->
-      <div v-if="canWrite" class="bg-gray-800 rounded-lg p-3 sm:p-6">
-        <h3 class="text-lg font-semibold text-cyan-400 mb-3">Gain Settings</h3>
-        <div class="space-y-3 sm:space-y-4">
-          <div class="flex items-center gap-2 sm:gap-4">
-            <label class="text-gray-400 text-sm sm:text-base w-20 sm:w-28 shrink-0">RX Gain (dB)</label>
-            <input
-              type="range"
-              v-model.number="gainValue"
-              min="0"
-              max="73"
-              class="flex-1 max-w-xs accent-cyan-400"
-            />
-            <input
-              type="number"
-              v-model.number="gainValue"
-              min="0"
-              max="73"
-              class="w-20 px-2 py-1 bg-gray-900 border border-gray-600 rounded text-center"
-            />
-          </div>
-          <div class="flex items-center gap-2 sm:gap-4">
-            <label class="text-gray-400 text-sm sm:text-base w-20 sm:w-28 shrink-0">Gain Mode</label>
-            <select
-              v-model="gainMode"
-              class="flex-1 max-w-xs px-2 sm:px-3 py-2 bg-gray-900 border border-gray-600 rounded text-sm sm:text-base"
-            >
-              <option value="manual">Manual (recommended)</option>
-              <option value="slow_attack">Slow Attack (AGC)</option>
-              <option value="fast_attack">Fast Attack (AGC)</option>
-              <option value="hybrid">Hybrid</option>
-            </select>
-          </div>
-          <button
-            @click="applyGain"
-            class="px-4 py-2 bg-cyan-500 hover:bg-cyan-600 text-black font-semibold rounded"
-          >
-            Apply Gain
-          </button>
-        </div>
-      </div>
-
       <!-- Per-Band Charts -->
       <div v-if="enabledBands.length > 0" class="space-y-6">
         <BandChart
@@ -259,6 +274,7 @@ onUnmounted(() => {
           :show-scanner="false"
           :show-timeline="true"
           :timeline-hours="SCRUBBER_HOURS"
+          :can-write="canWrite"
         />
       </div>
 

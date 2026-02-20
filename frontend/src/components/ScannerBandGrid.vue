@@ -1,6 +1,7 @@
 <script setup>
 import { computed, ref, watch, onUnmounted } from 'vue'
 import { useScannersStore } from '../stores/scanners'
+import { useAuthStore } from '../stores/auth'
 import { SCRUBBER_HOURS } from '../constants'
 import ScannerHeader from './ScannerHeader.vue'
 import BandChart from './BandChart.vue'
@@ -15,6 +16,13 @@ const props = defineProps({
 })
 
 const store = useScannersStore()
+const auth = useAuthStore()
+
+function canWriteScanner(scanner) {
+  if (auth.isReadonly) return false
+  if (auth.isStaff) return true
+  return scanner?.user_permission === 'rw'
+}
 
 // --- MQTT subscription management (subscribe on view, unsubscribe on hide) ---
 const subscribedIds = new Set()
@@ -48,7 +56,6 @@ const scannerBands = computed(() => {
   const result = []
   for (const scanner of props.scanners) {
     const bands = (scanner.bands || [])
-      .filter(b => b.enabled)
       .sort((a, b) => (Number(a.start_hz) || 0) - (Number(b.start_hz) || 0))
       .map(band => ({
         scannerId: scanner.id,
@@ -198,6 +205,7 @@ function clearSelection() {
             :timeline-hours="SCRUBBER_HOURS"
             :selectable="true"
             :selected="isSelected(item.key)"
+            :can-write="canWriteScanner(scanner)"
             @update:selected="toggleSelection(item.key)"
           />
         </div>

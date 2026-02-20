@@ -15,6 +15,7 @@ import { useAuthStore } from './stores/auth'
 
 const routes = [
   { path: '/', component: Dashboard, meta: { requiresAuth: true } },
+  { path: '/scanner/:id/band/:bandName', component: ScannerDetail, meta: { requiresAuth: true } },
   { path: '/scanner/:id', component: ScannerDetail, meta: { requiresAuth: true } },
   { path: '/login', component: Login, meta: { guest: true } },
 ]
