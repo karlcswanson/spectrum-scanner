@@ -85,21 +85,21 @@ const zoomRange = ref(null)
 
 // Shared cursor frequency between line chart and spectrogram
 const sharedCursorFreq = ref(null)
-let cursorSource = null // 'line' or 'spectrogram' — prevents feedback loops
+const cursorSource = ref(null) // 'line' or 'spectrogram' — prevents feedback loops
 
 function handleLineCursorMove(freqHz) {
-  cursorSource = 'line'
+  cursorSource.value = 'line'
   sharedCursorFreq.value = freqHz
 }
 
 function handleSpectrogramCursorMove(freqHz) {
-  cursorSource = 'spectrogram'
+  cursorSource.value = 'spectrogram'
   sharedCursorFreq.value = freqHz
 }
 
 // Cursor freq to pass to each chart (null when that chart owns the cursor)
-const cursorFreqForLine = computed(() => cursorSource === 'spectrogram' ? sharedCursorFreq.value : null)
-const cursorFreqForSpectrogram = computed(() => cursorSource === 'line' ? sharedCursorFreq.value : null)
+const cursorFreqForLine = computed(() => cursorSource.value === 'spectrogram' ? sharedCursorFreq.value : null)
+const cursorFreqForSpectrogram = computed(() => cursorSource.value === 'line' ? sharedCursorFreq.value : null)
 
 // Click spectrogram row → show that scan in line chart
 function handleSpectrogramSelect({ timestamp, scan }) {

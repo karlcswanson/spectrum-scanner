@@ -333,5 +333,8 @@ onUnmounted(() => {
 .frequency-time-plot {
   position: relative;
   touch-action: manipulation;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 </style>

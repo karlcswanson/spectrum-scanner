@@ -382,6 +382,7 @@ function buildChartStructure() {
   chart.append('rect').attr('class', 'mouse-overlay')
     .attr('width', plotWidth).attr('height', plotHeight)
     .attr('fill', 'transparent').attr('pointer-events', 'all')
+    .style('cursor', 'crosshair')
 
   // Line generator
   const lineGenerator = d3.line()
@@ -717,6 +718,17 @@ function updateLegend(traces) {
 // Track the last frequency we emitted so we can avoid reacting to our own prop update
 let lastEmittedCursorFreq = null
 
+// Look up the power (dBm) at a given frequency from the first visible trace
+function getPowerAtFreq(freqHz) {
+  const trace = getTracesForDraw()[0]
+  if (!trace?.scan?.power?.length) return null
+  const { hz_lo, hz_hi, power } = trace.scan
+  if (freqHz < hz_lo || freqHz > hz_hi) return null
+  const idx = Math.round(((freqHz - hz_lo) / (hz_hi - hz_lo)) * (power.length - 1))
+  if (idx < 0 || idx >= power.length) return null
+  return power[idx]
+}
+
 function setupMouseHandlers() {
   const svg = d3.select(svgRef.value)
   const mouseOverlay = svg.select('.mouse-overlay')
@@ -724,85 +736,112 @@ function setupMouseHandlers() {
   const cursorLineH = svg.select('.cursor-line-h')
   const cursorDot = svg.select('.cursor-dot')
 
-  function getPowerAtFreq(freqHz) {
-    const trace = getTracesForDraw()[0]
-    if (!trace?.scan?.power?.length) return null
-    const { hz_lo, hz_hi, power } = trace.scan
-    if (freqHz < hz_lo || freqHz > hz_hi) return null
-    const idx = Math.round(((freqHz - hz_lo) / (hz_hi - hz_lo)) * (power.length - 1))
-    if (idx < 0 || idx >= power.length) return null
-    return power[idx]
+  function clearCursor() {
+    cursorLineV.attr('opacity', 0)
+    cursorLineH.attr('opacity', 0)
+    cursorDot.attr('opacity', 0)
+    cursorInfo.value = null
+    lastEmittedCursorFreq = null
+    emit('cursor-move', null)
+  }
+
+  function showCrosshair(mx, freqHz) {
+    const freqMHz = freqHz / 1e6
+    const powerDbm = getPowerAtFreq(freqHz)
+    lastEmittedCursorFreq = freqHz
+    emit('cursor-move', freqHz)
+
+    cursorLineV.attr('x1', mx).attr('x2', mx).attr('opacity', 0.6)
+    if (powerDbm !== null) {
+      const powerY = chartCache.yScale(powerDbm)
+      cursorLineH.attr('y1', powerY).attr('y2', powerY).attr('opacity', 0.6)
+      cursorDot.attr('cx', mx).attr('cy', powerY).attr('opacity', 1)
+      cursorInfo.value = {
+        x: mx + chartCache.margin.left,
+        y: powerY + chartCache.margin.top,
+        freqMHz: freqMHz.toFixed(3),
+        powerDbm: powerDbm.toFixed(1),
+      }
+    }
   }
 
   mouseOverlay
     .on('mousemove', (event) => {
-      const [mx, my] = d3.pointer(event)
-      const freqHz = chartCache.xScale.invert(mx)
-      const freqMHz = freqHz / 1e6
-      const powerDbm = getPowerAtFreq(freqHz)
-
-      // Emit cursor position for synced charts
-      lastEmittedCursorFreq = freqHz
-      emit('cursor-move', freqHz)
-
-      if (powerDbm !== null) {
-        const powerY = chartCache.yScale(powerDbm)
-        cursorLineV.attr('x1', mx).attr('x2', mx).attr('opacity', 0.6)
-        cursorLineH.attr('y1', powerY).attr('y2', powerY).attr('opacity', 0.6)
-        cursorDot.attr('cx', mx).attr('cy', powerY).attr('opacity', 1)
-        cursorInfo.value = {
-          x: mx + chartCache.margin.left,
-          y: powerY + chartCache.margin.top,
-          freqMHz: freqMHz.toFixed(3),
-          powerDbm: powerDbm.toFixed(1),
-        }
-      }
+      const [mx] = d3.pointer(event)
+      showCrosshair(mx, chartCache.xScale.invert(mx))
     })
-    .on('mouseleave', () => {
-      cursorLineV.attr('opacity', 0)
-      cursorLineH.attr('opacity', 0)
-      cursorDot.attr('opacity', 0)
-      cursorInfo.value = null
-      lastEmittedCursorFreq = null
-      emit('cursor-move', null)
-    })
+    .on('mouseleave', clearCursor)
     .on('click', (event) => {
       if (event.metaKey || event.ctrlKey) {
         const [mx] = d3.pointer(event)
         const freqHz = chartCache.xScale.invert(mx)
-        const freqMHz = freqHz / 1e6
-        emit('freq-pin', { freqHz, freqMHz })
+        emit('freq-pin', { freqHz, freqMHz: freqHz / 1e6 })
       }
     })
 
-  // Long-press for touch devices (iPad — no ctrl/cmd key)
+  // Long-press + drag-to-refine for touch frequency pinning
   let longPressTimer = null
   let longPressX = null
+  let longPressActive = false
+  let lastPinX = null
+
+  function showPinCursor(mx) {
+    const clampedX = Math.max(0, Math.min(chartCache.plotWidth, mx))
+    const freqHz = chartCache.xScale.invert(clampedX)
+    const powerDbm = getPowerAtFreq(freqHz)
+    lastPinX = clampedX
+
+    cursorLineV.attr('x1', clampedX).attr('x2', clampedX)
+      .attr('opacity', 1).attr('stroke', '#00d4ff').attr('stroke-width', 2)
+      .attr('stroke-dasharray', null)
+    cursorLineH.attr('opacity', 0)
+    cursorDot.attr('opacity', 0)
+    cursorInfo.value = {
+      x: clampedX + chartCache.margin.left,
+      y: chartCache.margin.top + 20,
+      freqMHz: (freqHz / 1e6).toFixed(3),
+      powerDbm: powerDbm !== null ? powerDbm.toFixed(1) : null,
+      pinMode: true,
+    }
+    lastEmittedCursorFreq = freqHz
+    emit('cursor-move', freqHz)
+  }
 
   mouseOverlay
     .on('touchstart.longpress', (event) => {
       if (event.touches.length !== 1) return
       const [mx] = d3.pointer(event.touches[0], mouseOverlay.node())
       longPressX = mx
+      longPressActive = false
+      lastPinX = null
       longPressTimer = setTimeout(() => {
         if (longPressX === null || !chartCache.xScale) return
-        const freqHz = chartCache.xScale.invert(longPressX)
-        const freqMHz = freqHz / 1e6
-        emit('freq-pin', { freqHz, freqMHz })
-        longPressX = null
-      }, 500)
+        longPressActive = true
+        if (navigator.vibrate) navigator.vibrate(30)
+        showPinCursor(longPressX)
+      }, 400)
     })
     .on('touchmove.longpress', (event) => {
       if (longPressX === null) return
       const [mx] = d3.pointer(event.touches[0], mouseOverlay.node())
-      if (Math.abs(mx - longPressX) > 10) {
+      if (longPressActive) {
+        event.preventDefault()
+        showPinCursor(mx)
+      } else if (Math.abs(mx - longPressX) > 10) {
         clearTimeout(longPressTimer)
         longPressX = null
       }
     })
     .on('touchend.longpress touchcancel.longpress', () => {
       clearTimeout(longPressTimer)
+      if (longPressActive && lastPinX !== null && chartCache.xScale) {
+        const freqHz = chartCache.xScale.invert(lastPinX)
+        emit('freq-pin', { freqHz, freqMHz: freqHz / 1e6 })
+      }
+      longPressActive = false
       longPressX = null
+      lastPinX = null
+      clearCursor()
     })
 }
 
@@ -854,24 +893,50 @@ watch(() => [props.scan, props.traces], () => {
 })
 
 // External cursor from another chart (e.g. spectrogram)
+// External cursor from another chart — show native crosshair
 watch(() => props.cursorFreq, (freqHz) => {
   if (!svgRef.value || !chartCache.xScale) return
   const svg = d3.select(svgRef.value)
   const cursorLineV = svg.select('.cursor-line-v')
+  const cursorLineH = svg.select('.cursor-line-h')
+  const cursorDot = svg.select('.cursor-dot')
 
   // Ignore if this is our own emitted value bouncing back
   if (freqHz !== null && freqHz === lastEmittedCursorFreq) return
 
   if (freqHz === null) {
     cursorLineV.attr('opacity', 0)
+    cursorLineH.attr('opacity', 0)
+    cursorDot.attr('opacity', 0)
+    cursorInfo.value = null
     return
   }
 
   const mx = chartCache.xScale(freqHz)
   if (mx >= 0 && mx <= chartCache.plotWidth) {
+    const powerDbm = getPowerAtFreq(freqHz)
     cursorLineV.attr('x1', mx).attr('x2', mx).attr('opacity', 0.6)
+      .attr('stroke', '#666').attr('stroke-width', 1).attr('stroke-dasharray', '4,4')
+    if (powerDbm !== null) {
+      const powerY = chartCache.yScale(powerDbm)
+      cursorLineH.attr('y1', powerY).attr('y2', powerY).attr('opacity', 0.6)
+      cursorDot.attr('cx', mx).attr('cy', powerY).attr('opacity', 1)
+      cursorInfo.value = {
+        x: mx + chartCache.margin.left,
+        y: powerY + chartCache.margin.top,
+        freqMHz: (freqHz / 1e6).toFixed(3),
+        powerDbm: powerDbm.toFixed(1),
+      }
+    } else {
+      cursorLineH.attr('opacity', 0)
+      cursorDot.attr('opacity', 0)
+      cursorInfo.value = null
+    }
   } else {
     cursorLineV.attr('opacity', 0)
+    cursorLineH.attr('opacity', 0)
+    cursorDot.attr('opacity', 0)
+    cursorInfo.value = null
   }
 })
 
@@ -957,14 +1022,18 @@ defineExpose({
 
     <div
       v-if="cursorInfo"
-      class="absolute pointer-events-none bg-gray-900/90 border border-cyan-500/50 rounded px-2 py-1 text-xs"
+      class="absolute pointer-events-none rounded px-2 py-1 text-xs"
+      :class="cursorInfo.pinMode
+        ? 'bg-cyan-900/95 border border-cyan-400/70'
+        : 'bg-gray-900/90 border border-cyan-500/50'"
       :style="{
         left: `${cursorInfo.x + 10}px`,
         top: `${cursorInfo.y - 30}px`,
       }"
     >
+      <div v-if="cursorInfo.pinMode" class="text-cyan-300 font-semibold mb-0.5">Pin frequency</div>
       <div class="text-cyan-400 font-mono">{{ cursorInfo.freqMHz }} MHz</div>
-      <div class="text-yellow-400 font-mono">{{ cursorInfo.powerDbm }} dBm</div>
+      <div v-if="cursorInfo.powerDbm != null" class="text-yellow-400 font-mono">{{ cursorInfo.powerDbm }} dBm</div>
     </div>
   </div>
 </template>
@@ -973,5 +1042,8 @@ defineExpose({
 .d3-spectrum-chart {
   position: relative;
   touch-action: manipulation;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 </style>

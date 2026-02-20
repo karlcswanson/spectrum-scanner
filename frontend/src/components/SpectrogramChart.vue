@@ -277,7 +277,7 @@ function buildAxes() {
   // Responsive margins matching D3SpectrumChart
   const isNarrow = totalWidth < 500
   margin.left = isNarrow ? 35 : 55
-  margin.right = isNarrow ? 30 : 50
+  margin.right = isNarrow ? 15 : 50
 
   plotWidth = totalWidth - margin.left - margin.right
   plotHeight = totalHeight - margin.top - margin.bottom
@@ -334,6 +334,7 @@ function buildAxes() {
   chart.append('rect').attr('class', 'mouse-overlay')
     .attr('width', plotWidth).attr('height', plotHeight)
     .attr('fill', 'transparent').attr('pointer-events', 'all')
+    .style('cursor', 'crosshair')
 
   setupMouseHandlers()
 }
@@ -390,106 +391,159 @@ function updateTimeAxis(yAxisGroup) {
 // Track the last frequency we emitted so we can avoid reacting to our own prop update
 let lastEmittedCursorFreq = null
 
+// Find the closest scan in the buffer to a target timestamp
+function findClosestScan(targetTime) {
+  const buf = scanBuffer.value
+  if (buf.length < 2) return null
+  let closest = buf[0]
+  let closestDist = Math.abs(targetTime - closest.timestamp)
+  for (let i = 1; i < buf.length; i++) {
+    const dist = Math.abs(targetTime - buf[i].timestamp)
+    if (dist < closestDist) { closest = buf[i]; closestDist = dist }
+  }
+  return closest
+}
+
+function emitScanSelect(scan) {
+  emit('select', {
+    timestamp: scan.timestamp,
+    scan: {
+      hz_lo: scan.hz_lo,
+      hz_hi: scan.hz_hi,
+      step: scan.step || (scan.hz_hi - scan.hz_lo) / scan.power.length,
+      power: scan.power,
+      timestamp: scan.timestamp,
+    },
+  })
+}
+
 function setupMouseHandlers() {
   const svg = d3.select(svgRef.value)
   const mouseOverlay = svg.select('.mouse-overlay')
   const cursorLine = svg.select('.cursor-line')
 
+  function clearCursor() {
+    cursorLine.attr('opacity', 0)
+    cursorInfo.value = null
+    lastEmittedCursorFreq = null
+    emit('cursor-move', null)
+  }
+
+  function showCursor(mx, freqHz, pin = false) {
+    lastEmittedCursorFreq = freqHz
+    emit('cursor-move', freqHz)
+
+    if (pin) {
+      cursorLine.attr('x1', mx).attr('x2', mx)
+        .attr('opacity', 1).attr('stroke', '#00d4ff').attr('stroke-width', 2)
+        .attr('stroke-dasharray', null)
+    } else {
+      cursorLine.attr('x1', mx).attr('x2', mx).attr('opacity', 0.6)
+    }
+    cursorInfo.value = {
+      x: mx + margin.left,
+      freqMHz: (freqHz / 1e6).toFixed(3),
+      pinMode: pin,
+    }
+  }
+
   mouseOverlay
     .on('mousemove', (event) => {
       if (!effectiveXScale) return
       const [mx] = d3.pointer(event)
-      const freqHz = effectiveXScale.invert(mx)
-      const freqMHz = freqHz / 1e6
-
-      cursorLine.attr('x1', mx).attr('x2', mx).attr('opacity', 0.6)
-      cursorInfo.value = {
-        x: mx + margin.left,
-        freqMHz: freqMHz.toFixed(3),
-      }
-
-      // Emit cursor position for synced charts
-      lastEmittedCursorFreq = freqHz
-      emit('cursor-move', freqHz)
+      showCursor(mx, effectiveXScale.invert(mx))
     })
-    .on('mouseleave', () => {
-      cursorLine.attr('opacity', 0)
-      cursorInfo.value = null
-      lastEmittedCursorFreq = null
-      emit('cursor-move', null)
-    })
+    .on('mouseleave', clearCursor)
     .on('click', (event) => {
       if (event.metaKey || event.ctrlKey) {
-        // Ctrl+click: pin a frequency
         if (!effectiveXScale) return
         const [mx] = d3.pointer(event)
         const freqHz = effectiveXScale.invert(mx)
-        const freqMHz = freqHz / 1e6
-        emit('freq-pin', { freqHz, freqMHz })
+        emit('freq-pin', { freqHz, freqMHz: freqHz / 1e6 })
         return
       }
-
-      // Normal click: map click row to a scan in the buffer
+      const [, my] = d3.pointer(event)
       const buf = scanBuffer.value
       if (buf.length < 2) return
-
-      const [, my] = d3.pointer(event)
-      const oldestTs = buf[0].timestamp
-      const newestTs = buf[buf.length - 1].timestamp
-      const timeSpan = newestTs - oldestTs || 1
-      const clickTime = oldestTs + (my / (plotHeight - 1 || 1)) * timeSpan
-
-      // Find the closest scan to the click time
-      let closest = buf[0]
-      let closestDist = Math.abs(clickTime - closest.timestamp)
-      for (let i = 1; i < buf.length; i++) {
-        const dist = Math.abs(clickTime - buf[i].timestamp)
-        if (dist < closestDist) {
-          closest = buf[i]
-          closestDist = dist
-        }
-      }
-
-      emit('select', {
-        timestamp: closest.timestamp,
-        scan: {
-          hz_lo: closest.hz_lo,
-          hz_hi: closest.hz_hi,
-          step: closest.step || (closest.hz_hi - closest.hz_lo) / closest.power.length,
-          power: closest.power,
-          timestamp: closest.timestamp,
-        },
-      })
+      const timeSpan = buf[buf.length - 1].timestamp - buf[0].timestamp || 1
+      const clickTime = buf[0].timestamp + (my / (plotHeight - 1 || 1)) * timeSpan
+      const scan = findClosestScan(clickTime)
+      if (scan) emitScanSelect(scan)
     })
 
-  // Long-press for touch devices (iPad — no ctrl/cmd key)
+  // Long-press + drag-to-refine for touch frequency pinning
+  // Vertical drag = time scrub, hold still 400ms = freq pin
   let longPressTimer = null
   let longPressX = null
+  let longPressActive = false
+  let lastPinX = null
+  let timeScrubbing = false
+  let touchStartY = null
+
+  function scrubToY(my) {
+    const buf = scanBuffer.value
+    if (buf.length < 2) return
+    const timeSpan = buf[buf.length - 1].timestamp - buf[0].timestamp || 1
+    const clampedY = Math.max(0, Math.min(plotHeight, my))
+    const scrubTime = buf[0].timestamp + (clampedY / (plotHeight - 1 || 1)) * timeSpan
+    const scan = findClosestScan(scrubTime)
+    if (scan) emitScanSelect(scan)
+  }
 
   mouseOverlay
     .on('touchstart.longpress', (event) => {
       if (event.touches.length !== 1) return
-      const [mx] = d3.pointer(event.touches[0], mouseOverlay.node())
+      const [mx, my] = d3.pointer(event.touches[0], mouseOverlay.node())
       longPressX = mx
+      touchStartY = my
+      longPressActive = false
+      timeScrubbing = false
+      lastPinX = null
       longPressTimer = setTimeout(() => {
         if (longPressX === null || !effectiveXScale) return
-        const freqHz = effectiveXScale.invert(longPressX)
-        const freqMHz = freqHz / 1e6
-        emit('freq-pin', { freqHz, freqMHz })
-        longPressX = null
-      }, 500)
+        longPressActive = true
+        if (navigator.vibrate) navigator.vibrate(30)
+        lastPinX = Math.max(0, Math.min(plotWidth, longPressX))
+        showCursor(lastPinX, effectiveXScale.invert(lastPinX), true)
+      }, 400)
     })
     .on('touchmove.longpress', (event) => {
-      if (longPressX === null) return
-      const [mx] = d3.pointer(event.touches[0], mouseOverlay.node())
-      if (Math.abs(mx - longPressX) > 10) {
-        clearTimeout(longPressTimer)
-        longPressX = null
+      if (longPressX === null && !timeScrubbing) return
+      const [mx, my] = d3.pointer(event.touches[0], mouseOverlay.node())
+
+      if (longPressActive) {
+        event.preventDefault()
+        lastPinX = Math.max(0, Math.min(plotWidth, mx))
+        showCursor(lastPinX, effectiveXScale.invert(lastPinX), true)
+      } else if (timeScrubbing) {
+        event.preventDefault()
+        scrubToY(my)
+      } else {
+        const dy = Math.abs(my - touchStartY)
+        if (dy > 10) {
+          clearTimeout(longPressTimer)
+          longPressX = null
+          timeScrubbing = true
+          event.preventDefault()
+          scrubToY(my)
+        } else if (Math.abs(mx - longPressX) > 10) {
+          clearTimeout(longPressTimer)
+          longPressX = null
+        }
       }
     })
     .on('touchend.longpress touchcancel.longpress', () => {
       clearTimeout(longPressTimer)
+      if (longPressActive && lastPinX !== null && effectiveXScale) {
+        const freqHz = effectiveXScale.invert(lastPinX)
+        emit('freq-pin', { freqHz, freqMHz: freqHz / 1e6 })
+      }
+      longPressActive = false
       longPressX = null
+      touchStartY = null
+      lastPinX = null
+      timeScrubbing = false
+      clearCursor()
     })
 }
 
@@ -580,7 +634,7 @@ watch(() => props.visibleRange, () => {
   drawOverlays()
 })
 
-// External cursor from another chart (e.g. line chart)
+// External cursor from another chart — show native cursor
 watch(() => props.cursorFreq, (freqHz) => {
   if (!svgRef.value || !effectiveXScale) return
   const svg = d3.select(svgRef.value)
@@ -598,6 +652,7 @@ watch(() => props.cursorFreq, (freqHz) => {
   const mx = effectiveXScale(freqHz)
   if (mx >= 0 && mx <= plotWidth) {
     cursorLine.attr('x1', mx).attr('x2', mx).attr('opacity', 0.6)
+      .attr('stroke', '#666').attr('stroke-width', 1).attr('stroke-dasharray', '4,4')
     cursorInfo.value = {
       x: mx + margin.left,
       freqMHz: (freqHz / 1e6).toFixed(3),
@@ -720,50 +775,47 @@ const legendLabels = computed(() => {
       :style="{ height: `${height}px` }"
     />
 
-    <!-- Color scale legend -->
+    <!-- Color scale legend (floats over waterfall plot area) -->
     <div
-      class="absolute flex flex-col items-center"
+      class="absolute flex items-center gap-0.5 rounded-sm pointer-events-none"
       :style="{
-        right: '4px',
-        top: `${margin.top}px`,
-        height: `${height - margin.top - margin.bottom}px`,
-        width: '16px',
+        right: `${margin.right + 4}px`,
+        top: `${margin.top + 4}px`,
+        height: `${Math.min(height - margin.top - margin.bottom - 8, 80)}px`,
+        background: 'rgba(10, 10, 26, 0.7)',
+        padding: '2px 3px',
       }"
     >
+      <div class="flex flex-col justify-between text-right h-full" style="width: 20px;">
+        <span
+          v-for="db in legendLabels"
+          :key="db"
+          class="text-gray-400 leading-none"
+          style="font-size: 7px;"
+        >{{ db }}</span>
+      </div>
       <canvas
         ref="legendCanvas"
-        class="w-full h-full rounded-sm"
-        width="12"
-        :height="height - margin.top - margin.bottom"
-        style="image-rendering: pixelated;"
+        class="h-full rounded-sm"
+        width="8"
+        :height="Math.min(height - margin.top - margin.bottom - 8, 80)"
+        style="image-rendering: pixelated; width: 8px;"
       />
-    </div>
-    <div
-      class="absolute flex flex-col justify-between text-right"
-      :style="{
-        right: '22px',
-        top: `${margin.top}px`,
-        height: `${height - margin.top - margin.bottom}px`,
-        width: '28px',
-      }"
-    >
-      <span
-        v-for="db in legendLabels"
-        :key="db"
-        class="text-gray-500 leading-none"
-        style="font-size: 8px;"
-      >{{ db }}</span>
     </div>
 
     <!-- Cursor tooltip -->
     <div
       v-if="cursorInfo"
-      class="absolute pointer-events-none bg-gray-900/90 border border-cyan-500/50 rounded px-2 py-1 text-xs"
+      class="absolute pointer-events-none rounded px-2 py-1 text-xs"
+      :class="cursorInfo.pinMode
+        ? 'bg-cyan-900/95 border border-cyan-400/70'
+        : 'bg-gray-900/90 border border-cyan-500/50'"
       :style="{
         left: `${cursorInfo.x + 10}px`,
         top: '4px',
       }"
     >
+      <div v-if="cursorInfo.pinMode" class="text-cyan-300 font-semibold mb-0.5">Pin frequency</div>
       <span class="text-cyan-400 font-mono">{{ cursorInfo.freqMHz }} MHz</span>
     </div>
   </div>
@@ -773,5 +825,8 @@ const legendLabels = computed(() => {
 .spectrogram-chart {
   position: relative;
   touch-action: manipulation;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 </style>

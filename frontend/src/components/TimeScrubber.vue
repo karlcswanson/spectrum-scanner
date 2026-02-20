@@ -684,5 +684,7 @@ const selectedTimeDisplay = computed(() => {
 <style scoped>
 .time-scrubber {
   user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
 }
 </style>
