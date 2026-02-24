@@ -1,7 +1,7 @@
 """API serializers for Spectrum Server."""
 
 from rest_framework import serializers
-from core.models import Scanner, Band, Scan, ScanSummary, ScannerGroup, Access
+from core.models import Scanner, Band, Scan, ScanSummary, ScannerGroup, MonitoredFrequency, Access
 
 
 class BandSerializer(serializers.ModelSerializer):
@@ -150,6 +150,14 @@ class ScannerGroupDetailSerializer(ScannerGroupSerializer):
 
     class Meta(ScannerGroupSerializer.Meta):
         fields = ScannerGroupSerializer.Meta.fields + ['scanners']
+
+
+class MonitoredFrequencySerializer(serializers.ModelSerializer):
+    frequency_mhz = serializers.FloatField(read_only=True)
+
+    class Meta:
+        model = MonitoredFrequency
+        fields = ['id', 'frequency_hz', 'frequency_mhz', 'name', 'color', 'category', 'notes', 'active']
 
 
 class AccessSerializer(serializers.ModelSerializer):

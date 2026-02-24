@@ -4,7 +4,7 @@ from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.contrib.auth.models import User
 from django.utils.html import format_html
-from .models import Scanner, Band, Scan, UserMQTTCredentials, ShareLink, ScannerGroup, Access, SiteSettings, ScanSummary
+from .models import Scanner, Band, Scan, UserMQTTCredentials, ShareLink, ScannerGroup, MonitoredFrequency, Access, SiteSettings, ScanSummary
 
 
 class BandInline(admin.TabularInline):
@@ -207,6 +207,54 @@ class ScannerGroupAdmin(admin.ModelAdmin):
         if not change:
             obj.created_by = request.user
         super().save_model(request, obj, form, change)
+
+
+@admin.register(MonitoredFrequency)
+class MonitoredFrequencyAdmin(admin.ModelAdmin):
+    list_display = ['name', 'frequency_mhz_display', 'category', 'color_swatch', 'scope_summary', 'active']
+    list_filter = ['category', 'active']
+    search_fields = ['name', 'notes']
+    filter_horizontal = ['scanners', 'groups']
+    readonly_fields = ['id', 'created_at', 'updated_at']
+
+    fieldsets = (
+        (None, {
+            'fields': ('name', 'frequency_hz', 'category', 'color', 'active')
+        }),
+        ('Scope', {
+            'fields': ('scanners', 'groups'),
+            'description': 'Assign to specific scanners and/or groups. Leave both empty for a global frequency visible to all scanners.'
+        }),
+        ('Notes & Metadata', {
+            'fields': ('notes', 'id', 'created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
+
+    def frequency_mhz_display(self, obj):
+        return f"{obj.frequency_hz / 1e6:.3f} MHz"
+    frequency_mhz_display.short_description = 'Frequency'
+    frequency_mhz_display.admin_order_field = 'frequency_hz'
+
+    def color_swatch(self, obj):
+        if obj.color:
+            return format_html(
+                '<span style="display:inline-block;width:14px;height:14px;background:{};border-radius:2px;vertical-align:middle;"></span> {}',
+                obj.color, obj.color
+            )
+        return '—'
+    color_swatch.short_description = 'Color'
+
+    def scope_summary(self, obj):
+        parts = []
+        scanner_count = obj.scanners.count()
+        group_count = obj.groups.count()
+        if scanner_count:
+            parts.append(f"{scanner_count} scanner{'s' if scanner_count > 1 else ''}")
+        if group_count:
+            parts.append(f"{group_count} group{'s' if group_count > 1 else ''}")
+        return ', '.join(parts) if parts else 'Global'
+    scope_summary.short_description = 'Scope'
 
 
 @admin.register(Access)

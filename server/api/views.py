@@ -10,12 +10,12 @@ from rest_framework.response import Response
 
 from django.contrib.auth import authenticate, login, logout
 
-from core.models import Scanner, Band, Scan, ScanSummary, UserMQTTCredentials, ScannerGroup, Access
+from core.models import Scanner, Band, Scan, ScanSummary, UserMQTTCredentials, ScannerGroup, Access, get_monitored_frequencies_for_scanner
 from .serializers import (
     ScannerSerializer, BandSerializer, ScanSerializer, ScanCreateSerializer,
     DecimatedScanSerializer, ScanSummaryAsScanSerializer, DecimatedScanSummarySerializer,
     ScannerGroupSerializer, ScannerGroupDetailSerializer,
-    AccessSerializer
+    MonitoredFrequencySerializer, AccessSerializer
 )
 from .permissions import (
     ReadOnlyIfShareSession, HasScannerAccess, HasScannerGroupAccess,
@@ -123,6 +123,13 @@ class ScannerViewSet(viewsets.ModelViewSet):
             {'error': 'Failed to push gain'},
             status=status.HTTP_503_SERVICE_UNAVAILABLE
         )
+
+    @action(detail=True, methods=['get'])
+    def monitored_frequencies(self, request, pk=None):
+        """Get monitored frequencies resolved for this scanner."""
+        scanner = self.get_object()
+        freqs = get_monitored_frequencies_for_scanner(scanner)
+        return Response(MonitoredFrequencySerializer(freqs, many=True).data)
 
     @action(detail=True, methods=['get'])
     def latest_scan(self, request, pk=None):

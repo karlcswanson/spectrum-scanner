@@ -5,6 +5,7 @@ import secrets
 import uuid
 
 from django.db import models, transaction
+from django.db.models import Count, Q
 from django.utils import timezone
 
 logger = logging.getLogger(__name__)
@@ -444,6 +445,74 @@ class ScannerGroup(models.Model):
 
     def __str__(self):
         return self.name
+
+
+class MonitoredFrequency(models.Model):
+    """A specific RF frequency to monitor (wireless mic channel, IEM, etc.)."""
+
+    CATEGORY_CHOICES = [
+        ('Wireless Mics', 'Wireless Mics'),
+        ('IEMs', 'IEMs'),
+        ('Comms', 'Comms'),
+        ('Intercom', 'Intercom'),
+        ('WiFi', 'WiFi'),
+        ('Other', 'Other'),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    frequency_hz = models.BigIntegerField(help_text='Exact frequency in Hz')
+    name = models.CharField(max_length=100, help_text='e.g. "Vox 1", "IEM Mix L"')
+
+    # Scope: assigned to specific scanners and/or groups. Both empty = global.
+    scanners = models.ManyToManyField(Scanner, blank=True, related_name='monitored_frequencies')
+    groups = models.ManyToManyField(ScannerGroup, blank=True, related_name='monitored_frequencies')
+
+    color = models.CharField(max_length=20, blank=True, help_text='Hex color (auto-assigned if empty)')
+    category = models.CharField(max_length=50, choices=CATEGORY_CHOICES, default='Wireless Mics')
+    notes = models.TextField(blank=True)
+    active = models.BooleanField(default=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = 'Monitored Frequency'
+        verbose_name_plural = 'Monitored Frequencies'
+        ordering = ['frequency_hz']
+
+    def __str__(self):
+        return f"{self.name} ({self.frequency_hz / 1e6:.3f} MHz)"
+
+    @property
+    def frequency_mhz(self):
+        return self.frequency_hz / 1_000_000
+
+    def save(self, *args, **kwargs):
+        if not self.color:
+            palette = ['#ff8c00', '#ff00ff', '#00ff00', '#ff4444', '#00bfff', '#ffff00', '#ff69b4', '#7fff00']
+            count = MonitoredFrequency.objects.count()
+            self.color = palette[count % len(palette)]
+        super().save(*args, **kwargs)
+
+
+def get_monitored_frequencies_for_scanner(scanner):
+    """Resolve monitored frequencies for a scanner.
+
+    Returns frequencies where:
+    - Scanner is directly in the scanners M2M, OR
+    - Any of the scanner's groups is in the groups M2M, OR
+    - Both M2M fields are empty (global frequency)
+    """
+    scanner_group_ids = scanner.scanner_groups.values_list('id', flat=True)
+
+    return MonitoredFrequency.objects.filter(active=True).annotate(
+        scanner_count=Count('scanners'),
+        group_count=Count('groups'),
+    ).filter(
+        Q(scanners=scanner) |                          # direct assignment
+        Q(groups__id__in=scanner_group_ids) |           # via group
+        Q(scanner_count=0, group_count=0)               # global (both empty)
+    ).distinct()
 
 
 class Access(models.Model):

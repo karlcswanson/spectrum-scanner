@@ -6,6 +6,7 @@ import { logger, MqttClient, TOPIC_PREFIX } from '../lib'
 export const useScannersStore = defineStore('scanners', () => {
   const scanners = ref({})
   const groups = ref([])             // Scanner group list from API
+  const monitoredFreqs = ref({})    // { scannerId: [{ id, frequency_hz, frequency_mhz, name, color, category, ... }] }
   const latestScans = ref({})       // { scannerId: lastScan }
   const bandScans = ref({})         // { scannerId: { bandName: lastScan } }
   const timelines = ref({})         // { `${scannerId}:${bandName}`: [{ id, timestamp, band__name }] }
@@ -560,6 +561,23 @@ export const useScannersStore = defineStore('scanners', () => {
     }
   }
 
+  async function fetchMonitoredFrequencies(scannerId) {
+    try {
+      const response = await fetch(`/api/scanners/${scannerId}/monitored_frequencies/`, {
+        credentials: 'include',
+      })
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      const data = await response.json()
+      monitoredFreqs.value = { ...monitoredFreqs.value, [scannerId]: data }
+    } catch (error) {
+      logger.error('Failed to fetch monitored frequencies:', error)
+    }
+  }
+
+  function getMonitoredFrequencies(scannerId) {
+    return monitoredFreqs.value[scannerId] || []
+  }
+
   // Generate WWB-compatible CSV from scan data
   function generateCSV(scan) {
     if (!scan || !scan.power) return ''
@@ -746,6 +764,7 @@ export const useScannersStore = defineStore('scanners', () => {
     scanners,
     scannerList,
     groups,
+    monitoredFreqs,
     latestScans,
     bandScans,
     timelines,
@@ -757,6 +776,8 @@ export const useScannersStore = defineStore('scanners', () => {
     subscribe,
     unsubscribe,
     fetchScanners,
+    fetchMonitoredFrequencies,
+    getMonitoredFrequencies,
     fetchGroups,
     fetchGroup,
     exportScanCSV,

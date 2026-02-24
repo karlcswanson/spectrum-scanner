@@ -13,6 +13,7 @@ const auth = useAuthStore()
 const scannerId = computed(() => route.params.id)
 const bandNameParam = computed(() => route.params.bandName || null)
 const scanner = computed(() => store.scanners[scannerId.value])
+const monitoredFrequencies = computed(() => store.getMonitoredFrequencies(scannerId.value))
 
 // Can the current user control this scanner?
 const canWrite = computed(() => {
@@ -88,7 +89,11 @@ let subscribedId = null
 
 watch(scannerId, (newId, oldId) => {
   if (oldId) store.unsubscribe(oldId)
-  if (newId) { store.subscribe(newId); subscribedId = newId }
+  if (newId) {
+    store.subscribe(newId)
+    subscribedId = newId
+    store.fetchMonitoredFrequencies(newId)
+  }
 }, { immediate: true })
 
 onUnmounted(() => {
@@ -275,6 +280,7 @@ onUnmounted(() => {
           :show-timeline="true"
           :timeline-hours="SCRUBBER_HOURS"
           :can-write="canWrite"
+          :monitored-frequencies="monitoredFrequencies"
         />
       </div>
 

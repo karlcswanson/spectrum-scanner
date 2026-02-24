@@ -1036,13 +1036,35 @@ function drawPinnedMarkers() {
   for (const pin of props.pinnedFreqs) {
     const x = xScale(pin.freqHz)
     if (x >= 0 && x <= chartCache.plotWidth) {
-      group.append('line')
-        .attr('x1', x).attr('y1', 0)
-        .attr('x2', x).attr('y2', plotHeight)
-        .attr('stroke', pin.color)
-        .attr('stroke-width', 1)
-        .attr('stroke-dasharray', '4,2')
-        .attr('opacity', 0.7)
+      if (pin.isServer) {
+        // Server pins: solid line, thicker, with name label
+        group.append('line')
+          .attr('x1', x).attr('y1', 0)
+          .attr('x2', x).attr('y2', plotHeight)
+          .attr('stroke', pin.color)
+          .attr('stroke-width', 1.5)
+          .attr('opacity', 0.8)
+        // Name label at top
+        if (pin.name) {
+          group.append('text')
+            .attr('x', x + 3)
+            .attr('y', 12)
+            .attr('fill', pin.color)
+            .attr('font-size', '10px')
+            .attr('font-weight', '600')
+            .attr('opacity', 0.9)
+            .text(pin.name)
+        }
+      } else {
+        // Ad-hoc pins: dashed line, no label
+        group.append('line')
+          .attr('x1', x).attr('y1', 0)
+          .attr('x2', x).attr('y2', plotHeight)
+          .attr('stroke', pin.color)
+          .attr('stroke-width', 1)
+          .attr('stroke-dasharray', '4,2')
+          .attr('opacity', 0.7)
+      }
     }
   }
 }

@@ -59,6 +59,11 @@ const props = defineProps({
     type: Boolean,
     default: false,
   },
+  // Server-side monitored frequencies
+  monitoredFrequencies: {
+    type: Array,
+    default: () => [],
+  },
 })
 
 const emit = defineEmits(['update:selected'])
@@ -126,9 +131,30 @@ const highlightTime = computed(() => {
 const pinnedFreqs = ref([])
 const pinColorPalette = ['#ff8c00', '#ff00ff', '#00ff00', '#ff4444', '#00bfff', '#ffff00', '#ff69b4', '#7fff00']
 
+// Server-side monitored frequencies filtered to this band's range
+const serverPins = computed(() => {
+  return props.monitoredFrequencies
+    .filter(mf => mf.frequency_hz >= props.band.start_hz && mf.frequency_hz <= props.band.stop_hz)
+    .map(mf => ({
+      freqHz: mf.frequency_hz,
+      freqMHz: mf.frequency_mhz,
+      color: mf.color,
+      name: mf.name,
+      isServer: true,
+    }))
+})
+
+// Merged: server pins + ad-hoc client pins
+const allPinnedFreqs = computed(() => [...serverPins.value, ...pinnedFreqs.value])
+
 function handleFreqPin({ freqHz, freqMHz }) {
   // Toggle: remove if already pinned (within 0.1% tolerance)
   const tolerance = (props.band.stop_hz - props.band.start_hz) * 0.001
+
+  // Don't add ad-hoc pin if a server pin already covers this frequency
+  const serverMatch = serverPins.value.some(p => Math.abs(p.freqHz - freqHz) < tolerance)
+  if (serverMatch) return
+
   const existingIdx = pinnedFreqs.value.findIndex(p => Math.abs(p.freqHz - freqHz) < tolerance)
   if (existingIdx >= 0) {
     // Replace array ref so shallow watchers fire
@@ -147,6 +173,7 @@ function handleFreqPin({ freqHz, freqMHz }) {
 }
 
 function handleRemoveFreq(pin) {
+  if (pin.isServer) return // server pins are managed via Django admin
   // Replace array ref so shallow watchers fire
   pinnedFreqs.value = pinnedFreqs.value.filter(p => p !== pin)
 }
@@ -237,6 +264,13 @@ async function loadSpectrogramData() {
     spectrogramLoading.value = false
   }
 }
+
+// Auto-open spectrogram when server-side monitored frequencies exist for this band
+watch(serverPins, (pins) => {
+  if (pins.length > 0 && !showSpectrogram.value) {
+    showSpectrogram.value = true
+  }
+}, { immediate: true })
 
 // Load when toggled on, clear when toggled off
 watch(showSpectrogram, (open) => {
@@ -575,7 +609,7 @@ watch(() => props.band.name, async () => {
       :show-average="showAverage"
       :show-peak="showPeak"
       :cursor-freq="cursorFreqForLine"
-      :pinned-freqs="pinnedFreqs"
+      :pinned-freqs="allPinnedFreqs"
       @zoom="handleZoom"
       @cursor-move="handleLineCursorMove"
       @freq-pin="handleFreqPin"
@@ -616,7 +650,7 @@ watch(() => props.band.name, async () => {
       :visible-range="zoomRange"
       :cursor-freq="cursorFreqForSpectrogram"
       :highlight-time="highlightTime"
-      :pinned-freqs="pinnedFreqs"
+      :pinned-freqs="allPinnedFreqs"
       @cursor-move="handleSpectrogramCursorMove"
       @select="handleSpectrogramSelect"
       @freq-pin="handleFreqPin"
@@ -625,8 +659,8 @@ watch(() => props.band.name, async () => {
 
     <!-- Frequency time-series plot for pinned frequencies -->
     <FrequencyTimePlot
-      v-if="pinnedFreqs.length > 0"
-      :pinned-freqs="pinnedFreqs"
+      v-if="allPinnedFreqs.length > 0"
+      :pinned-freqs="allPinnedFreqs"
       :scans="spectrogramData"
       :time-range="freqPlotTimeRange"
       :live-scan="scan"

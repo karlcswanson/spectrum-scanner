@@ -33,7 +33,11 @@ watch(
     const newSet = new Set(newIds)
     const oldSet = new Set(oldIds)
     for (const id of newSet) {
-      if (!oldSet.has(id)) { store.subscribe(id); subscribedIds.add(id) }
+      if (!oldSet.has(id)) {
+        store.subscribe(id)
+        subscribedIds.add(id)
+        store.fetchMonitoredFrequencies(id)
+      }
     }
     for (const id of oldSet) {
       if (!newSet.has(id)) { store.unsubscribe(id); subscribedIds.delete(id) }
@@ -206,6 +210,7 @@ function clearSelection() {
             :selectable="true"
             :selected="isSelected(item.key)"
             :can-write="canWriteScanner(scanner)"
+            :monitored-frequencies="store.getMonitoredFrequencies(item.scannerId)"
             @update:selected="toggleSelection(item.key)"
           />
         </div>

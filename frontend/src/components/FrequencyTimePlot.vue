@@ -318,8 +318,10 @@ onUnmounted(() => {
           class="inline-block w-3 h-0.5 rounded"
           :style="{ backgroundColor: pin.color }"
         ></span>
+        <span v-if="pin.name" class="text-gray-300 font-semibold">{{ pin.name }}</span>
         <span class="text-gray-400 font-mono">{{ pin.freqMHz.toFixed(3) }} MHz</span>
         <button
+          v-if="!pin.isServer"
           @click="emit('remove-freq', pin)"
           class="text-gray-500 hover:text-red-400 ml-0.5 leading-none"
           title="Remove"
