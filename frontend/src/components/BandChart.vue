@@ -140,12 +140,41 @@ const serverPins = computed(() => {
       freqMHz: mf.frequency_mhz,
       color: mf.color,
       name: mf.name,
+      category: mf.category,
+      notes: mf.notes,
       isServer: true,
     }))
 })
 
 // Merged: server pins + ad-hoc client pins
 const allPinnedFreqs = computed(() => [...serverPins.value, ...pinnedFreqs.value])
+
+// Selected pin frequencies (toggled via FrequencyTimePlot legend)
+// Starts empty — all pins are unselected (subtle) by default
+const selectedPinFreqs = ref(new Set())
+
+// All pins with selected flag — passed to D3SpectrumChart and SpectrogramChart
+const allPinnedFreqsWithSelection = computed(() =>
+  allPinnedFreqs.value.map(p => ({ ...p, selected: selectedPinFreqs.value.has(p.freqHz) }))
+)
+
+function handleToggleFreq(freqHz) {
+  const next = new Set(selectedPinFreqs.value)
+  if (next.has(freqHz)) {
+    next.delete(freqHz)
+  } else {
+    next.add(freqHz)
+  }
+  selectedPinFreqs.value = next
+}
+
+function handleSelectAllFreqs() {
+  selectedPinFreqs.value = new Set(allPinnedFreqs.value.map(p => p.freqHz))
+}
+
+function handleDeselectAllFreqs() {
+  selectedPinFreqs.value = new Set()
+}
 
 function handleFreqPin({ freqHz, freqMHz }) {
   // Toggle: remove if already pinned (within 0.1% tolerance)
@@ -265,13 +294,6 @@ async function loadSpectrogramData() {
   }
 }
 
-// Auto-open spectrogram when server-side monitored frequencies exist for this band
-watch(serverPins, (pins) => {
-  if (pins.length > 0 && !showSpectrogram.value) {
-    showSpectrogram.value = true
-  }
-}, { immediate: true })
-
 // Load when toggled on, clear when toggled off
 watch(showSpectrogram, (open) => {
   if (open) {
@@ -283,6 +305,18 @@ watch(showSpectrogram, (open) => {
 
 function handleZoom(domain) {
   zoomRange.value = domain
+}
+
+// Handle zoom from spectrogram — sync to spectrum chart
+function handleSpectrogramZoom(domain) {
+  zoomRange.value = domain
+  if (chartRef.value) {
+    if (domain) {
+      chartRef.value.setZoom(domain)
+    } else {
+      chartRef.value.resetZoom()
+    }
+  }
 }
 
 // Format step size for display
@@ -609,7 +643,7 @@ watch(() => props.band.name, async () => {
       :show-average="showAverage"
       :show-peak="showPeak"
       :cursor-freq="cursorFreqForLine"
-      :pinned-freqs="allPinnedFreqs"
+      :pinned-freqs="allPinnedFreqsWithSelection"
       @zoom="handleZoom"
       @cursor-move="handleLineCursorMove"
       @freq-pin="handleFreqPin"
@@ -650,23 +684,29 @@ watch(() => props.band.name, async () => {
       :visible-range="zoomRange"
       :cursor-freq="cursorFreqForSpectrogram"
       :highlight-time="highlightTime"
-      :pinned-freqs="allPinnedFreqs"
+      :pinned-freqs="allPinnedFreqsWithSelection"
       @cursor-move="handleSpectrogramCursorMove"
       @select="handleSpectrogramSelect"
       @freq-pin="handleFreqPin"
+      @zoom="handleSpectrogramZoom"
     />
     </div>
 
-    <!-- Frequency time-series plot for pinned frequencies -->
+    <!-- Frequency time-series plot for pinned frequencies (requires waterfall open for data) -->
     <FrequencyTimePlot
-      v-if="allPinnedFreqs.length > 0"
+      v-if="allPinnedFreqs.length > 0 && showSpectrogram"
       :pinned-freqs="allPinnedFreqs"
+      :selected-freqs="selectedPinFreqs"
+      :active-scan="activeScan"
       :scans="spectrogramData"
       :time-range="freqPlotTimeRange"
       :live-scan="scan"
       :is-live="isLive"
       class="mt-1"
       @remove-freq="handleRemoveFreq"
+      @toggle-freq="handleToggleFreq"
+      @select-all-freqs="handleSelectAllFreqs"
+      @deselect-all-freqs="handleDeselectAllFreqs"
     />
 
     <!-- Time scrubber for historical playback -->
@@ -699,4 +739,5 @@ watch(() => props.band.name, async () => {
   0%, 50% { background-color: #ef4444; }
   50.01%, 100% { background-color: #7f1d1d; }
 }
+
 </style>

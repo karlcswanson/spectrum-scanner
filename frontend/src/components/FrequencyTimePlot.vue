@@ -1,12 +1,22 @@
 <script setup>
-import { ref, watch, onMounted, onUnmounted, nextTick } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import * as d3 from 'd3'
 
 const props = defineProps({
-  // Array of pinned frequencies: [{ freqHz, freqMHz, color }]
+  // Array of pinned frequencies: [{ freqHz, freqMHz, color, name?, isServer?, category?, notes? }]
   pinnedFreqs: {
     type: Array,
     default: () => [],
+  },
+  // Set of freqHz values that are selected (active)
+  selectedFreqs: {
+    type: Set,
+    default: () => new Set(),
+  },
+  // Current active scan (for live power readout in legend)
+  activeScan: {
+    type: Object,
+    default: null,
   },
   // Array of scan entries: [{ timestamp, scan: { hz_lo, hz_hi, power } }] or flat [{ timestamp, hz_lo, hz_hi, power }]
   scans: {
@@ -30,7 +40,9 @@ const props = defineProps({
   },
 })
 
-const emit = defineEmits(['remove-freq'])
+const INTERFERENCE_THRESHOLD_DBM = -40
+
+const emit = defineEmits(['remove-freq', 'toggle-freq', 'select-all-freqs', 'deselect-all-freqs'])
 
 const container = ref(null)
 const svgRef = ref(null)
@@ -59,6 +71,31 @@ let cache = {
 let liveBuffer = {}
 const LIVE_BUFFER_MAX = 600 // ~10 min at 1 scan/sec
 
+// Live power readout from activeScan for legend display
+function getPinPower(pin) {
+  const scan = props.activeScan
+  if (!scan?.power?.length) return null
+  const { hz_lo, hz_hi, power } = scan
+  if (pin.freqHz < hz_lo || pin.freqHz > hz_hi) return null
+  const idx = Math.round(((pin.freqHz - hz_lo) / (hz_hi - hz_lo)) * (power.length - 1))
+  if (idx < 0 || idx >= power.length) return null
+  return power[idx]
+}
+
+const livePowers = computed(() => {
+  const scan = props.activeScan
+  if (!scan?.power?.length) return {}
+  const result = {}
+  for (const pin of props.pinnedFreqs) {
+    const p = getPinPower(pin)
+    if (p !== null) result[pin.freqHz] = p
+  }
+  return result
+})
+
+const allSelected = computed(() => props.selectedFreqs.size >= props.pinnedFreqs.length && props.pinnedFreqs.length > 0)
+const noneSelected = computed(() => props.selectedFreqs.size === 0)
+
 // Extract dBm at each pinned frequency from a single scan object
 function extractFromScan(scan, timestamp) {
   const power = scan.power
@@ -83,7 +120,7 @@ function extractSeries() {
   const pins = props.pinnedFreqs
   if (pins.length === 0) return []
 
-  return pins.map(pin => {
+  return pins.filter(pin => props.selectedFreqs.has(pin.freqHz)).map(pin => {
     const points = []
 
     // Historical scans
@@ -250,6 +287,11 @@ watch(() => [props.scans, props.timeRange], () => {
   scheduleRedraw()
 })
 
+// Selection changed — redraw to show/hide lines
+watch(() => props.selectedFreqs, () => {
+  scheduleRedraw(50)
+})
+
 // Pinned frequencies changed — prune stale keys, keep live data for remaining pins
 watch(() => props.pinnedFreqs, (pins) => {
   if (!pins || pins.length === 0) {
@@ -307,25 +349,52 @@ onUnmounted(() => {
   <div ref="container" class="frequency-time-plot w-full relative">
     <svg ref="svgRef" class="w-full rounded" :style="{ height: `${height}px` }"></svg>
 
-    <!-- Legend with remove buttons -->
-    <div class="flex flex-wrap gap-3 mt-1 px-1">
+    <!-- Legend with selection toggles and live power -->
+    <div class="flex flex-wrap items-center gap-1 mt-1 px-1">
       <div
         v-for="pin in pinnedFreqs"
         :key="pin.freqHz"
-        class="flex items-center gap-1 text-xs"
+        class="pin-legend-item"
+        :class="{
+          'pin-selected': selectedFreqs.has(pin.freqHz),
+          'pin-unselected': !selectedFreqs.has(pin.freqHz),
+          'pin-alert': livePowers[pin.freqHz] > INTERFERENCE_THRESHOLD_DBM && selectedFreqs.has(pin.freqHz),
+        }"
+        @click="emit('toggle-freq', pin.freqHz)"
+        :title="pin.notes || (selectedFreqs.has(pin.freqHz) ? 'Click to deselect' : 'Click to select')"
       >
         <span
-          class="inline-block w-3 h-0.5 rounded"
-          :style="{ backgroundColor: pin.color }"
+          class="pin-dot"
+          :class="{ 'animate-pulse': livePowers[pin.freqHz] > INTERFERENCE_THRESHOLD_DBM && selectedFreqs.has(pin.freqHz) }"
+          :style="{ background: livePowers[pin.freqHz] > INTERFERENCE_THRESHOLD_DBM && selectedFreqs.has(pin.freqHz) ? '#ef4444' : pin.color }"
         ></span>
-        <span v-if="pin.name" class="text-gray-300 font-semibold">{{ pin.name }}</span>
-        <span class="text-gray-400 font-mono">{{ pin.freqMHz.toFixed(3) }} MHz</span>
+        <span v-if="pin.name" class="pin-name">{{ pin.name }}</span>
+        <span class="pin-freq">{{ pin.freqMHz.toFixed(3) }}</span>
+        <span
+          class="pin-power"
+          :class="{ 'text-red-400 font-bold': livePowers[pin.freqHz] > INTERFERENCE_THRESHOLD_DBM }"
+        >{{ livePowers[pin.freqHz] != null ? livePowers[pin.freqHz].toFixed(1) : '--' }}</span>
         <button
           v-if="!pin.isServer"
-          @click="emit('remove-freq', pin)"
-          class="text-gray-500 hover:text-red-400 ml-0.5 leading-none"
+          @click.stop="emit('remove-freq', pin)"
+          class="text-gray-600 hover:text-red-400 leading-none"
           title="Remove"
         >&times;</button>
+      </div>
+      <!-- All / None buttons -->
+      <div v-if="pinnedFreqs.length > 1" class="flex items-center gap-1 ml-auto text-[10px]">
+        <button
+          @click="emit('select-all-freqs')"
+          class="px-1.5 py-0.5 rounded transition-colors"
+          :class="allSelected ? 'bg-gray-700 text-gray-500 cursor-default' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'"
+          :disabled="allSelected"
+        >All</button>
+        <button
+          @click="emit('deselect-all-freqs')"
+          class="px-1.5 py-0.5 rounded transition-colors"
+          :class="noneSelected ? 'bg-gray-700 text-gray-500 cursor-default' : 'bg-gray-700 text-gray-300 hover:bg-gray-600'"
+          :disabled="noneSelected"
+        >None</button>
       </div>
     </div>
   </div>
@@ -338,5 +407,66 @@ onUnmounted(() => {
   -webkit-touch-callout: none;
   -webkit-user-select: none;
   user-select: none;
+}
+
+.pin-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  cursor: pointer;
+  background: #1f2937;
+  transition: opacity 0.15s, background 0.15s;
+  min-width: 0;
+}
+
+.pin-legend-item:hover {
+  background: #374151;
+}
+
+.pin-unselected {
+  opacity: 0.45;
+}
+
+.pin-selected {
+  background: #1e3a5f;
+}
+
+.pin-alert {
+  background: #7f1d1d40;
+}
+
+.pin-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.pin-name {
+  color: #d1d5db;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 80px;
+}
+
+.pin-freq {
+  color: #6b7280;
+  font-family: monospace;
+  font-size: 10px;
+  flex-shrink: 0;
+}
+
+.pin-power {
+  color: #9ca3af;
+  font-family: monospace;
+  font-weight: 600;
+  min-width: 32px;
+  text-align: right;
+  flex-shrink: 0;
 }
 </style>

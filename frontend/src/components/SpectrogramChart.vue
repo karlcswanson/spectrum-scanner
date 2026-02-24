@@ -45,7 +45,7 @@ const props = defineProps({
   },
 })
 
-const emit = defineEmits(['cursor-move', 'select', 'freq-pin'])
+const emit = defineEmits(['cursor-move', 'select', 'freq-pin', 'zoom'])
 
 const container = ref(null)
 const canvasRef = ref(null)
@@ -351,11 +351,14 @@ function buildAxes() {
   // Overlays group for highlight row and pinned markers (below mouse overlay)
   chart.append('g').attr('class', 'chart-overlays')
 
-  // Mouse overlay for cursor
+  // Mouse overlay for cursor and scroll-to-zoom
   chart.append('rect').attr('class', 'mouse-overlay')
     .attr('width', plotWidth).attr('height', plotHeight)
     .attr('fill', 'transparent').attr('pointer-events', 'all')
     .style('cursor', 'crosshair')
+
+  // Brush group for click-drag-to-zoom
+  chart.append('g').attr('class', 'brush')
 
   setupMouseHandlers()
 }
@@ -468,7 +471,32 @@ function setupMouseHandlers() {
     }
   }
 
-  mouseOverlay
+  // Setup brush first so its overlay element exists for event attachment
+  const brushGroup = svg.select('.brush')
+  const brushBehavior = d3.brushX()
+    .extent([[0, 0], [plotWidth, plotHeight]])
+    .filter((event) => event.shiftKey) // only activate on Shift+drag
+    .on('end', (event) => {
+      if (!event.selection || !effectiveXScale) return
+      const [x0, x1] = event.selection
+      brushGroup.call(brushBehavior.move, null)
+      if (x1 - x0 < 10) return
+      const newLo = effectiveXScale.invert(x0)
+      const newHi = effectiveXScale.invert(x1)
+      emit('zoom', [newLo, newHi])
+    })
+  brushGroup.call(brushBehavior)
+  brushGroup.select('.selection')
+    .attr('fill', '#00d4ff')
+    .attr('fill-opacity', 0.15)
+    .attr('stroke', '#00d4ff')
+    .attr('stroke-opacity', 0.5)
+
+  // Cursor tracking and click handlers — attached to brush overlay (topmost element)
+  const brushOverlayEl = brushGroup.select('.overlay')
+  const eventTarget = brushOverlayEl.empty() ? mouseOverlay : brushOverlayEl
+
+  eventTarget
     .on('mousemove', (event) => {
       if (!effectiveXScale) return
       const [mx] = d3.pointer(event)
@@ -511,10 +539,10 @@ function setupMouseHandlers() {
     if (scan) emitScanSelect(scan)
   }
 
-  mouseOverlay
+  eventTarget
     .on('touchstart.longpress', (event) => {
       if (event.touches.length !== 1) return
-      const [mx, my] = d3.pointer(event.touches[0], mouseOverlay.node())
+      const [mx, my] = d3.pointer(event.touches[0], eventTarget.node())
       longPressX = mx
       touchStartY = my
       longPressActive = false
@@ -530,7 +558,7 @@ function setupMouseHandlers() {
     })
     .on('touchmove.longpress', (event) => {
       if (longPressX === null && !timeScrubbing) return
-      const [mx, my] = d3.pointer(event.touches[0], mouseOverlay.node())
+      const [mx, my] = d3.pointer(event.touches[0], eventTarget.node())
 
       if (longPressActive) {
         event.preventDefault()
@@ -566,6 +594,42 @@ function setupMouseHandlers() {
       timeScrubbing = false
       clearCursor()
     })
+
+  // Scroll-to-zoom (x-axis only, same feel as spectrum chart)
+  eventTarget.on('wheel.zoom', (event) => {
+    if (!effectiveXScale) return
+    event.preventDefault()
+    const [mx] = d3.pointer(event)
+    const [curLo, curHi] = effectiveXScale.domain()
+    const cursorHz = effectiveXScale.invert(mx)
+    const span = curHi - curLo
+    const fullSpan = stopHz - startHz
+    // Zoom factor: positive deltaY = zoom out, negative = zoom in
+    const factor = event.deltaY > 0 ? 1.15 : 1 / 1.15
+    let newSpan = span * factor
+    // Clamp: don't zoom beyond full range or below 1/20th
+    newSpan = Math.max(fullSpan / 20, Math.min(fullSpan, newSpan))
+    // Keep cursor position proportionally stable
+    const ratio = (cursorHz - curLo) / span
+    let newLo = cursorHz - ratio * newSpan
+    let newHi = cursorHz + (1 - ratio) * newSpan
+    // Clamp to band bounds
+    if (newLo < startHz) { newHi += startHz - newLo; newLo = startHz }
+    if (newHi > stopHz) { newLo -= newHi - stopHz; newHi = stopHz }
+    newLo = Math.max(startHz, newLo)
+    newHi = Math.min(stopHz, newHi)
+    // If back to full range, emit null to reset
+    if (Math.abs(newSpan - fullSpan) < fullSpan * 0.01) {
+      emit('zoom', null)
+    } else {
+      emit('zoom', [newLo, newHi])
+    }
+  }, { passive: false })
+
+  // Double-click to reset zoom
+  eventTarget.on('dblclick.zoom', () => {
+    emit('zoom', null)
+  })
 }
 
 // Append a live scan (flow up: push to end = bottom of canvas)
@@ -736,17 +800,26 @@ function drawOverlays() {
     }
   }
 
-  // Pinned frequency vertical markers
+  // Pinned frequency vertical markers — selected pins are prominent, unselected are subtle
   for (const pin of props.pinnedFreqs) {
     const x = effectiveXScale(pin.freqHz)
     if (x >= 0 && x <= plotWidth) {
-      overlayGroup.append('line')
-        .attr('x1', x).attr('y1', 0)
-        .attr('x2', x).attr('y2', plotHeight)
-        .attr('stroke', pin.color)
-        .attr('stroke-width', 1)
-        .attr('stroke-dasharray', '4,2')
-        .attr('opacity', 0.7)
+      if (pin.selected) {
+        overlayGroup.append('line')
+          .attr('x1', x).attr('y1', 0)
+          .attr('x2', x).attr('y2', plotHeight)
+          .attr('stroke', pin.color)
+          .attr('stroke-width', 1)
+          .attr('stroke-dasharray', '4,2')
+          .attr('opacity', 0.7)
+      } else {
+        overlayGroup.append('line')
+          .attr('x1', x).attr('y1', 0)
+          .attr('x2', x).attr('y2', plotHeight)
+          .attr('stroke', pin.color)
+          .attr('stroke-width', 0.5)
+          .attr('opacity', 0.15)
+      }
     }
   }
 }

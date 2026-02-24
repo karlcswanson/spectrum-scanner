@@ -86,6 +86,9 @@ function sanitizeClass(str) {
 // For event bus mode, store current scan data (non-reactive)
 let currentScanData = null
 
+// Interference threshold
+const INTERFERENCE_THRESHOLD_DBM = -40
+
 // dB scale constants
 const minDb = -110
 const maxDb = -20
@@ -243,6 +246,7 @@ let chartCache = {
   lineGenerator: null,
   zoomBehavior: null,
   isNarrow: false,
+  lastZoomTransform: null, // persists across rebuilds
 }
 
 // Build or rebuild the chart structure (axes, grid, etc.)
@@ -294,12 +298,9 @@ function buildChartStructure() {
   // changed the old transform doesn't make sense on a new scale.
   let savedTransform = null
   const rangeUnchanged = chartCache.startHz === startHz && chartCache.stopHz === stopHz
-  if (rangeUnchanged) {
-    const existingOverlay = d3.select(svgRef.value).select('.mouse-overlay')
-    if (!existingOverlay.empty()) {
-      const t = d3.zoomTransform(existingOverlay.node())
-      if (t.k !== 1 || t.x !== 0) savedTransform = t
-    }
+  if (rangeUnchanged && chartCache.lastZoomTransform) {
+    const t = chartCache.lastZoomTransform
+    if (t.k !== 1 || t.x !== 0) savedTransform = t
   }
 
   const startMHz = startHz / 1e6
@@ -390,6 +391,10 @@ function buildChartStructure() {
     .attr('text-anchor', 'middle').attr('fill', '#666')
     .style('font-size', axisFontSize).text('MHz')
 
+  // Category band group (between grid and traces)
+  chart.append('g').attr('class', 'category-bands')
+    .attr('clip-path', 'url(#plot-clip)')
+
   // Traces group - clipped to plot area so zoomed traces don't bleed
   chart.append('g').attr('class', 'traces')
     .attr('clip-path', 'url(#plot-clip)')
@@ -426,40 +431,72 @@ function buildChartStructure() {
   // Store base scale (immutable copy for zoom rescaling)
   const xScaleBase = xScale.copy()
 
-  // Zoom behavior — x-axis only
+  // Zoom behavior — x-axis only, scroll wheel + touch pinch (no mouse drag — brush handles that)
   const zoomBehavior = d3.zoom()
     .scaleExtent([1, 20])
     .translateExtent([[0, 0], [plotWidth, plotHeight]])
     .extent([[0, 0], [plotWidth, plotHeight]])
     .filter((event) => {
-      // Allow wheel, touch, and mouse drag — block double-click (handled separately)
       if (event.type === 'dblclick') return false
+      // Block drag when Shift is held (brush handles Shift+drag)
+      if (event.type === 'mousedown' && event.shiftKey) return false
       return true
     })
     .on('zoom', (event) => {
       chartCache.xScale = event.transform.rescaleX(xScaleBase)
+      chartCache.lastZoomTransform = event.transform
       updateAxisAndGrid()
       updateTraces()
+      drawCategoryBands()
       drawPinnedMarkers()
       emit('zoom', chartCache.xScale.domain())
     })
 
-  svg.select('.mouse-overlay').call(zoomBehavior)
+  // Brush-to-zoom: Shift+drag selects a frequency range, then zooms into it
+  const brushGroup = chart.append('g').attr('class', 'brush')
+  const brushBehavior = d3.brushX()
+    .extent([[0, 0], [plotWidth, plotHeight]])
+    .filter((event) => event.shiftKey) // only activate on Shift+drag
+    .on('end', (event) => {
+      if (!event.selection) return
+      const [x0, x1] = event.selection
+      brushGroup.call(brushBehavior.move, null)
+      if (x1 - x0 < 10) return
+      const newLo = chartCache.xScale.invert(x0)
+      const newHi = chartCache.xScale.invert(x1)
+      const k = (stopHz - startHz) / (newHi - newLo)
+      const tx = -xScaleBase(newLo) * k
+      zoomEl.transition().duration(300)
+        .call(zoomBehavior.transform, d3.zoomIdentity.translate(tx, 0).scale(k))
+    })
+  brushGroup.call(brushBehavior)
+  brushGroup.select('.selection')
+    .attr('fill', '#00d4ff')
+    .attr('fill-opacity', 0.15)
+    .attr('stroke', '#00d4ff')
+    .attr('stroke-opacity', 0.5)
 
-  // Restore zoom transform from before rebuild (e.g. resize)
-  if (savedTransform) {
-    svg.select('.mouse-overlay').call(zoomBehavior.transform, savedTransform)
-  }
+  // Attach zoom to the brush overlay (topmost SVG element that receives all events).
+  // The zoom filter allows normal drag (pan) but blocks Shift+drag (brush handles that).
+  const zoomEl = brushGroup.select('.overlay')
+  zoomEl.call(zoomBehavior)
 
   // Double-click to reset zoom
-  svg.select('.mouse-overlay').on('dblclick', () => {
-    svg.select('.mouse-overlay')
-      .transition().duration(300)
+  zoomEl.on('dblclick', () => {
+    zoomEl.transition().duration(300)
       .call(zoomBehavior.transform, d3.zoomIdentity)
   })
 
-  // Update cache
-  chartCache = { width, height, startHz, stopHz, xScale, xScaleBase, yScale, margin, plotWidth, plotHeight, lineGenerator, zoomBehavior, isNarrow }
+  // Update cache BEFORE zoom restore — the restore fires the zoom handler
+  // synchronously, which sets chartCache.xScale to the zoomed scale.
+  // If we update cache after, the zoomed xScale is overwritten with the base scale.
+  chartCache = { width, height, startHz, stopHz, xScale, xScaleBase, yScale, margin, plotWidth, plotHeight, lineGenerator, zoomBehavior, isNarrow, lastZoomTransform: chartCache.lastZoomTransform }
+
+  // Restore zoom transform from before rebuild (e.g. resize)
+  // This fires the zoom handler synchronously, updating chartCache.xScale
+  if (savedTransform) {
+    zoomEl.call(zoomBehavior.transform, savedTransform)
+  }
 
   // Setup mouse handlers
   setupMouseHandlers()
@@ -829,6 +866,25 @@ function setupMouseHandlers() {
     lastEmittedCursorFreq = freqHz
     emit('cursor-move', freqHz)
 
+    // Check if cursor is near a selected server pin (within 8px)
+    let nearPin = null
+    for (const pin of props.pinnedFreqs) {
+      if (!pin.isServer || !pin.selected) continue
+      const pinX = chartCache.xScale(pin.freqHz)
+      if (Math.abs(mx - pinX) <= 8) {
+        const pinPower = getPowerAtFreq(pin.freqHz)
+        nearPin = {
+          name: pin.name,
+          category: pin.category,
+          notes: pin.notes,
+          color: pin.color,
+          freqMHz: pin.freqMHz.toFixed(3),
+          powerDbm: pinPower !== null ? pinPower.toFixed(1) : null,
+        }
+        break
+      }
+    }
+
     cursorLineV.attr('x1', mx).attr('x2', mx).attr('opacity', 0.6)
     if (powerDbm !== null) {
       const powerY = chartCache.yScale(powerDbm)
@@ -839,11 +895,17 @@ function setupMouseHandlers() {
         y: powerY + chartCache.margin.top,
         freqMHz: freqMHz.toFixed(3),
         powerDbm: powerDbm.toFixed(1),
+        pin: nearPin,
       }
     }
   }
 
-  mouseOverlay
+  // Attach cursor/click/touch handlers to the brush overlay (topmost element)
+  // so they work even with the brush layer on top of mouse-overlay
+  const brushOverlayEl = svg.select('.brush .overlay')
+  const eventTarget = brushOverlayEl.empty() ? mouseOverlay : brushOverlayEl
+
+  eventTarget
     .on('mousemove', (event) => {
       const [mx] = d3.pointer(event)
       showCrosshair(mx, chartCache.xScale.invert(mx))
@@ -885,10 +947,10 @@ function setupMouseHandlers() {
     emit('cursor-move', freqHz)
   }
 
-  mouseOverlay
+  eventTarget
     .on('touchstart.longpress', (event) => {
       if (event.touches.length !== 1) return
-      const [mx] = d3.pointer(event.touches[0], mouseOverlay.node())
+      const [mx] = d3.pointer(event.touches[0], eventTarget.node())
       longPressX = mx
       longPressActive = false
       lastPinX = null
@@ -901,7 +963,7 @@ function setupMouseHandlers() {
     })
     .on('touchmove.longpress', (event) => {
       if (longPressX === null) return
-      const [mx] = d3.pointer(event.touches[0], mouseOverlay.node())
+      const [mx] = d3.pointer(event.touches[0], eventTarget.node())
       if (longPressActive) {
         event.preventDefault()
         showPinCursor(mx)
@@ -927,6 +989,8 @@ function setupMouseHandlers() {
 function draw() {
   buildChartStructure()
   updateTraces()
+  drawCategoryBands()
+  drawPinnedMarkers()
 }
 
 // Resize handling
@@ -1018,10 +1082,62 @@ watch(() => props.cursorFreq, (freqHz) => {
   }
 })
 
-// Draw pinned frequency markers
+// Draw pinned frequency markers and category bands
 watch(() => props.pinnedFreqs, () => {
+  drawCategoryBands()
   drawPinnedMarkers()
 })
+
+function drawCategoryBands() {
+  if (!svgRef.value || !chartCache.xScale) return
+  const svg = d3.select(svgRef.value)
+  const group = svg.select('.category-bands')
+  if (group.empty()) return
+  group.selectAll('*').remove()
+
+  const { xScale, plotHeight, plotWidth } = chartCache
+
+  // Group selected server pins by category
+  const categories = {}
+  for (const pin of props.pinnedFreqs) {
+    if (!pin.isServer || !pin.category || !pin.selected) continue
+    const x = xScale(pin.freqHz)
+    if (x < 0 || x > plotWidth) continue
+    if (!categories[pin.category]) {
+      categories[pin.category] = { pins: [], color: pin.color }
+    }
+    categories[pin.category].pins.push({ x, freqHz: pin.freqHz })
+  }
+
+  // Draw bands for categories with 2+ visible frequencies
+  for (const [catName, cat] of Object.entries(categories)) {
+    if (cat.pins.length < 2) continue
+    const xs = cat.pins.map(p => p.x)
+    const minX = Math.min(...xs)
+    const maxX = Math.max(...xs)
+
+    group.append('rect')
+      .attr('x', minX)
+      .attr('y', 0)
+      .attr('width', maxX - minX)
+      .attr('height', plotHeight)
+      .attr('fill', cat.color)
+      .attr('opacity', 0.06)
+
+    // Category name centered at bottom
+    const centerX = (minX + maxX) / 2
+    if (centerX > 0 && centerX < plotWidth) {
+      group.append('text')
+        .attr('x', centerX)
+        .attr('y', plotHeight - 4)
+        .attr('text-anchor', 'middle')
+        .attr('fill', cat.color)
+        .attr('font-size', '9px')
+        .attr('opacity', 0.4)
+        .text(catName)
+    }
+  }
+}
 
 function drawPinnedMarkers() {
   if (!svgRef.value || !chartCache.xScale) return
@@ -1032,39 +1148,104 @@ function drawPinnedMarkers() {
   }
   group.selectAll('*').remove()
 
-  const { xScale, plotHeight } = chartCache
+  const { xScale, plotHeight, plotWidth } = chartCache
+
+  // Phase 1: Collect visible server pins sorted by x-position for label staggering
+  const visibleServerPins = []
   for (const pin of props.pinnedFreqs) {
     const x = xScale(pin.freqHz)
-    if (x >= 0 && x <= chartCache.plotWidth) {
-      if (pin.isServer) {
-        // Server pins: solid line, thicker, with name label
-        group.append('line')
-          .attr('x1', x).attr('y1', 0)
-          .attr('x2', x).attr('y2', plotHeight)
-          .attr('stroke', pin.color)
-          .attr('stroke-width', 1.5)
-          .attr('opacity', 0.8)
-        // Name label at top
-        if (pin.name) {
-          group.append('text')
-            .attr('x', x + 3)
-            .attr('y', 12)
-            .attr('fill', pin.color)
-            .attr('font-size', '10px')
-            .attr('font-weight', '600')
-            .attr('opacity', 0.9)
-            .text(pin.name)
-        }
-      } else {
-        // Ad-hoc pins: dashed line, no label
-        group.append('line')
-          .attr('x1', x).attr('y1', 0)
-          .attr('x2', x).attr('y2', plotHeight)
-          .attr('stroke', pin.color)
-          .attr('stroke-width', 1)
-          .attr('stroke-dasharray', '4,2')
-          .attr('opacity', 0.7)
-      }
+    if (x < 0 || x > plotWidth) continue
+    if (pin.isServer) {
+      const powerDbm = getPowerAtFreq(pin.freqHz)
+      const alert = pin.selected && powerDbm !== null && powerDbm > INTERFERENCE_THRESHOLD_DBM
+      visibleServerPins.push({ ...pin, x, powerDbm, alert })
+    }
+  }
+  visibleServerPins.sort((a, b) => a.x - b.x)
+
+  // Phase 2: Assign tiers to stagger overlapping selected labels
+  let prevX = -Infinity
+  let tier = 0
+  for (const sp of visibleServerPins) {
+    if (!sp.selected) continue
+    if (sp.x - prevX < 50) {
+      tier = (tier + 1) % 3
+    } else {
+      tier = 0
+    }
+    sp.tier = tier
+    prevX = sp.x
+  }
+
+  // Phase 3: Draw server pins — selected get full styling, unselected get subtle line only
+  for (const sp of visibleServerPins) {
+    if (!sp.selected) {
+      // Unselected: very subtle line, no label
+      group.append('line')
+        .attr('x1', sp.x).attr('y1', 0)
+        .attr('x2', sp.x).attr('y2', plotHeight)
+        .attr('stroke', sp.color)
+        .attr('stroke-width', 0.5)
+        .attr('opacity', 0.15)
+      continue
+    }
+
+    // Selected: full styling with labels and power readout
+    const lineColor = sp.alert ? '#ef4444' : sp.color
+    const lineWidth = sp.alert ? 2 : 1.5
+
+    group.append('line')
+      .attr('x1', sp.x).attr('y1', 0)
+      .attr('x2', sp.x).attr('y2', plotHeight)
+      .attr('stroke', lineColor)
+      .attr('stroke-width', lineWidth)
+      .attr('opacity', 0.8)
+
+    const labelY = 12 + sp.tier * 14
+    const nearRightEdge = sp.x > plotWidth - 60
+    const anchor = nearRightEdge ? 'end' : 'start'
+    const xOffset = nearRightEdge ? -4 : 4
+
+    // Name label
+    if (sp.name) {
+      group.append('text')
+        .attr('x', sp.x + xOffset)
+        .attr('y', labelY)
+        .attr('text-anchor', anchor)
+        .attr('fill', sp.alert ? '#ef4444' : sp.color)
+        .attr('font-size', '10px')
+        .attr('font-weight', '600')
+        .attr('opacity', 0.9)
+        .text(sp.alert ? '\u26a0 ' + sp.name : sp.name)
+    }
+
+    // Power readout below name
+    if (sp.powerDbm !== null) {
+      group.append('text')
+        .attr('x', sp.x + xOffset)
+        .attr('y', labelY + 11)
+        .attr('text-anchor', anchor)
+        .attr('fill', sp.alert ? '#ef4444' : '#9ca3af')
+        .attr('font-size', '9px')
+        .attr('font-family', 'monospace')
+        .attr('font-weight', sp.alert ? 'bold' : 'normal')
+        .attr('opacity', 0.85)
+        .text(sp.powerDbm.toFixed(1))
+    }
+  }
+
+  // Phase 4: Draw ad-hoc pins (unchanged - dashed line, no label)
+  for (const pin of props.pinnedFreqs) {
+    if (pin.isServer) continue
+    const x = xScale(pin.freqHz)
+    if (x >= 0 && x <= plotWidth) {
+      group.append('line')
+        .attr('x1', x).attr('y1', 0)
+        .attr('x2', x).attr('y2', plotHeight)
+        .attr('stroke', pin.color)
+        .attr('stroke-width', 1)
+        .attr('stroke-dasharray', '4,2')
+        .attr('opacity', 0.7)
     }
   }
 }
@@ -1099,12 +1280,31 @@ function resetPeak(traceId) {
   }
 }
 
+// Get the element that owns the zoom transform (brush overlay if present, else mouse overlay)
+function getZoomElement() {
+  const svg = d3.select(svgRef.value)
+  const brushOvl = svg.select('.brush .overlay')
+  return brushOvl.empty() ? svg.select('.mouse-overlay') : brushOvl
+}
+
 function resetZoom() {
   if (!svgRef.value || !chartCache.zoomBehavior) return
-  const svg = d3.select(svgRef.value)
-  svg.select('.mouse-overlay')
+  getZoomElement()
     .transition().duration(300)
     .call(chartCache.zoomBehavior.transform, d3.zoomIdentity)
+}
+
+// Programmatically set zoom to a given frequency domain [loHz, hiHz]
+// Used by parent to sync zoom from spectrogram
+function setZoom(domain) {
+  if (!svgRef.value || !chartCache.zoomBehavior || !chartCache.xScaleBase) return
+  const [loHz, hiHz] = domain
+  const { xScaleBase, zoomBehavior, startHz, stopHz } = chartCache
+  const k = (stopHz - startHz) / (hiHz - loHz)
+  const tx = -xScaleBase(loHz) * k
+  getZoomElement()
+    .transition().duration(300)
+    .call(zoomBehavior.transform, d3.zoomIdentity.translate(tx, 0).scale(k))
 }
 
 defineExpose({
@@ -1113,6 +1313,7 @@ defineExpose({
     Object.keys(workerResults).forEach(id => resetPeak(id))
   },
   resetZoom,
+  setZoom,
 })
 </script>
 
@@ -1128,12 +1329,23 @@ defineExpose({
         : 'bg-gray-900/90 border border-cyan-500/50'"
       :style="{
         left: `${cursorInfo.x + 10}px`,
-        top: `${cursorInfo.y - 30}px`,
+        top: `${cursorInfo.pin ? cursorInfo.y - 70 : cursorInfo.y - 30}px`,
       }"
     >
-      <div v-if="cursorInfo.pinMode" class="text-cyan-300 font-semibold mb-0.5">Pin frequency</div>
-      <div class="text-cyan-400 font-mono">{{ cursorInfo.freqMHz }} MHz</div>
-      <div v-if="cursorInfo.powerDbm != null" class="text-yellow-400 font-mono">{{ cursorInfo.powerDbm }} dBm</div>
+      <!-- Pin tooltip (when hovering near a server pin) -->
+      <template v-if="cursorInfo.pin">
+        <div class="font-semibold mb-0.5" :style="{ color: cursorInfo.pin.color }">{{ cursorInfo.pin.name }}</div>
+        <div v-if="cursorInfo.pin.category" class="text-gray-400">{{ cursorInfo.pin.category }}</div>
+        <div class="text-cyan-400 font-mono">{{ cursorInfo.pin.freqMHz }} MHz</div>
+        <div v-if="cursorInfo.pin.powerDbm != null" class="text-yellow-400 font-mono">{{ cursorInfo.pin.powerDbm }} dBm</div>
+        <div v-if="cursorInfo.pin.notes" class="text-gray-500 mt-0.5 max-w-[180px] truncate">{{ cursorInfo.pin.notes }}</div>
+      </template>
+      <!-- Standard tooltip -->
+      <template v-else>
+        <div v-if="cursorInfo.pinMode" class="text-cyan-300 font-semibold mb-0.5">Pin frequency</div>
+        <div class="text-cyan-400 font-mono">{{ cursorInfo.freqMHz }} MHz</div>
+        <div v-if="cursorInfo.powerDbm != null" class="text-yellow-400 font-mono">{{ cursorInfo.powerDbm }} dBm</div>
+      </template>
     </div>
   </div>
 </template>
