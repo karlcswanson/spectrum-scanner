@@ -718,8 +718,9 @@ function updateTraces() {
     const safeId = sanitizeClass(traceId)
 
     // Send to worker for peak/avg calculation
+    // Use Array.from() to unwrap Vue reactive proxy — postMessage can't clone Proxy objects
     if (traceWorker && (props.showPeak || props.showAverage)) {
-      traceWorker.postMessage({ type: 'update', traceId, power })
+      traceWorker.postMessage({ type: 'update', traceId, power: Array.from(power) })
     }
 
     const workerData = workerResults[traceId]
@@ -1146,7 +1147,6 @@ function drawPinnedMarkers() {
   if (group.empty()) {
     group = svg.select('.traces').append('g').attr('class', 'pinned-markers')
   }
-  group.selectAll('*').remove()
 
   const { xScale, plotHeight, plotWidth } = chartCache
 
@@ -1177,77 +1177,96 @@ function drawPinnedMarkers() {
     prevX = sp.x
   }
 
-  // Phase 3: Draw server pins — selected get full styling, unselected get subtle line only
-  for (const sp of visibleServerPins) {
+  // Phase 3: Server pins — D3 join to avoid destroy/recreate on every scan
+  // Each pin gets a group containing its line + optional name + optional power text
+  const pinGroups = group.selectAll('.pin-group')
+    .data(visibleServerPins, d => d.freqHz)
+    .join(
+      enter => {
+        const g = enter.append('g').attr('class', 'pin-group')
+        g.append('line').attr('class', 'pin-line')
+        g.append('text').attr('class', 'pin-name')
+        g.append('text').attr('class', 'pin-power')
+          .attr('font-size', '9px')
+          .attr('font-family', 'monospace')
+          .attr('opacity', 0.85)
+        return g
+      }
+    )
+
+  // Update all pin groups (enter + update)
+  pinGroups.each(function(sp) {
+    const g = d3.select(this)
+
     if (!sp.selected) {
-      // Unselected: very subtle line, no label
-      group.append('line')
+      // Unselected: subtle line, hide labels
+      g.select('.pin-line')
         .attr('x1', sp.x).attr('y1', 0)
         .attr('x2', sp.x).attr('y2', plotHeight)
         .attr('stroke', sp.color)
         .attr('stroke-width', 0.5)
         .attr('opacity', 0.15)
-      continue
+      g.select('.pin-name').attr('opacity', 0)
+      g.select('.pin-power').attr('opacity', 0)
+      return
     }
 
-    // Selected: full styling with labels and power readout
+    // Selected: full styling
     const lineColor = sp.alert ? '#ef4444' : sp.color
     const lineWidth = sp.alert ? 2 : 1.5
 
-    group.append('line')
+    g.select('.pin-line')
       .attr('x1', sp.x).attr('y1', 0)
       .attr('x2', sp.x).attr('y2', plotHeight)
       .attr('stroke', lineColor)
       .attr('stroke-width', lineWidth)
       .attr('opacity', 0.8)
 
-    const labelY = 12 + sp.tier * 14
+    const labelY = 12 + (sp.tier || 0) * 14
     const nearRightEdge = sp.x > plotWidth - 60
     const anchor = nearRightEdge ? 'end' : 'start'
     const xOffset = nearRightEdge ? -4 : 4
 
-    // Name label
-    if (sp.name) {
-      group.append('text')
-        .attr('x', sp.x + xOffset)
-        .attr('y', labelY)
-        .attr('text-anchor', anchor)
-        .attr('fill', sp.alert ? '#ef4444' : sp.color)
-        .attr('font-size', '10px')
-        .attr('font-weight', '600')
-        .attr('opacity', 0.9)
-        .text(sp.alert ? '\u26a0 ' + sp.name : sp.name)
-    }
+    // Name label — only update text if alert state changed
+    g.select('.pin-name')
+      .attr('x', sp.x + xOffset)
+      .attr('y', labelY)
+      .attr('text-anchor', anchor)
+      .attr('fill', sp.alert ? '#ef4444' : sp.color)
+      .attr('font-size', '10px')
+      .attr('font-weight', '600')
+      .attr('opacity', sp.name ? 0.9 : 0)
+      .text(sp.name ? (sp.alert ? '\u26a0 ' + sp.name : sp.name) : '')
 
-    // Power readout below name
-    if (sp.powerDbm !== null) {
-      group.append('text')
-        .attr('x', sp.x + xOffset)
-        .attr('y', labelY + 11)
-        .attr('text-anchor', anchor)
-        .attr('fill', sp.alert ? '#ef4444' : '#9ca3af')
-        .attr('font-size', '9px')
-        .attr('font-family', 'monospace')
-        .attr('font-weight', sp.alert ? 'bold' : 'normal')
-        .attr('opacity', 0.85)
-        .text(sp.powerDbm.toFixed(1))
-    }
-  }
+    // Power readout — this is the only value that changes per scan
+    g.select('.pin-power')
+      .attr('x', sp.x + xOffset)
+      .attr('y', labelY + 11)
+      .attr('text-anchor', anchor)
+      .attr('fill', sp.alert ? '#ef4444' : '#9ca3af')
+      .attr('font-weight', sp.alert ? 'bold' : 'normal')
+      .attr('opacity', sp.powerDbm !== null ? 0.85 : 0)
+      .text(sp.powerDbm !== null ? sp.powerDbm.toFixed(1) : '')
+  })
 
-  // Phase 4: Draw ad-hoc pins (unchanged - dashed line, no label)
-  for (const pin of props.pinnedFreqs) {
-    if (pin.isServer) continue
-    const x = xScale(pin.freqHz)
-    if (x >= 0 && x <= plotWidth) {
-      group.append('line')
-        .attr('x1', x).attr('y1', 0)
-        .attr('x2', x).attr('y2', plotHeight)
-        .attr('stroke', pin.color)
-        .attr('stroke-width', 1)
+  // Phase 4: Ad-hoc pins — same join pattern
+  const adHocPins = props.pinnedFreqs
+    .filter(p => !p.isServer)
+    .map(p => ({ ...p, x: xScale(p.freqHz) }))
+    .filter(p => p.x >= 0 && p.x <= plotWidth)
+
+  group.selectAll('.adhoc-pin')
+    .data(adHocPins, d => d.freqHz)
+    .join(
+      enter => enter.append('line')
+        .attr('class', 'adhoc-pin')
         .attr('stroke-dasharray', '4,2')
         .attr('opacity', 0.7)
-    }
-  }
+    )
+    .attr('x1', d => d.x).attr('y1', 0)
+    .attr('x2', d => d.x).attr('y2', plotHeight)
+    .attr('stroke', d => d.color)
+    .attr('stroke-width', 1)
 }
 
 onMounted(() => {

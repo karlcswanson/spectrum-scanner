@@ -327,7 +327,7 @@ function buildAxes() {
     canvasRef.value.style.height = canvasHeight + 'px'
     canvasRef.value.style.left = margin.left + 'px'
     canvasRef.value.style.top = margin.top + 'px'
-    ctx = canvasRef.value.getContext('2d')
+    ctx = canvasRef.value.getContext('2d', { willReadFrequently: true })
   }
 
   const svg = d3.select(svgRef.value)
@@ -632,29 +632,6 @@ function setupMouseHandlers() {
   })
 }
 
-// Append a live scan (flow up: push to end = bottom of canvas)
-function addLiveScan(scan) {
-  if (!scan?.power?.length) return
-
-  const entry = {
-    timestamp: Date.now(),
-    power: scan.power,
-    hz_lo: scan.hz_lo,
-    hz_hi: scan.hz_hi,
-  }
-
-  scanBuffer.value.push(entry)
-  const max = 2000 // ~30 min of live data at 1 scan/sec
-  if (scanBuffer.value.length > max) {
-    scanBuffer.value.splice(0, scanBuffer.value.length - max)
-  }
-
-  // Fast path: only paint the 1 new row instead of full repaint
-  renderLiveRow(scan)
-  updateTimeAxis()
-  drawOverlays()
-}
-
 // Load scans into buffer (sorted chronologically, oldest first)
 function loadHistorical(scans) {
   if (!scans || scans.length === 0) {
@@ -692,21 +669,34 @@ function clear() {
 
 defineExpose({ clear })
 
-// Watch live scans
+// Watch live scans — always paint new rows, regardless of scrubber mode.
+// The waterfall is a continuous timeline that never stops scrolling.
 watch(() => props.scan, (newScan) => {
-  if (props.isLive && newScan?.power?.length) {
-    addLiveScan(newScan)
+  if (!newScan?.power?.length) return
+  scanBuffer.value.push({
+    timestamp: Date.now(),
+    power: newScan.power,
+    hz_lo: newScan.hz_lo,
+    hz_hi: newScan.hz_hi,
+  })
+  const max = 2000
+  if (scanBuffer.value.length > max) {
+    scanBuffer.value.splice(0, scanBuffer.value.length - max)
   }
+  renderLiveRow(newScan)
+  updateTimeAxis()
+  drawOverlays()
 })
 
-// Watch historical scans — the array ref is replaced wholesale on load, so shallow watch suffices
+// Watch historical scans — full render on load or time range change
 watch(() => props.historicalScans, (scans) => {
   loadHistorical(scans)
 })
 
-// Watch mode switch — pre-fill from historical in both modes
+// Watch mode switch — only update overlays (highlight bar position).
+// The waterfall itself keeps scrolling regardless of mode.
 watch(() => props.isLive, () => {
-  loadHistorical(props.historicalScans)
+  drawOverlays()
 })
 
 // Re-render when color scale range changes
@@ -782,14 +772,28 @@ function drawOverlays() {
   }
   overlayGroup.selectAll('*').remove()
 
-  // Highlight row
+  // Highlight row — the canvas is a scrolling tape via renderLiveRow.
+  // Bottom row = newest scan, each row up = one scan earlier.
+  // Count how many scans back the highlighted time is, map to pixel rows from bottom.
   if (props.highlightTime !== null) {
     const buf = scanBuffer.value
     if (buf.length >= 2) {
-      const oldestTs = buf[0].timestamp
-      const newestTs = buf[buf.length - 1].timestamp
-      const timeSpan = newestTs - oldestTs || 1
-      const rowY = ((props.highlightTime - oldestTs) / timeSpan) * (plotHeight - 1)
+      // Find how many scans from the end the highlight time is
+      // Binary search for the closest scan
+      let closestIdx = buf.length - 1
+      let closestDist = Math.abs(buf[closestIdx].timestamp - props.highlightTime)
+      for (let i = buf.length - 2; i >= 0; i--) {
+        const dist = Math.abs(buf[i].timestamp - props.highlightTime)
+        if (dist < closestDist) {
+          closestIdx = i
+          closestDist = dist
+        } else {
+          break // buffer is sorted, distances will only increase from here
+        }
+      }
+      // Rows from bottom: buf.length-1 = row plotHeight-1 (bottom), going up
+      const scansFromEnd = buf.length - 1 - closestIdx
+      const rowY = (plotHeight - 1) - scansFromEnd
       if (rowY >= 0 && rowY <= plotHeight) {
         overlayGroup.append('line')
           .attr('x1', 0).attr('y1', rowY)

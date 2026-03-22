@@ -353,7 +353,6 @@ const freqRange = computed(() => {
 const traces = computed(() => {
   const result = []
 
-  // If we have live scan data, always show it
   const hasLiveScan = props.scan && props.scan.power && props.scan.power.length > 0
 
   // Historical trace (yellow, when scrubbing)

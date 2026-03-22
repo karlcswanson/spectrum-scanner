@@ -219,13 +219,16 @@ function getDate(timestamp) {
 // Track if SVG structure is initialized
 let svgInitialized = false
 let lastWidth = 0
+let lastTimelineLength = -1
+let lastDataRangeKey = ''
 
+// Full draw: rebuilds structure, density bar, markers, axis, and position
 function draw() {
   if (!svgRef.value || !container.value) return
 
   const rect = container.value.getBoundingClientRect()
   const width = rect.width
-  if (width < 1) return // Not laid out yet (e.g. hidden or initial mount on mobile)
+  if (width < 1) return
   const height = props.height
   const isNarrow = width < 500
   const margin = { top: 5, right: isNarrow ? 10 : 50, bottom: 25, left: isNarrow ? 5 : 15 }
@@ -261,20 +264,19 @@ function draw() {
 
     svgInitialized = true
     lastWidth = width
+    // Force data redraw after structure rebuild
+    lastTimelineLength = -1
   }
 
   const chart = svg.select('.chart')
-
-  // Get fresh time range (not cached)
   const timeRange = getTimeRange()
 
-  // Time scale
   const xScale = d3.scaleTime()
     .domain([timeRange.start, timeRange.end])
     .range([0, plotWidth])
 
-  // Store for drag operations
   currentXScale = xScale
+  currentPlotWidth = plotWidth
 
   // Update time axis
   const tickCount = Math.min(12, Math.floor(plotWidth / 80))
@@ -291,21 +293,36 @@ function draw() {
   chart.selectAll('.domain, .tick line')
     .attr('stroke', '#333')
 
-  // Draw density bar to show data availability
-  // Green = raw scans, amber = rolled-up summaries
+  // Only rebuild density bar and markers when data actually changed
+  const dataRangeKey = `${timeRange.start.getTime()}:${timeRange.end.getTime()}`
+  if (filteredTimeline.value.length !== lastTimelineLength || dataRangeKey !== lastDataRangeKey) {
+    lastTimelineLength = filteredTimeline.value.length
+    lastDataRangeKey = dataRangeKey
+    drawData(chart, xScale, plotWidth, plotHeight)
+  }
+
+  // Always update position (now line + scrubber) — this is the cheap part
+  updatePosition(chart, xScale, plotWidth, plotHeight)
+
+  // Setup drag behavior once
+  setupDrag(chart, plotHeight)
+}
+
+// Heavy path: density bar + markers. Only called when timeline data or range changes.
+function drawData(chart, xScale, plotWidth, plotHeight) {
+  // Density bar
   if (props.showDensity) {
     const densityBar = chart.select('.density-bar')
     densityBar.selectAll('*').remove()
 
-    // Create bins for density calculation
     const numBins = Math.max(1, Math.floor(Math.min(plotWidth / 4, 100)))
     const binWidth = plotWidth / numBins
     const rawBins = new Array(numBins).fill(0)
     const summaryBins = new Array(numBins).fill(0)
 
-    // Count scans in each bin, split by source
     filteredTimeline.value.forEach(t => {
       const date = getDate(t.timestamp)
+      const timeRange = getTimeRange()
       if (date >= timeRange.start && date <= timeRange.end) {
         const x = xScale(date)
         const binIdx = Math.min(Math.floor(x / binWidth), numBins - 1)
@@ -319,10 +336,7 @@ function draw() {
       }
     })
 
-    // Find max across both for normalization
     const maxCount = Math.max(...rawBins, ...summaryBins, 1)
-
-    // Draw density rectangles - summaries first (behind), then raw (in front)
     const barHeight = 6
     const y = plotHeight - barHeight - 2
 
@@ -353,35 +367,24 @@ function draw() {
     })
   }
 
-  // Get markers with cached dates (needed for drag operations even if not drawn)
-  const allMarkers = filteredTimeline.value
-    .map(t => ({
-      ...t,
-      date: getDate(t.timestamp),
-    }))
-    .filter(t => t.date >= timeRange.start && t.date <= timeRange.end)
-
-  // Store plotWidth for drag operations
-  currentPlotWidth = plotWidth
-
-  // Only draw markers if not hidden
+  // Markers
   if (!props.hideMarkers) {
-    // Bin markers if there are too many (more than 1 per 2 pixels)
+    const timeRange = getTimeRange()
+    const allMarkers = filteredTimeline.value
+      .map(t => ({ ...t, date: getDate(t.timestamp) }))
+      .filter(t => t.date >= timeRange.start && t.date <= timeRange.end)
+
     const maxMarkers = Math.floor(plotWidth / 2)
     let markers = allMarkers
     if (allMarkers.length > maxMarkers) {
-      // Bin by pixel position - keep one marker per bin
       const binned = new Map()
       for (const m of allMarkers) {
         const px = Math.floor(xScale(m.date))
-        if (!binned.has(px)) {
-          binned.set(px, m)
-        }
+        if (!binned.has(px)) binned.set(px, m)
       }
       markers = Array.from(binned.values())
     }
 
-    // Update markers efficiently - smaller and dimmer to complement density bar
     const markerRadius = 2
     chart.select('.markers').selectAll('.scan-marker')
       .data(markers, d => d.id)
@@ -394,25 +397,24 @@ function draw() {
         if (selectedTime.value && Math.abs(d.date - selectedTime.value) < 1000) {
           return '#00d4ff'
         }
-        return '#4a556880' // dimmer gray with transparency
+        return '#4a556880'
       })
   } else {
-    // Clear any existing markers
     chart.select('.markers').selectAll('.scan-marker').remove()
   }
+}
 
-  // Update "now" indicator
+// Light path: now line + scrubber position. Called on every tick — only ~6 DOM writes.
+function updatePosition(chart, xScale, plotWidth, plotHeight) {
   const nowX = xScale(new Date())
   chart.select('.now-line')
     .attr('x1', nowX)
-    .attr('y1', 0)
     .attr('x2', nowX)
     .attr('y2', plotHeight)
     .attr('stroke', isLive.value ? '#22c55e' : '#666')
     .attr('stroke-width', 1)
     .attr('stroke-dasharray', '4,2')
 
-  // Update scrubber position and colors
   const scrubberX = selectedTime.value ? xScale(selectedTime.value) : nowX
   const scrubber = chart.select('.scrubber')
     .attr('transform', `translate(${Math.max(0, Math.min(plotWidth, scrubberX))}, 0)`)
@@ -420,7 +422,6 @@ function draw() {
 
   const scrubberColor = isLive.value ? '#22c55e' : '#00d4ff'
 
-  // Only create scrubber elements once
   if (scrubber.select('line').empty()) {
     scrubber.append('line')
     scrubber.append('path').attr('class', 'top-handle')
@@ -450,51 +451,45 @@ function draw() {
     .attr('width', 20)
     .attr('height', plotHeight)
     .attr('fill', 'transparent')
+}
 
-  // Only set up drag behavior once
-  if (!scrubber.node().__dragInitialized) {
-    scrubber.node().__dragInitialized = true
+// Setup drag behavior (called once per structure rebuild)
+function setupDrag(chart, plotHeight) {
+  const scrubber = chart.select('.scrubber')
+  if (!scrubber.node() || scrubber.node().__dragInitialized) return
+  scrubber.node().__dragInitialized = true
 
-    const drag = d3.drag()
-      .on('start', () => {
-        isDragging.value = true
-      })
-      .on('drag', (event) => {
-        // Immediately follow the mouse for responsive feel
-        const x = Math.max(0, Math.min(currentPlotWidth, event.x))
-        scrubber.attr('transform', `translate(${x}, 0)`)
+  const drag = d3.drag()
+    .on('start', () => {
+      isDragging.value = true
+    })
+    .on('drag', (event) => {
+      const x = Math.max(0, Math.min(currentPlotWidth, event.x))
+      scrubber.attr('transform', `translate(${x}, 0)`)
+      scrubber.select('line').attr('stroke', '#00d4ff')
+      scrubber.selectAll('path').attr('fill', '#00d4ff')
+      const time = pixelToTime(x, currentPlotWidth)
+      dragTime.value = time
+      emit('preview', time)
+    })
+    .on('end', (event) => {
+      isDragging.value = false
+      const x = Math.max(0, Math.min(currentPlotWidth, event.x))
+      const time = pixelToTime(x, currentPlotWidth)
+      dragTime.value = time
+      emit('select', time)
+      draw()
+    })
 
-        // Update line color while dragging
-        scrubber.select('line').attr('stroke', '#00d4ff')
-        scrubber.selectAll('path').attr('fill', '#00d4ff')
+  scrubber.call(drag)
 
-        // Calculate time from pixel position and emit preview
-        const time = pixelToTime(x, currentPlotWidth)
-        dragTime.value = time
-        emit('preview', time)
-      })
-      .on('end', (event) => {
-        isDragging.value = false
-        // On release, calculate time from pixel position and emit select
-        const x = Math.max(0, Math.min(currentPlotWidth, event.x))
-        const time = pixelToTime(x, currentPlotWidth)
-        dragTime.value = time
-        emit('select', time)
-        // Redraw to update scrubber appearance
-        draw()
-      })
-
-    scrubber.call(drag)
-
-    // Click anywhere on timeline to seek
-    chart.select('.click-area')
-      .on('click', (event) => {
-        const [x] = d3.pointer(event)
-        const time = pixelToTime(x, currentPlotWidth)
-        dragTime.value = time
-        emit('select', time)
-      })
-  }
+  chart.select('.click-area')
+    .on('click', (event) => {
+      const [x] = d3.pointer(event)
+      const time = pixelToTime(x, currentPlotWidth)
+      dragTime.value = time
+      emit('select', time)
+    })
 }
 
 // Resize handling
