@@ -41,7 +41,7 @@ services:
 
   # MQTT Broker with Django auth
   mosquitto:
-    image: iegomez/mosquitto-go-auth:latest
+    image: eclipse-mosquitto:2
     restart: unless-stopped
     ports:
       - "1883:1883"
