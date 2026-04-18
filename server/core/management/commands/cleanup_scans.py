@@ -2,12 +2,16 @@
 Management command to delete old scans from the database.
 Run periodically via cron or Docker healthcheck.
 
+DEPRECATED: Use 'manage.py rollup' instead, which aggregates scans into
+summaries before purging, preserving historical peak/average data.
+
 Usage:
     python manage.py cleanup_scans --hours 6
     python manage.py cleanup_scans --hours 6 --batch-size 1000
 """
 
 import time
+import warnings
 from datetime import timedelta
 
 from django.core.management.base import BaseCommand
@@ -17,7 +21,7 @@ from core.models import Scan
 
 
 class Command(BaseCommand):
-    help = "Delete scans older than specified hours"
+    help = "Delete scans older than specified hours (DEPRECATED: use 'manage.py rollup' instead)"
 
     def add_arguments(self, parser):
         parser.add_argument(
@@ -39,6 +43,13 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
+        self.stderr.write(
+            self.style.WARNING(
+                "DEPRECATED: cleanup_scans deletes data without aggregation. "
+                "Use 'manage.py rollup' instead to preserve historical peak/average data."
+            )
+        )
+
         hours = options["hours"]
         batch_size = options["batch_size"]
         dry_run = options["dry_run"]

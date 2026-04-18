@@ -4,7 +4,7 @@ from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 from django.contrib.auth.models import User
 from django.utils.html import format_html
-from .models import Scanner, Band, Scan, UserMQTTCredentials, ShareLink
+from .models import Scanner, Band, Scan, UserMQTTCredentials, ShareLink, ScannerGroup, MonitoredFrequency, Access, SiteSettings, ScanSummary
 
 
 class BandInline(admin.TabularInline):
@@ -21,6 +21,7 @@ class ScannerAdmin(admin.ModelAdmin):
     search_fields = ['id', 'name', 'location']
     readonly_fields = ['id', 'online', 'scanning', 'current_band', 'last_seen', 'created_at', 'updated_at', 'credentials_display']
     inlines = [BandInline]
+    filter_horizontal = ['scanner_groups']
     actions = ['regenerate_tokens']
     change_form_template = 'admin/core/scanner/change_form.html'
 
@@ -28,9 +29,17 @@ class ScannerAdmin(admin.ModelAdmin):
         (None, {
             'fields': ('name', 'scanner_type', 'location', 'description')
         }),
+        ('Groups', {
+            'fields': ('scanner_groups',),
+        }),
         ('Authentication', {
             'fields': ('enabled', 'credentials_display'),
             'description': 'Copy these credentials to the scanner config.yaml'
+        }),
+        ('Data Retention', {
+            'fields': ('retention_policy',),
+            'classes': ('collapse',),
+            'description': 'Override the global retention policy for this scanner. Leave empty to use the global default.'
         }),
         ('Status (read-only)', {
             'fields': ('online', 'scanning', 'current_band', 'last_seen'),
@@ -158,6 +167,210 @@ class ShareLinkAdmin(admin.ModelAdmin):
         if not change:  # New object
             obj.created_by = request.user
         super().save_model(request, obj, form, change)
+
+
+class ScannerGroupMembershipInline(admin.TabularInline):
+    """Inline for managing scanners in a group."""
+    model = Scanner.scanner_groups.through
+    extra = 1
+    verbose_name = 'Scanner'
+    verbose_name_plural = 'Scanners'
+    autocomplete_fields = ['scanner']
+
+
+@admin.register(ScannerGroup)
+class ScannerGroupAdmin(admin.ModelAdmin):
+    list_display = ['name', 'short_id', 'scanner_count', 'start_date', 'end_date', 'created_at']
+    search_fields = ['name', 'description']
+    readonly_fields = ['id', 'created_at', 'updated_at']
+    inlines = [ScannerGroupMembershipInline]
+
+    fieldsets = (
+        (None, {
+            'fields': ('name', 'description', 'start_date', 'end_date')
+        }),
+        ('Metadata', {
+            'fields': ('id', 'created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
+
+    def short_id(self, obj):
+        return str(obj.id)[:8]
+    short_id.short_description = 'ID'
+
+    def scanner_count(self, obj):
+        return obj.scanners.count()
+    scanner_count.short_description = 'Scanners'
+
+    def save_model(self, request, obj, form, change):
+        if not change:
+            obj.created_by = request.user
+        super().save_model(request, obj, form, change)
+
+
+@admin.register(MonitoredFrequency)
+class MonitoredFrequencyAdmin(admin.ModelAdmin):
+    list_display = ['name', 'frequency_mhz_display', 'category', 'color_swatch', 'scope_summary', 'active']
+    list_filter = ['category', 'active']
+    search_fields = ['name', 'notes']
+    filter_horizontal = ['scanners', 'groups']
+    readonly_fields = ['id', 'created_at', 'updated_at']
+
+    fieldsets = (
+        (None, {
+            'fields': ('name', 'frequency_hz', 'category', 'color', 'active')
+        }),
+        ('Scope', {
+            'fields': ('scanners', 'groups'),
+            'description': 'Assign to specific scanners and/or groups. Leave both empty for a global frequency visible to all scanners.'
+        }),
+        ('Notes & Metadata', {
+            'fields': ('notes', 'id', 'created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+    )
+
+    def frequency_mhz_display(self, obj):
+        return f"{obj.frequency_hz / 1e6:.3f} MHz"
+    frequency_mhz_display.short_description = 'Frequency'
+    frequency_mhz_display.admin_order_field = 'frequency_hz'
+
+    def color_swatch(self, obj):
+        if obj.color:
+            return format_html(
+                '<span style="display:inline-block;width:14px;height:14px;background:{};border-radius:2px;vertical-align:middle;"></span> {}',
+                obj.color, obj.color
+            )
+        return '—'
+    color_swatch.short_description = 'Color'
+
+    def scope_summary(self, obj):
+        parts = []
+        scanner_count = obj.scanners.count()
+        group_count = obj.groups.count()
+        if scanner_count:
+            parts.append(f"{scanner_count} scanner{'s' if scanner_count > 1 else ''}")
+        if group_count:
+            parts.append(f"{group_count} group{'s' if group_count > 1 else ''}")
+        return ', '.join(parts) if parts else 'Global'
+    scope_summary.short_description = 'Scope'
+
+
+@admin.register(Access)
+class AccessAdmin(admin.ModelAdmin):
+    list_display = ['label', 'who_display', 'scope_display', 'permission', 'is_active', 'use_count', 'created_at']
+    list_filter = ['permission', 'is_active']
+    search_fields = ['label', 'token']
+    readonly_fields = ['id', 'created_at', 'updated_at', 'last_used_at', 'use_count']
+    actions = ['revoke_access', 'activate_access']
+
+    fieldsets = (
+        (None, {
+            'fields': ('label', 'permission', 'is_active')
+        }),
+        ('Principal (set exactly one)', {
+            'fields': ('user', 'token'),
+        }),
+        ('Scope (set exactly one)', {
+            'fields': ('scanner_group', 'scanner'),
+        }),
+        ('Expiration', {
+            'fields': ('expires_at',),
+        }),
+        ('Usage Stats', {
+            'fields': ('use_count', 'last_used_at', 'created_at', 'updated_at'),
+            'classes': ('collapse',)
+        }),
+        ('Metadata', {
+            'fields': ('id',),
+            'classes': ('collapse',)
+        }),
+    )
+
+    def who_display(self, obj):
+        if obj.user:
+            return obj.user.username
+        if obj.token:
+            return f"token:{obj.token[:12]}..."
+        return "—"
+    who_display.short_description = 'Who'
+
+    def scope_display(self, obj):
+        if obj.scanner_group:
+            return f"Group: {obj.scanner_group.name}"
+        if obj.scanner:
+            return f"Scanner: {obj.scanner.name}"
+        return "—"
+    scope_display.short_description = 'Scope'
+
+    @admin.action(description='Revoke selected access grants')
+    def revoke_access(self, request, queryset):
+        count = queryset.update(is_active=False)
+        self.message_user(request, f"Revoked {count} access grant(s)")
+
+    @admin.action(description='Activate selected access grants')
+    def activate_access(self, request, queryset):
+        count = queryset.update(is_active=True)
+        self.message_user(request, f"Activated {count} access grant(s)")
+
+    def save_model(self, request, obj, form, change):
+        if not change:
+            obj.created_by = request.user
+        super().save_model(request, obj, form, change)
+
+
+@admin.register(SiteSettings)
+class SiteSettingsAdmin(admin.ModelAdmin):
+    list_display = ['name', 'value', 'updated_at']
+    search_fields = ['name']
+    readonly_fields = ['updated_at']
+
+    fieldsets = (
+        (None, {
+            'fields': ('name', 'value', 'description', 'updated_at')
+        }),
+    )
+
+
+@admin.register(ScanSummary)
+class ScanSummaryAdmin(admin.ModelAdmin):
+    list_display = ['scanner', 'band', 'bucket_start', 'bucket_seconds_display', 'scan_count', 'hz_lo', 'hz_hi']
+    list_filter = ['scanner', 'band', 'bucket_seconds']
+    date_hierarchy = 'bucket_start'
+    readonly_fields = ['scanner', 'band', 'bucket_start', 'bucket_seconds', 'hz_lo', 'hz_hi', 'step_hz', 'peak_power', 'avg_power', 'scan_count']
+    change_list_template = 'admin/core/scansummary/change_list.html'
+
+    def bucket_seconds_display(self, obj):
+        if obj.bucket_seconds >= 3600:
+            return f"{obj.bucket_seconds // 3600}h"
+        return f"{obj.bucket_seconds // 60}m"
+    bucket_seconds_display.short_description = 'Resolution'
+
+    def has_add_permission(self, request):
+        return False
+
+    def get_urls(self):
+        from django.urls import path
+        urls = super().get_urls()
+        custom_urls = [
+            path('run-rollup/', self.admin_site.admin_view(self.run_rollup_view), name='core_scansummary_rollup'),
+        ]
+        return custom_urls + urls
+
+    def run_rollup_view(self, request):
+        from django.shortcuts import redirect
+        from django.contrib import messages
+        from django.core.management import call_command
+        from io import StringIO
+
+        out = StringIO()
+        try:
+            call_command('rollup', stdout=out)
+            messages.success(request, f'Rollup completed. {out.getvalue()}')
+        except Exception as e:
+            messages.error(request, f'Rollup failed: {e}')
+        return redirect('admin:core_scansummary_changelist')
 
 
 class UserMQTTCredentialsInline(admin.StackedInline):

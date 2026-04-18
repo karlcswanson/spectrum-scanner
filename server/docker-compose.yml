@@ -1,19 +1,37 @@
 services:
-  # MQTT Broker with Django auth
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_DB=${DB_NAME:-spectrum}
+      - POSTGRES_USER=${DB_USER:-spectrum}
+      - POSTGRES_PASSWORD=${DB_PASSWORD:-spectrum}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-spectrum} -d ${DB_NAME:-spectrum}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # MQTT Broker with Dynamic Security plugin
   mosquitto:
-    image: iegomez/mosquitto-go-auth:latest
+    image: eclipse-mosquitto:2
     ports:
       - "1883:1883"
       - "9001:9001"
+    environment:
+      - MOSQUITTO_DYNSEC_USERNAME=${MOSQUITTO_DYNSEC_USERNAME:-admin}
+      - MOSQUITTO_DYNSEC_PASSWORD=${MOSQUITTO_DYNSEC_PASSWORD:-admin-secret-change-me}
     volumes:
-      - ./mosquitto/mosquitto.conf:/etc/mosquitto/mosquitto.conf
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf
+      - ./mosquitto/entrypoint.sh:/entrypoint.sh
       - mosquitto_data:/mosquitto/data
-      - mosquitto_log:/mosquitto/log
-    depends_on:
-      server:
-        condition: service_started
+    entrypoint: /entrypoint.sh
 
-  # Django Backend (REST API for historical data + MQTT auth)
+  # Django Backend (REST API for historical data)
   server:
     build:
       context: .
@@ -21,18 +39,30 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - DEBUG=true
-      - DJANGO_SECRET_KEY=dev-secret-change-me
-      - MQTT_BROKER_HOST=mosquitto
-      - DB_ENGINE=django.db.backends.sqlite3
-      - DB_NAME=/app/data/db.sqlite3
-      - MQTT_BRIDGE_USERNAME=spectrum-bridge
-      - MQTT_BRIDGE_PASSWORD=bridge-secret-token-change-me
+      - DEBUG=${DEBUG:-true}
+      - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY:-dev-secret-change-me}
+      - MQTT_BROKER_HOST=${MQTT_BROKER_HOST:-mosquitto}
+      - DB_ENGINE=django.db.backends.postgresql
+      - DB_NAME=${DB_NAME:-spectrum}
+      - DB_USER=${DB_USER:-spectrum}
+      - DB_PASSWORD=${DB_PASSWORD:-spectrum}
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - MQTT_BRIDGE_USERNAME=${MQTT_BRIDGE_USERNAME:-spectrum-bridge}
+      - MQTT_BRIDGE_PASSWORD=${MQTT_BRIDGE_PASSWORD:-bridge-secret-token-change-me}
+      - MOSQUITTO_DYNSEC_USERNAME=${MOSQUITTO_DYNSEC_USERNAME:-admin}
+      - MOSQUITTO_DYNSEC_PASSWORD=${MOSQUITTO_DYNSEC_PASSWORD:-admin-secret-change-me}
     volumes:
       - .:/app
       - ./data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mosquitto:
+        condition: service_started
     command: >
       sh -c "uv run python manage.py migrate &&
+             uv run python manage.py dynsec_sync &&
              uv run python manage.py runserver 0.0.0.0:8000"
 
   # MQTT Bridge (stores scans to database)
@@ -41,11 +71,17 @@ services:
       context: .
       dockerfile: Dockerfile
     environment:
-      - MQTT_BROKER_HOST=mosquitto
-      - DB_ENGINE=django.db.backends.sqlite3
-      - DB_NAME=/app/data/db.sqlite3
-      - MQTT_BRIDGE_USERNAME=spectrum-bridge
-      - MQTT_BRIDGE_PASSWORD=bridge-secret-token-change-me
+      - MQTT_BROKER_HOST=${MQTT_BROKER_HOST:-mosquitto}
+      - DB_ENGINE=django.db.backends.postgresql
+      - DB_NAME=${DB_NAME:-spectrum}
+      - DB_USER=${DB_USER:-spectrum}
+      - DB_PASSWORD=${DB_PASSWORD:-spectrum}
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - MQTT_BRIDGE_USERNAME=${MQTT_BRIDGE_USERNAME:-spectrum-bridge}
+      - MQTT_BRIDGE_PASSWORD=${MQTT_BRIDGE_PASSWORD:-bridge-secret-token-change-me}
+      - MOSQUITTO_DYNSEC_USERNAME=${MOSQUITTO_DYNSEC_USERNAME:-admin}
+      - MOSQUITTO_DYNSEC_PASSWORD=${MOSQUITTO_DYNSEC_PASSWORD:-admin-secret-change-me}
     volumes:
       - .:/app
       - ./data:/app/data
@@ -53,6 +89,28 @@ services:
       - mosquitto
       - server
     command: python manage.py mqtt_bridge
+
+  # Scheduler (per-scanner rollup + periodic dynsec sync via APScheduler)
+  scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      - DB_ENGINE=django.db.backends.postgresql
+      - DB_NAME=${DB_NAME:-spectrum}
+      - DB_USER=${DB_USER:-spectrum}
+      - DB_PASSWORD=${DB_PASSWORD:-spectrum}
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - MQTT_BROKER_HOST=${MQTT_BROKER_HOST:-mosquitto}
+      - MOSQUITTO_DYNSEC_USERNAME=${MOSQUITTO_DYNSEC_USERNAME:-admin}
+      - MOSQUITTO_DYNSEC_PASSWORD=${MOSQUITTO_DYNSEC_PASSWORD:-admin-secret-change-me}
+    volumes:
+      - .:/app
+    depends_on:
+      - server
+      - mosquitto
+    command: uv run python manage.py scheduler
 
   # Vue Frontend (dev server)
   frontend:
@@ -70,6 +128,6 @@ services:
       - server
 
 volumes:
+  postgres_data:
   mosquitto_data:
-  mosquitto_log:
   frontend_modules:

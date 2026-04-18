@@ -35,6 +35,7 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+    'django.middleware.gzip.GZipMiddleware',
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
@@ -66,9 +67,11 @@ TEMPLATES = [
 WSGI_APPLICATION = 'config.wsgi.application'
 
 # Database
+_db_engine = os.getenv('DB_ENGINE', 'django.db.backends.sqlite3')
+
 DATABASES = {
     'default': {
-        'ENGINE': os.getenv('DB_ENGINE', 'django.db.backends.sqlite3'),
+        'ENGINE': _db_engine,
         'NAME': os.getenv('DB_NAME', BASE_DIR / 'db.sqlite3'),
         'USER': os.getenv('DB_USER', ''),
         'PASSWORD': os.getenv('DB_PASSWORD', ''),
@@ -76,6 +79,15 @@ DATABASES = {
         'PORT': os.getenv('DB_PORT', ''),
     }
 }
+
+if 'sqlite3' in _db_engine:
+    DATABASES['default']['OPTIONS'] = {
+        'timeout': 30,
+        'init_command': (
+            'PRAGMA journal_mode=WAL;'
+            'PRAGMA synchronous=NORMAL;'
+        ),
+    }
 
 # Password validation
 AUTH_PASSWORD_VALIDATORS = [
@@ -137,6 +149,9 @@ MQTT_TOPIC_PREFIX = os.getenv('MQTT_TOPIC_PREFIX', 'spectrum')
 # MQTT bridge service credentials (subscribe-only internal service)
 MQTT_BRIDGE_USERNAME = os.getenv('MQTT_BRIDGE_USERNAME', '')
 MQTT_BRIDGE_PASSWORD = os.getenv('MQTT_BRIDGE_PASSWORD', '')
+# MQTT Dynamic Security admin credentials (for provisioning clients/roles)
+MQTT_DYNSEC_USERNAME = os.getenv('MOSQUITTO_DYNSEC_USERNAME', 'admin')
+MQTT_DYNSEC_PASSWORD = os.getenv('MOSQUITTO_DYNSEC_PASSWORD', '')
 
 # Logging
 LOGGING = {

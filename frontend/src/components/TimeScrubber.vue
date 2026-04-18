@@ -66,6 +66,8 @@ const timeRangeOptions = [
   { label: '1 hour', hours: 1 },
   { label: '6 hours', hours: 6 },
   { label: '24 hours', hours: 24 },
+  { label: '7 days', hours: 168 },
+  { label: '30 days', hours: 720 },
 ]
 
 // Selected time range
@@ -109,6 +111,11 @@ let currentPlotWidth = 0
 const filteredTimeline = computed(() => {
   if (!props.bandName) return props.timeline
   return props.timeline.filter(t => t.band__name === props.bandName)
+})
+
+// Count summary entries for display
+const summaryCount = computed(() => {
+  return filteredTimeline.value.filter(t => t.source === 'summary').length
 })
 
 // Time range - computed fresh in draw(), using selected range
@@ -212,15 +219,20 @@ function getDate(timestamp) {
 // Track if SVG structure is initialized
 let svgInitialized = false
 let lastWidth = 0
+let lastTimelineLength = -1
+let lastDataRangeKey = ''
 
+// Full draw: rebuilds structure, density bar, markers, axis, and position
 function draw() {
   if (!svgRef.value || !container.value) return
 
   const rect = container.value.getBoundingClientRect()
   const width = rect.width
+  if (width < 1) return
   const height = props.height
-  const margin = { top: 5, right: 50, bottom: 25, left: 15 }
-  const plotWidth = width - margin.left - margin.right
+  const isNarrow = width < 500
+  const margin = { top: 5, right: isNarrow ? 10 : 50, bottom: 25, left: isNarrow ? 5 : 15 }
+  const plotWidth = Math.max(1, width - margin.left - margin.right)
   const plotHeight = height - margin.top - margin.bottom
 
   const svg = d3.select(svgRef.value)
@@ -252,20 +264,19 @@ function draw() {
 
     svgInitialized = true
     lastWidth = width
+    // Force data redraw after structure rebuild
+    lastTimelineLength = -1
   }
 
   const chart = svg.select('.chart')
-
-  // Get fresh time range (not cached)
   const timeRange = getTimeRange()
 
-  // Time scale
   const xScale = d3.scaleTime()
     .domain([timeRange.start, timeRange.end])
     .range([0, plotWidth])
 
-  // Store for drag operations
   currentXScale = xScale
+  currentPlotWidth = plotWidth
 
   // Update time axis
   const tickCount = Math.min(12, Math.floor(plotWidth / 80))
@@ -277,42 +288,77 @@ function draw() {
     .call(xAxis)
     .selectAll('text')
     .attr('fill', '#666')
-    .style('font-size', '10px')
+    .style('font-size', isNarrow ? '8px' : '10px')
 
   chart.selectAll('.domain, .tick line')
     .attr('stroke', '#333')
 
-  // Draw density bar to show data availability
+  // Only rebuild density bar and markers when data actually changed
+  const dataRangeKey = `${timeRange.start.getTime()}:${timeRange.end.getTime()}`
+  if (filteredTimeline.value.length !== lastTimelineLength || dataRangeKey !== lastDataRangeKey) {
+    lastTimelineLength = filteredTimeline.value.length
+    lastDataRangeKey = dataRangeKey
+    drawData(chart, xScale, plotWidth, plotHeight)
+  }
+
+  // Always update position (now line + scrubber) — this is the cheap part
+  updatePosition(chart, xScale, plotWidth, plotHeight)
+
+  // Setup drag behavior once
+  setupDrag(chart, plotHeight)
+}
+
+// Heavy path: density bar + markers. Only called when timeline data or range changes.
+function drawData(chart, xScale, plotWidth, plotHeight) {
+  // Density bar
   if (props.showDensity) {
     const densityBar = chart.select('.density-bar')
     densityBar.selectAll('*').remove()
 
-    // Create bins for density calculation
-    const numBins = Math.min(plotWidth / 4, 100) // 4px per bin minimum
+    const numBins = Math.max(1, Math.floor(Math.min(plotWidth / 4, 100)))
     const binWidth = plotWidth / numBins
-    const bins = new Array(numBins).fill(0)
+    const rawBins = new Array(numBins).fill(0)
+    const summaryBins = new Array(numBins).fill(0)
 
-    // Count scans in each bin
     filteredTimeline.value.forEach(t => {
       const date = getDate(t.timestamp)
+      const timeRange = getTimeRange()
       if (date >= timeRange.start && date <= timeRange.end) {
         const x = xScale(date)
         const binIdx = Math.min(Math.floor(x / binWidth), numBins - 1)
-        if (binIdx >= 0) bins[binIdx]++
+        if (binIdx >= 0) {
+          if (t.source === 'summary') {
+            summaryBins[binIdx]++
+          } else {
+            rawBins[binIdx]++
+          }
+        }
       }
     })
 
-    // Find max for normalization
-    const maxCount = Math.max(...bins, 1)
-
-    // Draw density rectangles
+    const maxCount = Math.max(...rawBins, ...summaryBins, 1)
     const barHeight = 6
-    bins.forEach((count, idx) => {
+    const y = plotHeight - barHeight - 2
+
+    summaryBins.forEach((count, idx) => {
       if (count > 0) {
         const intensity = Math.min(count / maxCount, 1)
         densityBar.append('rect')
           .attr('x', idx * binWidth)
-          .attr('y', plotHeight - barHeight - 2)
+          .attr('y', y)
+          .attr('width', binWidth - 1)
+          .attr('height', barHeight)
+          .attr('fill', `rgba(245, 158, 11, ${0.3 + intensity * 0.7})`)
+          .attr('rx', 1)
+      }
+    })
+
+    rawBins.forEach((count, idx) => {
+      if (count > 0) {
+        const intensity = Math.min(count / maxCount, 1)
+        densityBar.append('rect')
+          .attr('x', idx * binWidth)
+          .attr('y', y)
           .attr('width', binWidth - 1)
           .attr('height', barHeight)
           .attr('fill', `rgba(34, 197, 94, ${0.3 + intensity * 0.7})`)
@@ -321,35 +367,24 @@ function draw() {
     })
   }
 
-  // Get markers with cached dates (needed for drag operations even if not drawn)
-  const allMarkers = filteredTimeline.value
-    .map(t => ({
-      ...t,
-      date: getDate(t.timestamp),
-    }))
-    .filter(t => t.date >= timeRange.start && t.date <= timeRange.end)
-
-  // Store plotWidth for drag operations
-  currentPlotWidth = plotWidth
-
-  // Only draw markers if not hidden
+  // Markers
   if (!props.hideMarkers) {
-    // Bin markers if there are too many (more than 1 per 2 pixels)
+    const timeRange = getTimeRange()
+    const allMarkers = filteredTimeline.value
+      .map(t => ({ ...t, date: getDate(t.timestamp) }))
+      .filter(t => t.date >= timeRange.start && t.date <= timeRange.end)
+
     const maxMarkers = Math.floor(plotWidth / 2)
     let markers = allMarkers
     if (allMarkers.length > maxMarkers) {
-      // Bin by pixel position - keep one marker per bin
       const binned = new Map()
       for (const m of allMarkers) {
         const px = Math.floor(xScale(m.date))
-        if (!binned.has(px)) {
-          binned.set(px, m)
-        }
+        if (!binned.has(px)) binned.set(px, m)
       }
       markers = Array.from(binned.values())
     }
 
-    // Update markers efficiently - smaller and dimmer to complement density bar
     const markerRadius = 2
     chart.select('.markers').selectAll('.scan-marker')
       .data(markers, d => d.id)
@@ -362,25 +397,24 @@ function draw() {
         if (selectedTime.value && Math.abs(d.date - selectedTime.value) < 1000) {
           return '#00d4ff'
         }
-        return '#4a556880' // dimmer gray with transparency
+        return '#4a556880'
       })
   } else {
-    // Clear any existing markers
     chart.select('.markers').selectAll('.scan-marker').remove()
   }
+}
 
-  // Update "now" indicator
+// Light path: now line + scrubber position. Called on every tick — only ~6 DOM writes.
+function updatePosition(chart, xScale, plotWidth, plotHeight) {
   const nowX = xScale(new Date())
   chart.select('.now-line')
     .attr('x1', nowX)
-    .attr('y1', 0)
     .attr('x2', nowX)
     .attr('y2', plotHeight)
     .attr('stroke', isLive.value ? '#22c55e' : '#666')
     .attr('stroke-width', 1)
     .attr('stroke-dasharray', '4,2')
 
-  // Update scrubber position and colors
   const scrubberX = selectedTime.value ? xScale(selectedTime.value) : nowX
   const scrubber = chart.select('.scrubber')
     .attr('transform', `translate(${Math.max(0, Math.min(plotWidth, scrubberX))}, 0)`)
@@ -388,7 +422,6 @@ function draw() {
 
   const scrubberColor = isLive.value ? '#22c55e' : '#00d4ff'
 
-  // Only create scrubber elements once
   if (scrubber.select('line').empty()) {
     scrubber.append('line')
     scrubber.append('path').attr('class', 'top-handle')
@@ -418,51 +451,45 @@ function draw() {
     .attr('width', 20)
     .attr('height', plotHeight)
     .attr('fill', 'transparent')
+}
 
-  // Only set up drag behavior once
-  if (!scrubber.node().__dragInitialized) {
-    scrubber.node().__dragInitialized = true
+// Setup drag behavior (called once per structure rebuild)
+function setupDrag(chart, plotHeight) {
+  const scrubber = chart.select('.scrubber')
+  if (!scrubber.node() || scrubber.node().__dragInitialized) return
+  scrubber.node().__dragInitialized = true
 
-    const drag = d3.drag()
-      .on('start', () => {
-        isDragging.value = true
-      })
-      .on('drag', (event) => {
-        // Immediately follow the mouse for responsive feel
-        const x = Math.max(0, Math.min(currentPlotWidth, event.x))
-        scrubber.attr('transform', `translate(${x}, 0)`)
+  const drag = d3.drag()
+    .on('start', () => {
+      isDragging.value = true
+    })
+    .on('drag', (event) => {
+      const x = Math.max(0, Math.min(currentPlotWidth, event.x))
+      scrubber.attr('transform', `translate(${x}, 0)`)
+      scrubber.select('line').attr('stroke', '#00d4ff')
+      scrubber.selectAll('path').attr('fill', '#00d4ff')
+      const time = pixelToTime(x, currentPlotWidth)
+      dragTime.value = time
+      emit('preview', time)
+    })
+    .on('end', (event) => {
+      isDragging.value = false
+      const x = Math.max(0, Math.min(currentPlotWidth, event.x))
+      const time = pixelToTime(x, currentPlotWidth)
+      dragTime.value = time
+      emit('select', time)
+      draw()
+    })
 
-        // Update line color while dragging
-        scrubber.select('line').attr('stroke', '#00d4ff')
-        scrubber.selectAll('path').attr('fill', '#00d4ff')
+  scrubber.call(drag)
 
-        // Calculate time from pixel position and emit preview
-        const time = pixelToTime(x, currentPlotWidth)
-        dragTime.value = time
-        emit('preview', time)
-      })
-      .on('end', (event) => {
-        isDragging.value = false
-        // On release, calculate time from pixel position and emit select
-        const x = Math.max(0, Math.min(currentPlotWidth, event.x))
-        const time = pixelToTime(x, currentPlotWidth)
-        dragTime.value = time
-        emit('select', time)
-        // Redraw to update scrubber appearance
-        draw()
-      })
-
-    scrubber.call(drag)
-
-    // Click anywhere on timeline to seek
-    chart.select('.click-area')
-      .on('click', (event) => {
-        const [x] = d3.pointer(event)
-        const time = pixelToTime(x, currentPlotWidth)
-        dragTime.value = time
-        emit('select', time)
-      })
-  }
+  chart.select('.click-area')
+    .on('click', (event) => {
+      const [x] = d3.pointer(event)
+      const time = pixelToTime(x, currentPlotWidth)
+      dragTime.value = time
+      emit('select', time)
+    })
 }
 
 // Resize handling
@@ -540,47 +567,52 @@ const selectedTimeDisplay = computed(() => {
 
 <template>
   <div class="time-scrubber bg-gray-900 rounded p-2 relative">
-    <div class="flex items-center justify-between mb-2">
-      <div class="text-xs text-gray-500">
-        <span v-if="isLive" class="text-green-400 font-semibold">● LIVE</span>
-        <span v-else-if="isCustomRange" class="text-purple-400">{{ customRangeDisplay }}</span>
-        <span v-else class="text-yellow-400">{{ selectedTimeDisplay }}</span>
-      </div>
+    <!-- Row 1: status left, Live button right -->
+    <div class="flex items-center justify-between gap-2 mb-1">
       <div class="flex items-center gap-2">
-        <!-- Time range selector -->
-        <div class="flex items-center gap-1 border-r border-gray-700 pr-2 mr-1">
-          <button
-            v-for="opt in timeRangeOptions"
-            :key="opt.hours"
-            @click="setTimeRange(opt.hours)"
-            class="px-2 py-0.5 rounded text-xs transition-colors"
-            :class="selectedRange === opt.hours && !isCustomRange
-              ? 'bg-cyan-600 text-white'
-              : 'bg-gray-800 hover:bg-gray-700 text-gray-400'"
-          >
-            {{ opt.label }}
-          </button>
-          <button
-            @click="toggleDatePicker"
-            class="px-2 py-0.5 rounded text-xs transition-colors"
-            :class="isCustomRange
-              ? 'bg-purple-600 text-white'
-              : 'bg-gray-800 hover:bg-gray-700 text-gray-400'"
-          >
-            Custom
-          </button>
+        <div class="text-xs text-gray-500">
+          <span v-if="isLive" class="text-green-400 font-semibold">● LIVE</span>
+          <span v-else-if="isCustomRange" class="text-purple-400">{{ customRangeDisplay }}</span>
+          <span v-else class="text-yellow-400">{{ selectedTimeDisplay }}</span>
         </div>
-        <span class="text-xs text-gray-600">{{ filteredTimeline.length }} scans</span>
-        <button
-          @click="goLive"
-          class="px-3 py-1 rounded text-xs font-semibold transition-colors"
-          :class="isLive
-            ? 'bg-green-600 text-white'
-            : 'bg-gray-700 hover:bg-gray-600 text-gray-300'"
-        >
-          Live
-        </button>
+        <span class="text-xs text-gray-600">{{ filteredTimeline.length }} scans
+          <template v-if="summaryCount > 0">
+            (<span class="text-amber-500">{{ summaryCount }} avg</span>)
+          </template>
+        </span>
       </div>
+      <button
+        @click="goLive"
+        class="px-2.5 py-0.5 rounded text-[11px] font-semibold transition-colors shrink-0"
+        :class="isLive
+          ? 'bg-green-600 text-white'
+          : 'bg-gray-700 hover:bg-gray-600 text-gray-300'"
+      >
+        Live
+      </button>
+    </div>
+    <!-- Row 2: time range presets, right-aligned -->
+    <div class="flex flex-wrap justify-end gap-1 mb-2">
+      <button
+        v-for="opt in timeRangeOptions"
+        :key="opt.hours"
+        @click="setTimeRange(opt.hours)"
+        class="px-1.5 py-0.5 rounded text-[11px] transition-colors"
+        :class="selectedRange === opt.hours && !isCustomRange
+          ? 'bg-cyan-600 text-white'
+          : 'bg-gray-800 hover:bg-gray-700 text-gray-400'"
+      >
+        {{ opt.label }}
+      </button>
+      <button
+        @click="toggleDatePicker"
+        class="px-1.5 py-0.5 rounded text-[11px] transition-colors"
+        :class="isCustomRange
+          ? 'bg-purple-600 text-white'
+          : 'bg-gray-800 hover:bg-gray-700 text-gray-400'"
+      >
+        Custom
+      </button>
     </div>
 
     <!-- Custom date range picker -->
@@ -589,14 +621,14 @@ const selectedTimeDisplay = computed(() => {
       class="absolute top-full left-0 right-0 mt-1 bg-gray-800 border border-gray-700 rounded-lg p-3 z-50 shadow-xl"
     >
       <div class="text-xs text-gray-400 mb-2 font-semibold">Custom Date Range</div>
-      <div class="flex items-center gap-4">
-        <div class="flex-1">
+      <div class="grid grid-cols-1 sm:grid-cols-[1fr_auto_1fr_auto] items-end gap-2 sm:gap-4">
+        <div>
           <label class="text-xs text-gray-500 block mb-1">Start</label>
           <div class="flex gap-1">
             <input
               v-model="customStartDate"
               type="date"
-              class="bg-gray-700 text-white text-xs rounded px-2 py-1 w-28"
+              class="bg-gray-700 text-white text-xs rounded px-2 py-1 flex-1 min-w-0"
             />
             <input
               v-model="customStartTime"
@@ -605,14 +637,14 @@ const selectedTimeDisplay = computed(() => {
             />
           </div>
         </div>
-        <div class="text-gray-600">→</div>
-        <div class="flex-1">
+        <div class="hidden sm:block text-gray-600 pb-1">→</div>
+        <div>
           <label class="text-xs text-gray-500 block mb-1">End</label>
           <div class="flex gap-1">
             <input
               v-model="customEndDate"
               type="date"
-              class="bg-gray-700 text-white text-xs rounded px-2 py-1 w-28"
+              class="bg-gray-700 text-white text-xs rounded px-2 py-1 flex-1 min-w-0"
             />
             <input
               v-model="customEndTime"
@@ -647,5 +679,7 @@ const selectedTimeDisplay = computed(() => {
 <style scoped>
 .time-scrubber {
   user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
 }
 </style>

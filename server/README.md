@@ -21,7 +21,10 @@ Central server for aggregating and visualizing spectrum scan data from multiple 
 - `Scanner` - Scanner devices and their status
 - `Band` - Frequency bands per scanner
 - `Scan` - Stored spectrum scans with power data
-- `ScanAggregate` - Aggregated data (max hold, average)
+- `ScanSummary` - Rolled-up summaries (peak/average) at configurable resolutions
+- `ScannerGroup` - Logical groupings of scanners
+- `Access` - User/token permission grants for scanners and groups
+- `SiteSettings` - Global key-value configuration (e.g. retention policy)
 
 ## MQTT Topics
 
@@ -35,33 +38,28 @@ spectrum/scanners/{scanner_id}/config  - Scanner configuration (retained)
 ## Deployment
 
 ### Prerequisites
-- Python 3.11+
+- Python 3.14+ and [uv](https://docs.astral.sh/uv/)
 - Docker and Docker Compose (recommended)
-- Or: MQTT Broker (Mosquitto) for manual setup
 
-### Development Setup
+### Development Setup (Local)
 
 ```bash
 cd server
 
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate
-
 # Install dependencies
-pip install -r requirements.txt
+uv sync
 
 # Run migrations
-python manage.py migrate
+uv run python manage.py migrate
 
-# Start the server (runs Django + MQTT bridge)
-python manage.py runserver
+# Start the server
+uv run python manage.py runserver
 ```
 
 In a separate terminal:
 ```bash
 # Start the MQTT bridge
-python manage.py mqtt_bridge
+uv run python manage.py mqtt_bridge
 ```
 
 ### Docker Development
@@ -69,13 +67,17 @@ python manage.py mqtt_bridge
 ```bash
 cd server
 docker compose up -d
+
+# Create admin user (first run)
+docker compose exec server uv run python manage.py createsuperuser
 ```
 
 Services:
+- `postgres` - PostgreSQL 16 (port 5432)
 - `server` - Django dev server (port 8000)
 - `mosquitto` - MQTT broker (port 1883, WebSocket 9001)
-- `mqtt-bridge` - Saves MQTT data to database
-- `frontend` - Vue dev server (port 5173)
+- `mqtt-bridge` - Saves MQTT data to database, runs rollup
+- `frontend` - Vue dev server (port 5174)
 
 ### Docker Production Deployment
 
@@ -146,17 +148,10 @@ DEBUG=false
 # NOTE: Must include 'localhost' and 'server' for Mosquitto auth plugin
 ALLOWED_HOSTS=spectrum.example.com,localhost,server
 
-# Database (SQLite default, or PostgreSQL)
-DB_ENGINE=django.db.backends.sqlite3
-DB_NAME=/app/data/db.sqlite3
-
-# For PostgreSQL:
-# DB_ENGINE=django.db.backends.postgresql
-# DB_NAME=spectrum
-# DB_USER=spectrum
-# DB_PASSWORD=db-password
-# DB_HOST=postgres
-# DB_PORT=5432
+# Database
+DB_NAME=spectrum
+DB_USER=spectrum
+DB_PASSWORD=db-password
 ```
 
 #### SSL/HTTPS
@@ -192,39 +187,50 @@ docker compose -f docker-compose.prod.yml exec server python manage.py migrate
 #### Data Persistence
 
 Data is stored in Docker volumes:
-- `server_data` - SQLite database
+- `postgres_data` - PostgreSQL database
 - `mosquitto_data` - MQTT persistence
 - `caddy_data` - SSL certificates
 
 To backup:
 ```bash
-docker compose -f docker-compose.prod.yml exec server \
-  cp /app/data/db.sqlite3 /app/data/db.sqlite3.backup
+docker compose -f docker-compose.prod.yml exec postgres \
+  pg_dump -U spectrum spectrum > backup.sql
 ```
 
 ## Environment Variables
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `DEBUG` | Django debug mode | `True` |
-| `SECRET_KEY` | Django secret key | (generated) |
-| `ALLOWED_HOSTS` | Comma-separated hosts | `localhost,127.0.0.1` |
-| `DATABASE_URL` | Database connection URL | SQLite |
+| `DEBUG` | Django debug mode | `false` |
+| `DJANGO_SECRET_KEY` | Django secret key | dev fallback |
+| `ALLOWED_HOSTS` | Comma-separated hosts | `localhost,127.0.0.1,server` |
+| `DB_NAME` | Database name | `spectrum` |
+| `DB_USER` | Database user | `spectrum` |
+| `DB_PASSWORD` | Database password | (required in prod) |
 | `MQTT_BROKER_HOST` | MQTT broker hostname | `localhost` |
 | `MQTT_BROKER_PORT` | MQTT broker port | `1883` |
+| `MQTT_BRIDGE_USERNAME` | MQTT bridge service user | `spectrum-bridge` |
+| `MQTT_BRIDGE_PASSWORD` | MQTT bridge service password | (required in prod) |
 
 ## Data Retention
 
-By default, the MQTT bridge stores one scan per minute per band. To manage database size:
+The MQTT bridge automatically rolls up scan data on a Graphite/Whisper-style tiered schedule. The default retention policy is:
 
-```python
-# Clean up scans older than 7 days
-python manage.py shell
->>> from django.utils import timezone
->>> from datetime import timedelta
->>> from core.models import Scan
->>> cutoff = timezone.now() - timedelta(days=7)
->>> Scan.objects.filter(timestamp__lt=cutoff).delete()
+```
+1s:24h, 1m:7d, 5m:30d, 1h:1y
 ```
 
-Consider setting up a cron job for automatic cleanup.
+This means: keep raw scans for 24 hours, then 1-minute summaries for 7 days, 5-minute summaries for 30 days, and 1-hour summaries for 1 year.
+
+The retention policy can be overridden globally via **Site Settings** in the Django admin, or per-scanner in the scanner's **Data Retention** fieldset.
+
+To run rollup manually:
+```bash
+# Dry run (show what would be rolled up/purged)
+docker compose exec server uv run python manage.py rollup --dry-run
+
+# Run rollup
+docker compose exec server uv run python manage.py rollup
+```
+
+You can also trigger rollup from the Django admin under **Scan Summaries > Run Rollup**.

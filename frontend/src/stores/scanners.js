@@ -1,11 +1,12 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import mqtt from 'mqtt'
 import { SCRUBBER_HOURS } from '../constants'
-import { logger } from '../lib'
+import { logger, MqttClient, TOPIC_PREFIX } from '../lib'
 
 export const useScannersStore = defineStore('scanners', () => {
   const scanners = ref({})
+  const groups = ref([])             // Scanner group list from API
+  const monitoredFreqs = ref({})    // { scannerId: [{ id, frequency_hz, frequency_mhz, name, color, category, ... }] }
   const latestScans = ref({})       // { scannerId: lastScan }
   const bandScans = ref({})         // { scannerId: { bandName: lastScan } }
   const timelines = ref({})         // { `${scannerId}:${bandName}`: [{ id, timestamp, band__name }] }
@@ -14,6 +15,7 @@ export const useScannersStore = defineStore('scanners', () => {
   const connected = ref(false)
   const lastError = ref(null)       // { message, timestamp } - most recent error
   const apiErrors = ref(0)          // Count of API errors (resets on success)
+  // Solo is computed: scanner has >1 band but only 1 enabled
 
   // Global tick for timeline redraws (updates every 500ms)
   const tick = ref(0)
@@ -33,204 +35,121 @@ export const useScannersStore = defineStore('scanners', () => {
       tickInterval = null
     }
   }
-  const subscriptions = ref(new Set()) // Track subscribed scanner IDs
-  let client = null
-  let reconnectTimeout = null
+
+  let mqttClient = null
+  const _subscriptionRefs = {}
 
   const scannerList = computed(() => Object.values(scanners.value))
 
-  // MQTT topic prefix
-  const TOPIC_PREFIX = 'spectrum'
-
-  function getMqttUrl() {
-    const host = window.location.hostname
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const port = window.location.port
-
-    // In production (via Caddy), use /mqtt path on same host
-    // In development, connect directly to mosquitto on port 9001
-    if (import.meta.env.PROD) {
-      // Production: WebSocket through Caddy reverse proxy
-      const portPart = port ? `:${port}` : ''
-      return `${protocol}//${host}${portPart}/mqtt`
-    } else {
-      // Development: direct connection to mosquitto
-      return `${protocol}//${host}:9001`
+  function subscribe(scannerId) {
+    if (!scannerId) return
+    _subscriptionRefs[scannerId] = (_subscriptionRefs[scannerId] || 0) + 1
+    if (_subscriptionRefs[scannerId] === 1) {
+      mqttClient?.subscribe(scannerId)
     }
   }
 
-  async function fetchMqttCredentials() {
+  function unsubscribe(scannerId) {
+    if (!scannerId) return
+    if (!_subscriptionRefs[scannerId]) return
+    _subscriptionRefs[scannerId]--
+    if (_subscriptionRefs[scannerId] <= 0) {
+      delete _subscriptionRefs[scannerId]
+      mqttClient?.unsubscribe(scannerId)
+    }
+  }
+
+  function handleMessage(topic, payload) {
     try {
-      const response = await fetch('/api/mqtt/credentials/', {
-        credentials: 'include',
-      })
-      if (!response.ok) throw new Error('Failed to fetch MQTT credentials')
-      return await response.json()
+      const message = JSON.parse(payload.toString())
+      const parts = topic.split('/')
+      // Topic format: spectrum/scanners/{scanner_id}/{type}
+      if (parts.length >= 4 && parts[0] === TOPIC_PREFIX && parts[1] === 'scanners') {
+        const scannerId = parts[2]
+        const messageType = parts[3]
+
+        // Only process messages for scanners we're subscribed to
+        if (!mqttClient || !mqttClient.subscriptions.has(scannerId)) return
+
+        if (messageType === 'scan') {
+          handleScan(scannerId, message)
+        } else if (messageType === 'status') {
+          handleStatus(scannerId, message)
+        } else if (messageType === 'config') {
+          handleConfig(scannerId, message)
+        } else if (messageType === 'timeline') {
+          handleTimeline(scannerId, message)
+        }
+      }
     } catch (error) {
-      logger.error('Failed to fetch MQTT credentials:', error)
-      return null
+      logger.error('Failed to parse MQTT message:', error)
     }
   }
 
   async function connect() {
-    // Prevent multiple connections
-    if (client && client.connected) {
-      return
-    }
+    if (!mqttClient) {
+      mqttClient = new MqttClient()
 
-    // Fetch credentials from Django
-    const credentials = await fetchMqttCredentials()
-    if (!credentials) {
-      logger.error('Could not get MQTT credentials')
-      return
-    }
-
-    const mqttUrl = getMqttUrl()
-    logger.debug('Connecting to MQTT:', mqttUrl)
-
-    client = mqtt.connect(mqttUrl, {
-      clientId: `spectrum-frontend-${Math.random().toString(16).substring(2, 10)}`,
-      username: credentials.username,
-      password: credentials.password,
-      clean: true,
-      reconnectPeriod: 2000,
-      connectTimeout: 10000,
-    })
-
-    client.on('connect', () => {
-      logger.debug('MQTT connected')
-      connected.value = true
-
-      // Start the global tick timer
-      startTick()
-
-      // Subscribe to all scanner topics (config, status, scan, timeline)
-      // Using wildcard to get all scanners
-      client.subscribe(`${TOPIC_PREFIX}/scanners/+/config`, { qos: 1 })
-      client.subscribe(`${TOPIC_PREFIX}/scanners/+/status`, { qos: 1 })
-      client.subscribe(`${TOPIC_PREFIX}/scanners/+/scan`, { qos: 0 })
-      client.subscribe(`${TOPIC_PREFIX}/scanners/+/timeline`, { qos: 0 })
-
-      logger.debug('Subscribed to scanner topics')
-    })
-
-    client.on('message', (topic, payload) => {
-      try {
-        const message = JSON.parse(payload.toString())
-        const parts = topic.split('/')
-        // Topic format: spectrum/scanners/{scanner_id}/{type}
-        if (parts.length >= 4 && parts[0] === TOPIC_PREFIX && parts[1] === 'scanners') {
-          const scannerId = parts[2]
-          const messageType = parts[3]
-
-          if (messageType === 'scan') {
-            handleScan(scannerId, message)
-          } else if (messageType === 'status') {
-            handleStatus(scannerId, message)
-          } else if (messageType === 'config') {
-            handleConfig(scannerId, message)
-          } else if (messageType === 'timeline') {
-            handleTimeline(scannerId, message)
-          }
+      mqttClient.onMessage(handleMessage)
+      mqttClient.onStateChange((isConnected) => {
+        connected.value = isConnected
+        if (isConnected) {
+          startTick()
         }
-      } catch (error) {
-        logger.error('Failed to parse MQTT message:', error)
-      }
-    })
+      })
+      mqttClient.onError((error) => {
+        lastError.value = { message: `MQTT: ${error.message || error}`, timestamp: Date.now() }
+      })
+    }
 
-    client.on('close', () => {
-      logger.debug('MQTT disconnected')
-      connected.value = false
-    })
-
-    client.on('error', (error) => {
-      logger.error('MQTT error:', error)
-      lastError.value = { message: `MQTT: ${error.message || error}`, timestamp: Date.now() }
-    })
-
-    client.on('reconnect', () => {
-      logger.debug('MQTT reconnecting...')
-      lastError.value = { message: 'MQTT reconnecting...', timestamp: Date.now() }
-    })
+    await mqttClient.connect()
   }
 
   function disconnect() {
-    if (client) {
-      client.end()
-      client = null
+    if (mqttClient) {
+      mqttClient.disconnect()
+      mqttClient = null
     }
+    Object.keys(_subscriptionRefs).forEach(k => delete _subscriptionRefs[k])
     stopTick()
     connected.value = false
   }
 
   // ============== Scanner Command Functions ==============
 
-  // Send start command to a scanner
   function sendStartCommand(scannerId) {
-    if (!client || !client.connected) {
-      logger.warn('MQTT not connected')
-      return false
-    }
     const topic = `${TOPIC_PREFIX}/commands/${scannerId}/start`
-    client.publish(topic, JSON.stringify({}), { qos: 1 })
-    logger.debug('Sent start command to', scannerId)
-    return true
+    const ok = mqttClient?.publish(topic, JSON.stringify({}), { qos: 1 })
+    if (ok) logger.debug('Sent start command to', scannerId)
+    return !!ok
   }
 
-  // Send stop command to a scanner
   function sendStopCommand(scannerId) {
-    if (!client || !client.connected) {
-      logger.warn('MQTT not connected')
-      return false
-    }
     const topic = `${TOPIC_PREFIX}/commands/${scannerId}/stop`
-    client.publish(topic, JSON.stringify({}), { qos: 1 })
-    logger.debug('Sent stop command to', scannerId)
-    return true
+    const ok = mqttClient?.publish(topic, JSON.stringify({}), { qos: 1 })
+    if (ok) logger.debug('Sent stop command to', scannerId)
+    return !!ok
   }
 
-  // Send band configuration to a scanner
   function sendBandsCommand(scannerId, bands) {
-    if (!client || !client.connected) {
-      logger.warn('MQTT not connected')
-      return false
-    }
     const topic = `${TOPIC_PREFIX}/commands/${scannerId}/bands`
-    // Send array of band configs: [{ name, start_hz, stop_hz, enabled }, ...]
     const payload = bands.map(b => ({
       name: b.name,
       start_hz: b.start_hz,
       stop_hz: b.stop_hz,
       enabled: b.enabled,
     }))
-    client.publish(topic, JSON.stringify(payload), { qos: 1 })
-    logger.debug('Sent bands command to', scannerId, payload)
-    return true
+    const ok = mqttClient?.publish(topic, JSON.stringify(payload), { qos: 1 })
+    if (ok) logger.debug('Sent bands command to', scannerId, payload)
+    return !!ok
   }
 
-  // Send gain settings to a scanner
   function sendGainCommand(scannerId, rxGain, rxGainMode) {
-    if (!client || !client.connected) {
-      logger.warn('MQTT not connected')
-      return false
-    }
     const topic = `${TOPIC_PREFIX}/commands/${scannerId}/gain`
     const payload = { rx_gain: rxGain, rx_gain_mode: rxGainMode }
-    client.publish(topic, JSON.stringify(payload), { qos: 1 })
-    logger.debug('Sent gain command to', scannerId, payload)
-    return true
-  }
-
-  // Subscribe/unsubscribe are now no-ops since we use wildcard subscription
-  // Keep the API for compatibility with existing components
-  function subscribe(scannerId) {
-    if (!scannerId) return
-    subscriptions.value.add(scannerId)
-  }
-
-  function unsubscribe(scannerId) {
-    if (!scannerId) return
-    subscriptions.value.delete(scannerId)
+    const ok = mqttClient?.publish(topic, JSON.stringify(payload), { qos: 1 })
+    if (ok) logger.debug('Sent gain command to', scannerId, payload)
+    return !!ok
   }
 
   function handleScan(scannerId, data) {
@@ -600,6 +519,31 @@ export const useScannersStore = defineStore('scanners', () => {
     }
   }
 
+  async function fetchGroups() {
+    try {
+      const response = await fetch('/api/groups/', {
+        credentials: 'include',
+      })
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      groups.value = await response.json()
+    } catch (error) {
+      logger.error('Failed to fetch groups:', error)
+    }
+  }
+
+  async function fetchGroup(id) {
+    try {
+      const response = await fetch(`/api/groups/${id}/`, {
+        credentials: 'include',
+      })
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      return await response.json()
+    } catch (error) {
+      logger.error('Failed to fetch group:', error)
+      return null
+    }
+  }
+
   async function fetchScanners() {
     try {
       const response = await fetch('/api/scanners/', {
@@ -615,6 +559,23 @@ export const useScannersStore = defineStore('scanners', () => {
     } catch (error) {
       logger.error('Failed to fetch scanners:', error)
     }
+  }
+
+  async function fetchMonitoredFrequencies(scannerId) {
+    try {
+      const response = await fetch(`/api/scanners/${scannerId}/monitored_frequencies/`, {
+        credentials: 'include',
+      })
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      const data = await response.json()
+      monitoredFreqs.value = { ...monitoredFreqs.value, [scannerId]: data }
+    } catch (error) {
+      logger.error('Failed to fetch monitored frequencies:', error)
+    }
+  }
+
+  function getMonitoredFrequencies(scannerId) {
+    return monitoredFreqs.value[scannerId] || []
   }
 
   // Generate WWB-compatible CSV from scan data
@@ -778,9 +739,32 @@ export const useScannersStore = defineStore('scanners', () => {
     }
   }
 
+  function soloBand(scannerId, bandName) {
+    const scanner = scanners.value[scannerId]
+    if (!scanner?.bands) return
+    const bands = scanner.bands.map(b => ({ ...b, enabled: b.name === bandName }))
+    sendBandsCommand(scannerId, bands)
+  }
+
+  function unsoloBand(scannerId) {
+    const scanner = scanners.value[scannerId]
+    if (!scanner?.bands) return
+    const bands = scanner.bands.map(b => ({ ...b, enabled: true }))
+    sendBandsCommand(scannerId, bands)
+  }
+
+  function isSoloed(scannerId, bandName) {
+    const scanner = scanners.value[scannerId]
+    if (!scanner?.bands || scanner.bands.length <= 1) return false
+    const enabledBands = scanner.bands.filter(b => b.enabled)
+    return enabledBands.length === 1 && enabledBands[0].name === bandName
+  }
+
   return {
     scanners,
     scannerList,
+    groups,
+    monitoredFreqs,
     latestScans,
     bandScans,
     timelines,
@@ -792,6 +776,10 @@ export const useScannersStore = defineStore('scanners', () => {
     subscribe,
     unsubscribe,
     fetchScanners,
+    fetchMonitoredFrequencies,
+    getMonitoredFrequencies,
+    fetchGroups,
+    fetchGroup,
     exportScanCSV,
     fetchTimeline,
     getTimeline,
@@ -811,5 +799,9 @@ export const useScannersStore = defineStore('scanners', () => {
     sendStopCommand,
     sendBandsCommand,
     sendGainCommand,
+    // Solo band
+    soloBand,
+    unsoloBand,
+    isSoloed,
   }
 })

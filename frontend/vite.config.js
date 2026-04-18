@@ -2,8 +2,9 @@ import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import { resolve } from 'path'
 
-// Use Docker service name when running in container, localhost for local dev
+// Use Docker service names when running in container, localhost for local dev
 const backendHost = process.env.DOCKER_ENV ? 'server' : 'localhost'
+const mqttHost = process.env.DOCKER_ENV ? 'mosquitto' : 'localhost'
 
 // Build mode: 'main' (central server) or 'standalone' (Go scanner)
 const buildMode = process.env.BUILD_MODE || 'main'
@@ -31,6 +32,10 @@ const mainConfig = {
       },
       '/ws': {
         target: `ws://${backendHost}:8000`,
+        ws: true,
+      },
+      '/mqtt': {
+        target: `ws://${mqttHost}:9001`,
         ws: true,
       },
     },

@@ -2,7 +2,9 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useScannersStore } from '../stores/scanners'
 import D3SpectrumChart from './D3SpectrumChart.vue'
+import SpectrogramChart from './SpectrogramChart.vue'
 import TimeScrubber from './TimeScrubber.vue'
+import FrequencyTimePlot from './FrequencyTimePlot.vue'
 
 const props = defineProps({
   scannerId: {
@@ -53,12 +55,32 @@ const props = defineProps({
     type: Boolean,
     default: false,
   },
+  canWrite: {
+    type: Boolean,
+    default: false,
+  },
+  // Server-side monitored frequencies
+  monitoredFrequencies: {
+    type: Array,
+    default: () => [],
+  },
 })
 
 const emit = defineEmits(['update:selected'])
 
 const store = useScannersStore()
 const chartRef = ref(null)
+const spectrogramRef = ref(null)
+
+const soloed = computed(() => store.isSoloed(props.scannerId, props.band.name))
+
+// Responsive chart height — smaller on phone-sized screens
+const responsiveHeight = computed(() => {
+  if (typeof window !== 'undefined' && window.innerWidth < 500) {
+    return Math.min(props.height, 200)
+  }
+  return props.height
+})
 
 // Trace display modes
 const showCurrent = ref(true)
@@ -68,6 +90,134 @@ const showPeak = ref(false)
 // Historical playback state
 const isLive = ref(true)
 const historicalScan = ref(null)
+
+// Zoom range from line chart (shared with spectrogram)
+const zoomRange = ref(null)
+
+// Shared cursor frequency between line chart and spectrogram
+const sharedCursorFreq = ref(null)
+const cursorSource = ref(null) // 'line' or 'spectrogram' — prevents feedback loops
+
+function handleLineCursorMove(freqHz) {
+  cursorSource.value = 'line'
+  sharedCursorFreq.value = freqHz
+}
+
+function handleSpectrogramCursorMove(freqHz) {
+  cursorSource.value = 'spectrogram'
+  sharedCursorFreq.value = freqHz
+}
+
+// Cursor freq to pass to each chart (null when that chart owns the cursor)
+const cursorFreqForLine = computed(() => cursorSource.value === 'spectrogram' ? sharedCursorFreq.value : null)
+const cursorFreqForSpectrogram = computed(() => cursorSource.value === 'line' ? sharedCursorFreq.value : null)
+
+// Click spectrogram row → show that scan in line chart
+function handleSpectrogramSelect({ timestamp, scan }) {
+  isLive.value = false
+  historicalScan.value = scan
+}
+
+// Highlight time for spectrogram (timestamp of currently displayed scan)
+const highlightTime = computed(() => {
+  if (isLive.value) return null
+  const scan = historicalScan.value
+  if (!scan?.timestamp) return null
+  // Ensure it's a numeric timestamp
+  return typeof scan.timestamp === 'number' ? scan.timestamp : new Date(scan.timestamp).getTime()
+})
+
+// Pinned frequencies for time-series
+const pinnedFreqs = ref([])
+const pinColorPalette = ['#ff8c00', '#ff00ff', '#00ff00', '#ff4444', '#00bfff', '#ffff00', '#ff69b4', '#7fff00']
+
+// Server-side monitored frequencies filtered to this band's range
+const serverPins = computed(() => {
+  return props.monitoredFrequencies
+    .filter(mf => mf.frequency_hz >= props.band.start_hz && mf.frequency_hz <= props.band.stop_hz)
+    .map(mf => ({
+      freqHz: mf.frequency_hz,
+      freqMHz: mf.frequency_mhz,
+      color: mf.color,
+      name: mf.name,
+      category: mf.category,
+      notes: mf.notes,
+      isServer: true,
+    }))
+})
+
+// Merged: server pins + ad-hoc client pins
+const allPinnedFreqs = computed(() => [...serverPins.value, ...pinnedFreqs.value])
+
+// Selected pin frequencies (toggled via FrequencyTimePlot legend)
+// Starts empty — all pins are unselected (subtle) by default
+const selectedPinFreqs = ref(new Set())
+
+// All pins with selected flag — passed to D3SpectrumChart and SpectrogramChart
+const allPinnedFreqsWithSelection = computed(() =>
+  allPinnedFreqs.value.map(p => ({ ...p, selected: selectedPinFreqs.value.has(p.freqHz) }))
+)
+
+function handleToggleFreq(freqHz) {
+  const next = new Set(selectedPinFreqs.value)
+  if (next.has(freqHz)) {
+    next.delete(freqHz)
+  } else {
+    next.add(freqHz)
+  }
+  selectedPinFreqs.value = next
+}
+
+function handleSelectAllFreqs() {
+  selectedPinFreqs.value = new Set(allPinnedFreqs.value.map(p => p.freqHz))
+}
+
+function handleDeselectAllFreqs() {
+  selectedPinFreqs.value = new Set()
+}
+
+function handleFreqPin({ freqHz, freqMHz }) {
+  // Toggle: remove if already pinned (within 0.1% tolerance)
+  const tolerance = (props.band.stop_hz - props.band.start_hz) * 0.001
+
+  // Don't add ad-hoc pin if a server pin already covers this frequency
+  const serverMatch = serverPins.value.some(p => Math.abs(p.freqHz - freqHz) < tolerance)
+  if (serverMatch) return
+
+  const existingIdx = pinnedFreqs.value.findIndex(p => Math.abs(p.freqHz - freqHz) < tolerance)
+  if (existingIdx >= 0) {
+    // Replace array ref so shallow watchers fire
+    pinnedFreqs.value = pinnedFreqs.value.filter((_, i) => i !== existingIdx)
+    return
+  }
+  const color = pinColorPalette[pinnedFreqs.value.length % pinColorPalette.length]
+  // Replace array ref so shallow watchers fire
+  pinnedFreqs.value = [...pinnedFreqs.value, { freqHz, freqMHz, color }]
+
+  // Auto-open waterfall if closed so the time-series has data
+  if (!showSpectrogram.value) {
+    showSpectrogram.value = true
+    // loadSpectrogramData() fires via the watch on showSpectrogram
+  }
+}
+
+function handleRemoveFreq(pin) {
+  if (pin.isServer) return // server pins are managed via Django admin
+  // Replace array ref so shallow watchers fire
+  pinnedFreqs.value = pinnedFreqs.value.filter(p => p !== pin)
+}
+
+// Spectrogram toggle + lazy-loaded data (not stored globally)
+const showSpectrogram = ref(false)
+const spectrogramData = ref([])
+const spectrogramLoading = ref(false)
+
+// Time range for the frequency time-series plot, derived from spectrogram data
+const freqPlotTimeRange = computed(() => {
+  const data = spectrogramData.value
+  if (data.length < 2) return null
+  return [data[0].timestamp, data[data.length - 1].timestamp]
+})
 
 // Get timeline from store (reactive - updates via MQTT)
 const timeline = computed(() => {
@@ -105,6 +255,70 @@ const activeScan = computed(() => {
   return historicalScan.value
 })
 
+// Lazy-load spectrogram historical data (local, not in store)
+async function loadSpectrogramData() {
+  if (!showSpectrogram.value) return
+  spectrogramLoading.value = true
+  try {
+    const rangeOpts = currentTimeRange.value
+    let fetchOpts
+    if (rangeOpts.start && rangeOpts.end) {
+      fetchOpts = {
+        start: rangeOpts.start,
+        end: rangeOpts.end,
+      }
+    } else {
+      fetchOpts = {
+        hours: rangeOpts.hours || props.timelineHours,
+      }
+    }
+    const scans = await store.fetchHistory(props.scannerId, props.band.name, fetchOpts)
+    if (scans && scans.length > 0) {
+      spectrogramData.value = scans.map(s => ({
+        timestamp: new Date(s.timestamp).getTime(),
+        scan: {
+          hz_lo: s.hz_lo,
+          hz_hi: s.hz_hi,
+          step: s.step_hz,
+          power: s.power,
+          timestamp: s.timestamp,
+        }
+      })).sort((a, b) => a.timestamp - b.timestamp)
+    } else {
+      spectrogramData.value = []
+    }
+  } catch (err) {
+    spectrogramData.value = []
+  } finally {
+    spectrogramLoading.value = false
+  }
+}
+
+// Load when toggled on, clear when toggled off
+watch(showSpectrogram, (open) => {
+  if (open) {
+    loadSpectrogramData()
+  } else {
+    spectrogramData.value = []
+  }
+})
+
+function handleZoom(domain) {
+  zoomRange.value = domain
+}
+
+// Handle zoom from spectrogram — sync to spectrum chart
+function handleSpectrogramZoom(domain) {
+  zoomRange.value = domain
+  if (chartRef.value) {
+    if (domain) {
+      chartRef.value.setZoom(domain)
+    } else {
+      chartRef.value.resetZoom()
+    }
+  }
+}
+
 // Format step size for display
 function formatStep(stepHz) {
   if (!stepHz) return ''
@@ -117,11 +331,15 @@ function formatStep(stepHz) {
 const scanInfo = computed(() => {
   const scan = activeScan.value
   if (!scan?.power) return '--'
-  const points = scan.power.length
+  const power = scan.power
+  const points = power.length
   const step = formatStep(scan.step)
-  const minP = Math.min(...scan.power).toFixed(1)
-  const maxP = Math.max(...scan.power).toFixed(1)
-  return `${points} pts | ${step} | ${minP} to ${maxP} dBm`
+  let minP = power[0], maxP = power[0]
+  for (let i = 1; i < points; i++) {
+    if (power[i] < minP) minP = power[i]
+    if (power[i] > maxP) maxP = power[i]
+  }
+  return `${points} pts | ${step} | ${minP.toFixed(1)} to ${maxP.toFixed(1)} dBm`
 })
 
 const freqRange = computed(() => {
@@ -135,7 +353,6 @@ const freqRange = computed(() => {
 const traces = computed(() => {
   const result = []
 
-  // If we have live scan data, always show it
   const hasLiveScan = props.scan && props.scan.power && props.scan.power.length > 0
 
   // Historical trace (yellow, when scrubbing)
@@ -223,7 +440,7 @@ async function loadTimeline(options = null) {
     const rangeOpts = options || currentTimeRange.value
     // Fetch initial timeline data - store handles MQTT updates after this
     await store.fetchTimeline(props.scannerId, props.band.name, rangeOpts)
-    // Load decimated cache for fast scrubbing preview (pass full range options)
+    // Load decimated cache matching scrubber range (API auto-fills with rollup data)
     await store.loadDecimatedCache(props.scannerId, props.band.name, rangeOpts)
   }
 }
@@ -232,6 +449,10 @@ async function loadTimeline(options = null) {
 async function handleRangeChange(rangeOpts) {
   currentTimeRange.value = rangeOpts
   await loadTimeline(rangeOpts)
+  // Reload spectrogram data for new range if open
+  if (showSpectrogram.value) {
+    loadSpectrogramData()
+  }
 }
 
 // Preview handler (while dragging) - use decimated cache
@@ -268,6 +489,7 @@ async function handleTimeSelect(time) {
 function handleLive() {
   isLive.value = true
   historicalScan.value = null
+  // Spectrogram handles mode switch via isLive watcher (pre-fills from historical)
 }
 
 // Check if we have valid live scan data
@@ -305,6 +527,10 @@ onMounted(async () => {
 // Reload timeline when band changes
 watch(() => props.band.name, async () => {
   await loadTimeline()
+  // Reload spectrogram data if open
+  if (showSpectrogram.value) {
+    loadSpectrogramData()
+  }
   // Load latest historical if no live scan
   if (!hasLiveScan()) {
     loadLatestHistorical()
@@ -316,11 +542,14 @@ watch(() => props.band.name, async () => {
 
 <template>
   <div
-    class="bg-gray-800 rounded-lg p-4 transition-all"
-    :class="selected ? 'ring-2 ring-cyan-500' : ''"
+    class="bg-gray-800 rounded-lg p-2 sm:p-4 transition-all"
+    :class="[
+      selected ? 'ring-2 ring-cyan-500' : '',
+      !band.enabled ? 'border border-gray-700 opacity-60' : '',
+    ]"
   >
-    <div class="flex justify-between items-start mb-3">
-      <div class="flex items-start gap-3">
+    <div class="flex flex-wrap items-start justify-between gap-x-3 gap-y-1 mb-3">
+      <div class="flex items-start gap-2 sm:gap-3 min-w-0">
         <!-- Selection checkbox -->
         <label v-if="selectable" class="flex items-center mt-1 cursor-pointer">
           <input
@@ -331,24 +560,32 @@ watch(() => props.band.name, async () => {
           />
         </label>
 
-        <div>
-          <h2 class="text-lg font-semibold text-cyan-400">
-            {{ band.name }}
-            <span class="text-gray-500 font-normal text-sm ml-2">
+        <div class="min-w-0">
+          <h2 class="text-base sm:text-lg font-semibold">
+            <router-link
+              :to="`/scanner/${scannerId}/band/${band.name}`"
+              class="text-cyan-400 hover:text-cyan-300"
+            >
+              {{ band.name }}
+            </router-link>
+            <span class="text-gray-500 font-normal text-xs sm:text-sm ml-1 sm:ml-2">
               ({{ freqRange }})
             </span>
-            <span v-if="!showingLive && activeScan" class="text-yellow-400 text-xs ml-2">
+            <span v-if="!band.enabled" class="text-gray-500 text-xs ml-1 sm:ml-2 bg-gray-700 px-1.5 py-0.5 rounded">
+              Disabled
+            </span>
+            <span v-if="!showingLive && activeScan" class="text-yellow-400 text-xs ml-1 sm:ml-2">
               Historical
             </span>
           </h2>
-          <p class="text-xs text-gray-500">
+          <p class="text-xs text-gray-500 truncate">
             <span v-if="showScanner && scannerName" class="mr-3">{{ scannerName }}</span>
             {{ scanInfo }}
           </p>
         </div>
       </div>
 
-      <div class="flex items-center gap-3">
+      <div class="flex items-center gap-2 flex-wrap ml-auto">
         <!-- Trace mode toggles -->
         <div class="flex items-center gap-2 text-xs">
           <label class="flex items-center gap-1 cursor-pointer">
@@ -373,14 +610,25 @@ watch(() => props.band.name, async () => {
         </div>
 
         <button
+          v-if="canWrite"
+          @click="soloed ? store.unsoloBand(scannerId) : store.soloBand(scannerId, band.name)"
+          class="px-3 py-1.5 rounded text-xs font-semibold transition-colors"
+          :class="soloed
+            ? 'solo-flash hover:brightness-125 text-white'
+            : 'bg-gray-700 hover:bg-gray-600 text-gray-300'"
+        >
+          {{ soloed ? 'Clear Solo' : 'Solo' }}
+        </button>
+
+        <button
           @click="exportCSV"
           :disabled="!activeScan"
-          class="px-4 py-2 rounded text-sm font-semibold transition-colors"
+          class="px-3 py-1.5 rounded text-xs font-semibold transition-colors"
           :class="activeScan
             ? 'bg-green-500 hover:bg-green-600 text-black'
             : 'bg-gray-600 text-gray-400 cursor-not-allowed'"
         >
-          Export CSV
+          Export
         </button>
       </div>
     </div>
@@ -389,10 +637,75 @@ watch(() => props.band.name, async () => {
       ref="chartRef"
       :traces="traces"
       :band="band"
-      :height="height"
+      :height="responsiveHeight"
       :show-current="showCurrent"
       :show-average="showAverage"
       :show-peak="showPeak"
+      :cursor-freq="cursorFreqForLine"
+      :pinned-freqs="allPinnedFreqsWithSelection"
+      @zoom="handleZoom"
+      @cursor-move="handleLineCursorMove"
+      @freq-pin="handleFreqPin"
+    />
+
+    <!-- Spectrogram toggle -->
+    <div class="flex items-center mt-1">
+      <button
+        @click="showSpectrogram = !showSpectrogram"
+        class="flex items-center gap-1 px-2 py-0.5 rounded text-xs transition-colors"
+        :class="showSpectrogram
+          ? 'bg-cyan-600/20 text-cyan-400 hover:bg-cyan-600/30'
+          : 'bg-gray-700 text-gray-500 hover:bg-gray-600'"
+      >
+        <span class="text-[10px]">{{ showSpectrogram ? '&#9660;' : '&#9654;' }}</span>
+        Waterfall
+      </button>
+    </div>
+
+    <div v-if="showSpectrogram" class="relative mt-1">
+      <!-- Loading overlay -->
+      <div
+        v-if="spectrogramLoading"
+        class="absolute inset-0 z-10 flex items-center justify-center bg-gray-900/60 rounded"
+      >
+        <svg class="animate-spin h-6 w-6 text-cyan-400" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+        </svg>
+      </div>
+      <SpectrogramChart
+      ref="spectrogramRef"
+      :band="band"
+      :height="200"
+      :scan="scan"
+      :historical-scans="spectrogramData"
+      :is-live="isLive"
+      :visible-range="zoomRange"
+      :cursor-freq="cursorFreqForSpectrogram"
+      :highlight-time="highlightTime"
+      :pinned-freqs="allPinnedFreqsWithSelection"
+      @cursor-move="handleSpectrogramCursorMove"
+      @select="handleSpectrogramSelect"
+      @freq-pin="handleFreqPin"
+      @zoom="handleSpectrogramZoom"
+    />
+    </div>
+
+    <!-- Frequency time-series plot for pinned frequencies (requires waterfall open for data) -->
+    <FrequencyTimePlot
+      v-if="allPinnedFreqs.length > 0 && showSpectrogram"
+      :pinned-freqs="allPinnedFreqs"
+      :selected-freqs="selectedPinFreqs"
+      :active-scan="activeScan"
+      :scans="spectrogramData"
+      :time-range="freqPlotTimeRange"
+      :live-scan="scan"
+      :is-live="isLive"
+      class="mt-1"
+      @remove-freq="handleRemoveFreq"
+      @toggle-freq="handleToggleFreq"
+      @select-all-freqs="handleSelectAllFreqs"
+      @deselect-all-freqs="handleDeselectAllFreqs"
     />
 
     <!-- Time scrubber for historical playback -->
@@ -415,3 +728,15 @@ watch(() => props.band.name, async () => {
     />
   </div>
 </template>
+
+<style scoped>
+.solo-flash {
+  animation: solo-pulse 1s step-end infinite;
+}
+
+@keyframes solo-pulse {
+  0%, 50% { background-color: #ef4444; }
+  50.01%, 100% { background-color: #7f1d1d; }
+}
+
+</style>

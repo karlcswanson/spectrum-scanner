@@ -39,17 +39,22 @@ services:
       server:
         condition: service_healthy
 
-  # MQTT Broker with Django auth
+  # MQTT Broker with Dynamic Security plugin
   mosquitto:
-    image: iegomez/mosquitto-go-auth:latest
+    image: eclipse-mosquitto:2
     restart: unless-stopped
     ports:
       - "1883:1883"
       # WebSocket exposed through Caddy, not directly
+    environment:
+      - MOSQUITTO_DYNSEC_USERNAME=${MOSQUITTO_DYNSEC_USERNAME:-admin}
+      - MOSQUITTO_DYNSEC_PASSWORD=${MOSQUITTO_DYNSEC_PASSWORD:?Set MOSQUITTO_DYNSEC_PASSWORD in .env}
     volumes:
-      - ./mosquitto.prod.conf:/etc/mosquitto/mosquitto.conf:ro
+      - ./mosquitto.prod.conf:/mosquitto/config/mosquitto.conf:ro
+      - ./mosquitto/entrypoint.sh:/entrypoint.sh
       - mosquitto_data:/mosquitto/data
       - mosquitto_log:/mosquitto/log
+    entrypoint: /entrypoint.sh
     depends_on:
       server:
         condition: service_started
@@ -95,6 +100,7 @@ services:
       dockerfile: Dockerfile.prod
     restart: unless-stopped
     environment:
+      - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY:?Set DJANGO_SECRET_KEY in .env}
       - MQTT_BROKER_HOST=mosquitto
       - DB_ENGINE=django.db.backends.postgresql
       - DB_NAME=${DB_NAME:-spectrum}
@@ -112,6 +118,32 @@ services:
       server:
         condition: service_healthy
     entrypoint: ["uv", "run", "python", "manage.py", "mqtt_bridge"]
+
+  # Scheduler (per-scanner rollup + periodic dynsec sync via APScheduler)
+  scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile.prod
+    restart: unless-stopped
+    environment:
+      - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY:?Set DJANGO_SECRET_KEY in .env}
+      - DB_ENGINE=django.db.backends.postgresql
+      - DB_NAME=${DB_NAME:-spectrum}
+      - DB_USER=${DB_USER:-spectrum}
+      - DB_PASSWORD=${DB_PASSWORD:?Set DB_PASSWORD in .env}
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - MQTT_BROKER_HOST=mosquitto
+      - MOSQUITTO_DYNSEC_USERNAME=${MOSQUITTO_DYNSEC_USERNAME:-admin}
+      - MOSQUITTO_DYNSEC_PASSWORD=${MOSQUITTO_DYNSEC_PASSWORD:?Set MOSQUITTO_DYNSEC_PASSWORD in .env}
+    volumes:
+      - server_data:/app/data
+    depends_on:
+      server:
+        condition: service_healthy
+      mosquitto:
+        condition: service_started
+    entrypoint: ["uv", "run", "python", "manage.py", "scheduler"]
 
   # Frontend build (runs once, copies static files to volume)
   frontend:

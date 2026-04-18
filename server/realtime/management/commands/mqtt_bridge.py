@@ -2,6 +2,7 @@
 
 import signal
 import sys
+import time
 
 from django.core.management.base import BaseCommand
 
@@ -24,7 +25,22 @@ class Command(BaseCommand):
         signal.signal(signal.SIGINT, signal_handler)
         signal.signal(signal.SIGTERM, signal_handler)
 
-        try:
-            bridge.run()
-        except KeyboardInterrupt:
-            bridge.stop()
+        # Retry connection on startup — the bridge client may not be
+        # provisioned in dynsec yet if dynsec_sync hasn't run.
+        max_retries = 10
+        for attempt in range(1, max_retries + 1):
+            try:
+                bridge.run()
+                break
+            except KeyboardInterrupt:
+                bridge.stop()
+                break
+            except Exception as e:
+                if attempt < max_retries:
+                    wait = min(attempt * 2, 10)
+                    self.stderr.write(f'MQTT bridge connect failed ({e}), retrying in {wait}s...')
+                    time.sleep(wait)
+                    bridge = MQTTBridge()
+                else:
+                    self.stderr.write(f'MQTT bridge failed after {max_retries} attempts: {e}')
+                    sys.exit(1)
