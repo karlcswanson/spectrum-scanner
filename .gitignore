@@ -62,3 +62,6 @@ config.yaml
 !config.yaml.example
 /scanner/calibration.yaml
 tools/
+
+# iOS local code signing (contains user's Apple Developer Team ID)
+ios/Signing.xcconfig
