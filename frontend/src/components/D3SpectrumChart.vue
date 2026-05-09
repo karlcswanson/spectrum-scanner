@@ -160,11 +160,23 @@ function getTracesForDraw() {
   return result
 }
 
-// ATSC TV channels for UHF band labeling
+// ATSC TV channels (VHF + UHF) for band labeling. Each channel is 6 MHz wide.
+// VHF Low (2-6) has a 72-76 MHz gap between ch 4 and 5; VHF High (7-13) is
+// contiguous from 174 MHz; UHF (14-51) is one continuous 6 MHz grid from 470
+// MHz, except ch 37 (608-614) which is the radio-astronomy guard band. The
+// same UHF grid extends through ch 69 (ends at 806 MHz) if ever needed.
+function atscChannelStartMHz(ch) {
+  if (ch >= 2  && ch <= 6)               return [54, 60, 66, 76, 82][ch - 2]
+  if (ch >= 7  && ch <= 13)              return 174 + (ch - 7)  * 6
+  if (ch >= 14 && ch <= 51 && ch !== 37) return 470 + (ch - 14) * 6
+  return null
+}
+
 function getATSCChannels(startMHz, stopMHz) {
   const channels = []
-  for (let ch = 14; ch <= 36; ch++) {
-    const chStartMHz = 470 + (ch - 14) * 6
+  for (let ch = 2; ch <= 51; ch++) {
+    const chStartMHz = atscChannelStartMHz(ch)
+    if (chStartMHz === null) continue
     const chEndMHz = chStartMHz + 6
     const chCenterMHz = chStartMHz + 3
     if (chEndMHz > startMHz && chStartMHz < stopMHz) {
