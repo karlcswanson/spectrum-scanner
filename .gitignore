@@ -61,7 +61,15 @@ scanner/root@*
 config.yaml
 !config.yaml.example
 /scanner/calibration.yaml
-tools/
+
+# Root-level local tooling: a ~1.6GB scans.db, a Python venv, and calibration
+# scripts. Anchored to the repo root so it does NOT also match ios/tools/ — those
+# capture/screenshot scripts ARE tracked; only their generated output is ignored
+# (see the iOS section below).
+/tools/
+
+# Editor / backup scratch files
+*.bak
 
 # iOS local code signing (contains user's Apple Developer Team ID)
 ios/Signing.xcconfig
@@ -85,11 +93,21 @@ ios/SpectrumScanner.xcodeproj/
 # Local build outputs / archive products
 ios/build/
 ios/DerivedData/
+# Scripted `xcodebuild -derivedDataPath simbuild` output (~130MB, thousands of files)
+ios/simbuild/
 *.ipa
 *.dSYM.zip
 
+# xcodebuild test result bundles (e.g. from the screenshot UITest run)
+**/*.xcresult
+
 # Instruments traces — large binary bundles, captured per-session
 ios/profiles/
+ios/tools/traces/
+
+# App Store screenshot output from ios/tools/screenshots.sh — the script is tracked,
+# the generated per-device PNGs + result bundles are not.
+ios/tools/screenshots/
 
 # Demo dataset capture-export staging (the bundled file lives at
 # ios/SpectrumScanner/Resources/demo_scans.json and IS committed; this
