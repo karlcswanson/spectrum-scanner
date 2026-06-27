@@ -4,11 +4,13 @@ Calibrates the ADALM-Pluto spectrum scanner using a tinySA Ultra as a reference 
 
 ## Overview
 
-This tool measures the Pluto's amplitude accuracy across a frequency range by:
+This tool measures the Pluto's amplitude accuracy across one or more frequency
+bands by:
 1. Setting the tinySA Ultra to output a known signal level
-2. Tuning the Pluto to each frequency and measuring the received power
-3. Recording the difference between expected and measured values
-4. Outputting calibration data that can be imported into the scanner config
+2. Sweeping each band, tuning the Pluto to every step and measuring received power
+3. Averaging any frequencies shared between adjacent bands and sorting the result
+4. Writing calibration data as **YAML** (paste into `config.yaml`) and **JSON**
+   (for the iOS client, byte-compatible with the server's REST endpoint)
 
 ## Requirements
 
@@ -22,12 +24,29 @@ This tool measures the Pluto's amplitude accuracy across a frequency range by:
 # Build the tool
 go build -o calibrate ./cmd/calibrate
 
-# Run with defaults (UHF band, -28 dBm reference)
+# Run with defaults: sweeps the full iOS band set at -28 dBm, gain 30
 ./calibrate
 
-# Custom frequency range and settings
-./calibrate -start 450 -stop 700 -step 5 -level -30 -gain 30
+# Custom bands (repeat -band as needed), level and gain
+./calibrate -band 450:470:5 -band 470:636:6:UHF -level -30 -gain 30
+
+# With a 20 dB inline attenuator between tinySA and Pluto
+./calibrate -pad 20
 ```
+
+With a direct cable from the tinySA **RF/LOW** port, `./calibrate` with no flags
+is the recommended path. The defaults are tuned to produce a good calibration
+out of the box (`-28` dBm, gain `30`).
+
+### Scope: low-output bands only (≤ 800 MHz)
+
+The tinySA Ultra produces a clean sine signal up to 800 MHz from its **RF/LOW**
+port. Above that it switches to a square-wave **high output** on the separate
+**CAL/HIGH** connector — a different physical port, with a documented risk of
+damaging the low-input attenuator if both ports stay connected. To keep this a
+simple, safe, single-cable run, the tool only calibrates bands at or below
+800 MHz and rejects anything higher. The 900 MHz ISM, STL, and DECT bands are
+out of scope here; calibrate those separately if you need them.
 
 ## Command Line Options
 
@@ -35,12 +54,36 @@ go build -o calibrate ./cmd/calibrate
 |------|---------|-------------|
 | `-tinysa` | `/dev/tty.usbmodem4001` | tinySA serial port |
 | `-pluto` | `https://192.168.2.1` | Pluto maia-httpd URL |
-| `-output` | `calibration.yaml` | Output file for calibration data |
-| `-level` | `-28.0` | Reference signal level in dBm |
+| `-output` | `calibration.yaml` | YAML output (paste into `config.yaml`) |
+| `-json` | `calibration.json` | JSON output (iOS client handoff) |
+| `-level` | `-28.0` | tinySA output level in dBm (use whole numbers) |
+| `-pad` | `0.0` | Inline attenuator in dB; recorded reference is `level - pad` |
 | `-gain` | `30.0` | Pluto RX gain during calibration |
-| `-start` | `470.0` | Start frequency in MHz |
-| `-stop` | `600.0` | Stop frequency in MHz |
-| `-step` | `10.0` | Frequency step in MHz |
+| `-band` | *(low-output band set)* | Band to sweep as `start:stop:step[:name]` in MHz; repeatable. Must be ≤ 800 MHz. |
+
+### Bands
+
+Pass `-band start:stop:step[:name]` once per band (MHz). Steps tune sampling
+density and don't have to match your scan resolution. Any band that stops above
+800 MHz is rejected (see scope note above). With no `-band` flag the tool sweeps
+the default set, the ≤ 800 MHz subset of `Band.defaultBands` in
+`spectrum-ios/SpectrumScanner/Models/Models.swift`:
+
+| Band | Range (MHz) | Step |
+|------|-------------|------|
+| VHF | 174 – 216 | 6 |
+| Business Radio | 450 – 470 | 5 |
+| UHF | 470 – 636 | 6 |
+
+Keep these ranges in sync with the iOS `defaultBands` list if it changes.
+
+### Attenuator pad
+
+The tool commands the tinySA to `-level` and assumes that power reaches the
+Pluto. If you put a physical attenuator inline, pass its value via `-pad` so the
+recorded `reference_dbm` reflects the true power at the Pluto (`level - pad`).
+You cannot compensate by raising `-level` past the tinySA's max output, so the
+pad is subtracted from the recorded reference instead.
 
 ## Recommended Settings
 
@@ -60,7 +103,12 @@ Use a level that's well above the noise floor but won't compress the Pluto's fro
 
 ## Output Format
 
-The tool outputs a YAML file:
+The tool writes two files with the same data:
+
+- **`calibration.yaml`** (`-output`) — paste into `config.yaml`
+- **`calibration.json`** (`-json`) — for the iOS client; the field layout matches
+  `models.Calibration`, so it is identical to what the scanner's REST endpoint
+  serves
 
 ```yaml
 reference_dbm: -28
@@ -72,6 +120,18 @@ points:
   - frequency_mhz: 480
     measured_dbm: -27.8
   # ... more points
+```
+
+```json
+{
+  "reference_dbm": -28,
+  "rx_gain": 30,
+  "timestamp": "2024-01-23T20:45:19.137612-05:00",
+  "points": [
+    { "frequency_mhz": 470, "measured_dbm": -27.5 },
+    { "frequency_mhz": 480, "measured_dbm": -27.8 }
+  ]
+}
 ```
 
 ## Importing into Config

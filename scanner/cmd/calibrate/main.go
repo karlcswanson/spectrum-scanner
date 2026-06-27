@@ -15,6 +15,8 @@ import (
 	"math"
 	"net/http"
 	"os"
+	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -26,6 +28,23 @@ import (
 const (
 	FFTSize    = 4096
 	SettleTime = 500 * time.Millisecond // Time to wait after changing frequency/level
+
+	// LowOutputMaxMHz is the top of the tinySA Ultra's low (sine) output range,
+	// which comes from the RF/LOW port. Above this the generator would switch to
+	// high (square-wave) output on a different connector, so we only calibrate
+	// bands at or below this limit and reject anything higher.
+	LowOutputMaxMHz = 800.0
+)
+
+// Default calibration settings. These are tuned so that `./calibrate` with no
+// flags produces a good calibration on a typical tinySA Ultra + Pluto rig:
+//   - level -28 dBm: well above the Pluto noise floor, below front-end compression
+//   - gain 30 dB:    linear region of the AD9364 (40+ dB can compress)
+//   - pad 0 dB:      assume a direct cable; raise if you add an attenuator
+const (
+	DefaultLevelDBm = -28.0
+	DefaultGainDB   = 30.0
+	DefaultPadDB    = 0.0
 )
 
 // CalibrationPoint represents a single measurement
@@ -62,24 +81,108 @@ type Ad9361Settings struct {
 	RxGainMode        string  `json:"rx_gain_mode"`
 }
 
+// BandSpec is one frequency range to sweep during calibration.
+type BandSpec struct {
+	Name     string
+	StartMHz float64
+	StopMHz  float64
+	StepMHz  float64
+}
+
+// bandList collects repeatable -band flags.
+type bandList []BandSpec
+
+func (b *bandList) String() string {
+	parts := make([]string, len(*b))
+	for i, s := range *b {
+		parts[i] = fmt.Sprintf("%g:%g:%g", s.StartMHz, s.StopMHz, s.StepMHz)
+	}
+	return strings.Join(parts, " ")
+}
+
+// Set parses a "start:stop:step[:name]" band spec (MHz) from a -band flag.
+func (b *bandList) Set(v string) error {
+	parts := strings.Split(v, ":")
+	if len(parts) < 3 || len(parts) > 4 {
+		return fmt.Errorf("band %q must be start:stop:step[:name]", v)
+	}
+	start, err := strconv.ParseFloat(parts[0], 64)
+	if err != nil {
+		return fmt.Errorf("band %q: bad start: %w", v, err)
+	}
+	stop, err := strconv.ParseFloat(parts[1], 64)
+	if err != nil {
+		return fmt.Errorf("band %q: bad stop: %w", v, err)
+	}
+	step, err := strconv.ParseFloat(parts[2], 64)
+	if err != nil {
+		return fmt.Errorf("band %q: bad step: %w", v, err)
+	}
+	if start > stop {
+		return fmt.Errorf("band %q: start must be <= stop", v)
+	}
+	if step <= 0 {
+		return fmt.Errorf("band %q: step must be > 0", v)
+	}
+	name := ""
+	if len(parts) == 4 {
+		name = parts[3]
+	}
+	*b = append(*b, BandSpec{Name: name, StartMHz: start, StopMHz: stop, StepMHz: step})
+	return nil
+}
+
+// defaultBands are the bands the tinySA Ultra can drive cleanly from its low
+// (sine) output on the RF/LOW port, i.e. at or below LowOutputMaxMHz. Ranges
+// mirror spectrum-ios SpectrumScanner/Models/Models.swift `Band.defaultBands`;
+// the step sizes are calibration-specific (sampling density). Higher bands
+// (900 MHz ISM, STL, DECT) need the tinySA's high output on a different port and
+// are intentionally left out to keep this a single-cable, one-port run.
+var defaultBands = bandList{
+	{"VHF", 174, 216, 6},
+	{"Business Radio", 450, 470, 5},
+	{"UHF", 470, 636, 6},
+}
+
 func main() {
 	// Command line flags
 	tinysaPort := flag.String("tinysa", "/dev/tty.usbmodem4001", "tinySA serial port")
 	plutoURL := flag.String("pluto", "https://192.168.2.1", "Pluto maia-httpd URL")
-	outputFile := flag.String("output", "calibration.yaml", "Output file for calibration data")
-	referenceDBm := flag.Float64("level", -28.0, "Reference level in dBm")
-	rxGain := flag.Float64("gain", 30.0, "RX gain to use during calibration")
-	startMHz := flag.Float64("start", 470.0, "Start frequency in MHz")
-	stopMHz := flag.Float64("stop", 600.0, "Stop frequency in MHz")
-	stepMHz := flag.Float64("step", 10.0, "Frequency step in MHz")
+	outputFile := flag.String("output", "calibration.yaml", "Output YAML file (paste into config.yaml)")
+	jsonFile := flag.String("json", "calibration.json", "Output JSON file (for iOS client handoff)")
+	level := flag.Float64("level", DefaultLevelDBm, "tinySA output level in dBm (whole numbers; the device truncates fractions)")
+	pad := flag.Float64("pad", DefaultPadDB, "Inline attenuator between tinySA and Pluto, in dB. The recorded reference is level-pad.")
+	rxGain := flag.Float64("gain", DefaultGainDB, "RX gain to use during calibration")
+	var bands bandList
+	flag.Var(&bands, "band", "Band to sweep as start:stop:step[:name] in MHz; repeatable. Defaults to the low-output band set when omitted.")
 	flag.Parse()
+
+	if len(bands) == 0 {
+		bands = defaultBands
+	}
+
+	// The tinySA drives all of these from its low-output RF/LOW port; bands above
+	// the low-output ceiling would need the high-output port and are unsupported.
+	for _, band := range bands {
+		if band.StopMHz > LowOutputMaxMHz {
+			log.Fatalf("band %s stops at %g MHz, above the tinySA low-output limit of %g MHz; "+
+				"calibrate it separately from the CAL/HIGH port", bandLabel(band), band.StopMHz, LowOutputMaxMHz)
+		}
+	}
+
+	// The reference is the power actually arriving at the Pluto: the tinySA is
+	// commanded to `level`, and a physical pad drops it by `pad` dB.
+	referenceDBm := *level - *pad
 
 	log.Printf("Calibration Tool")
 	log.Printf("  tinySA: %s", *tinysaPort)
 	log.Printf("  Pluto: %s", *plutoURL)
-	log.Printf("  Reference: %.1f dBm", *referenceDBm)
+	log.Printf("  Output level: %.1f dBm  (pad %.1f dB -> reference %.1f dBm at Pluto)", *level, *pad, referenceDBm)
 	log.Printf("  RX Gain: %.1f dB", *rxGain)
-	log.Printf("  Range: %.1f - %.1f MHz, step %.1f MHz", *startMHz, *stopMHz, *stepMHz)
+	log.Printf("  Bands: %d", len(bands))
+	for _, band := range bands {
+		log.Printf("    %-16s %g - %g MHz, step %g MHz", bandLabel(band), band.StartMHz, band.StopMHz, band.StepMHz)
+	}
 
 	// Connect to tinySA
 	tinysa, err := NewTinySA(*tinysaPort)
@@ -100,78 +203,141 @@ func main() {
 	}
 	log.Printf("Pluto gain set to %.1f dB", *rxGain)
 
-	// Enable tinySA output
+	log.Printf(">>> Connect the coax to the tinySA RF/LOW port, then press Enter.")
+	waitForEnter()
+
+	// Enable tinySA low output
 	if err := tinysa.OutputOn(); err != nil {
 		log.Fatalf("Failed to enable tinySA output: %v", err)
 	}
 	defer tinysa.OutputOff()
 
-	// Set tinySA level
-	if err := tinysa.SetLevel(*referenceDBm); err != nil {
+	// Set tinySA level (commanded output, before the pad)
+	if err := tinysa.SetLevel(*level); err != nil {
 		log.Fatalf("Failed to set tinySA level: %v", err)
 	}
-	log.Printf("tinySA level set to %.1f dBm", *referenceDBm)
+	log.Printf("tinySA output level set to %.1f dBm", *level)
 
-	// Collect calibration points
-	var points []CalibrationPoint
-	for freq := *startMHz; freq <= *stopMHz; freq += *stepMHz {
-		log.Printf("Measuring %.1f MHz...", freq)
+	// Collect measurements across all bands, keyed by frequency so that points
+	// shared between adjacent bands (e.g. 470 MHz at the Business Radio/UHF
+	// boundary) get averaged rather than duplicated.
+	measured := map[float64][]float64{}
+	var order []float64 // frequencies in first-seen order, for dedupe bookkeeping
 
-		// Set tinySA frequency
-		if err := tinysa.SetFrequency(freq * 1e6); err != nil {
-			log.Printf("  Error setting frequency: %v", err)
-			continue
+	for _, band := range bands {
+		log.Printf("=== Band %s: %g - %g MHz (step %g) ===", bandLabel(band), band.StartMHz, band.StopMHz, band.StepMHz)
+
+		// Index-based stepping avoids float accumulation drift and guarantees
+		// the stop frequency is included.
+		steps := int(math.Round((band.StopMHz - band.StartMHz) / band.StepMHz))
+		for i := 0; i <= steps; i++ {
+			freq := band.StartMHz + float64(i)*band.StepMHz
+			if freq > band.StopMHz+1e-9 {
+				break
+			}
+			log.Printf("Measuring %g MHz...", freq)
+
+			// Set tinySA frequency
+			if err := tinysa.SetFrequency(freq * 1e6); err != nil {
+				log.Printf("  Error setting frequency: %v", err)
+				continue
+			}
+
+			// Set Pluto to same frequency
+			if err := pluto.SetFrequency(uint64(freq * 1e6)); err != nil {
+				log.Printf("  Error tuning Pluto: %v", err)
+				continue
+			}
+
+			// Wait for settle
+			time.Sleep(SettleTime)
+
+			// Measure power at this frequency
+			power, err := pluto.MeasurePower(freq * 1e6)
+			if err != nil {
+				log.Printf("  Error measuring: %v", err)
+				continue
+			}
+
+			log.Printf("  %g MHz: measured %.2f dBm (ref %.1f dBm, error %.2f dB)",
+				freq, power, referenceDBm, power-referenceDBm)
+
+			if _, seen := measured[freq]; !seen {
+				order = append(order, freq)
+			}
+			measured[freq] = append(measured[freq], power)
 		}
-
-		// Set Pluto to same frequency
-		if err := pluto.SetFrequency(uint64(freq * 1e6)); err != nil {
-			log.Printf("  Error tuning Pluto: %v", err)
-			continue
-		}
-
-		// Wait for settle
-		time.Sleep(SettleTime)
-
-		// Measure power at this frequency
-		power, err := pluto.MeasurePower(freq * 1e6)
-		if err != nil {
-			log.Printf("  Error measuring: %v", err)
-			continue
-		}
-
-		log.Printf("  %.1f MHz: measured %.2f dBm (ref %.1f dBm, error %.2f dB)",
-			freq, power, *referenceDBm, power-*referenceDBm)
-
-		points = append(points, CalibrationPoint{
-			FrequencyMHz: freq,
-			MeasuredDBm:  power,
-		})
 	}
 
 	// Turn off output
 	tinysa.OutputOff()
 
-	// Build calibration struct
+	// Collapse duplicate frequencies (average) and sort ascending so the
+	// scanner's linear interpolation gets a clean monotonic curve.
+	points := make([]CalibrationPoint, 0, len(order))
+	for freq, vals := range measured {
+		sum := 0.0
+		for _, v := range vals {
+			sum += v
+		}
+		points = append(points, CalibrationPoint{
+			FrequencyMHz: freq,
+			MeasuredDBm:  sum / float64(len(vals)),
+		})
+	}
+	sort.Slice(points, func(i, j int) bool {
+		return points[i].FrequencyMHz < points[j].FrequencyMHz
+	})
+
+	if len(points) == 0 {
+		log.Fatalf("No calibration points collected (check RF connection and devices)")
+	}
+
+	// Build calibration struct. Field tags match models.Calibration, so the JSON
+	// is byte-compatible with what the server's REST endpoint serves to iOS.
 	cal := Calibration{
-		ReferenceDBm: *referenceDBm,
+		ReferenceDBm: referenceDBm,
 		RxGain:       *rxGain,
 		Timestamp:    time.Now(),
 		Points:       points,
 	}
 
-	// Write to file
-	data, err := yaml.Marshal(&cal)
+	// Write YAML (for pasting into config.yaml's calibration: section)
+	yamlData, err := yaml.Marshal(&cal)
 	if err != nil {
-		log.Fatalf("Failed to marshal calibration: %v", err)
+		log.Fatalf("Failed to marshal YAML: %v", err)
+	}
+	if err := os.WriteFile(*outputFile, yamlData, 0644); err != nil {
+		log.Fatalf("Failed to write %s: %v", *outputFile, err)
 	}
 
-	if err := os.WriteFile(*outputFile, data, 0644); err != nil {
-		log.Fatalf("Failed to write calibration file: %v", err)
+	// Write JSON (for the iOS client)
+	jsonData, err := json.MarshalIndent(&cal, "", "  ")
+	if err != nil {
+		log.Fatalf("Failed to marshal JSON: %v", err)
+	}
+	if err := os.WriteFile(*jsonFile, append(jsonData, '\n'), 0644); err != nil {
+		log.Fatalf("Failed to write %s: %v", *jsonFile, err)
 	}
 
-	log.Printf("Calibration saved to %s", *outputFile)
-	fmt.Println("\nCalibration data:")
-	fmt.Println(string(data))
+	log.Printf("Calibration complete: %d points across %d bands", len(points), len(bands))
+	log.Printf("  YAML (config.yaml): %s", *outputFile)
+	log.Printf("  JSON (iOS):         %s", *jsonFile)
+	fmt.Println("\nCalibration data (YAML):")
+	fmt.Println(string(yamlData))
+}
+
+// bandLabel returns the band name, or a frequency range if unnamed.
+func bandLabel(b BandSpec) string {
+	if b.Name != "" {
+		return b.Name
+	}
+	return fmt.Sprintf("%g-%gMHz", b.StartMHz, b.StopMHz)
+}
+
+// waitForEnter blocks until the operator presses Enter.
+func waitForEnter() {
+	bufio.NewScanner(os.Stdin).Scan()
 }
 
 // NewTinySA connects to the tinySA Ultra
@@ -226,8 +392,9 @@ func (t *TinySA) sendCommand(cmd string) error {
 }
 
 func (t *TinySA) OutputOn() error {
-	// Switch to output mode (high is default for Ultra)
-	t.sendCommand("mode output")
+	// Low (sine) output from the RF/LOW port. We only calibrate bands the low
+	// output can reach (<=800 MHz), so we never touch the high output path.
+	t.sendCommand("mode low output")
 	time.Sleep(500 * time.Millisecond)
 	return t.sendCommand("output on")
 }
