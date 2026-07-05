@@ -62,6 +62,11 @@ config.yaml
 !config.yaml.example
 /scanner/calibration.yaml
 
+# Generated calibration / characterization artifacts (regenerable from hardware)
+/scanner/calibration.json
+/scanner/cmd/calibrate/level_sweep_out/
+/scanner/cmd/calibrate/level_sweep_gains/
+
 # Root-level local tooling: a ~1.6GB scans.db, a Python venv, and calibration
 # scripts. Anchored to the repo root so it does NOT also match ios/tools/ — those
 # capture/screenshot scripts ARE tracked; only their generated output is ignored

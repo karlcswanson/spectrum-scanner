@@ -22,6 +22,12 @@ _executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='dynsec')
 
 def _dispatch(fn, *args, **kwargs):
     """Submit work to the background executor, logging any errors."""
+    from django.conf import settings
+    if getattr(settings, 'TESTING', False):
+        # No broker in the test env, and the background thread's DB connection
+        # otherwise blocks test-database teardown.
+        return
+
     def _wrapper():
         try:
             fn(*args, **kwargs)

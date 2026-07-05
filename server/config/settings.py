@@ -3,6 +3,7 @@ Django settings for Spectrum Server.
 """
 
 import os
+import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -14,6 +15,10 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'dev-secret-key-change-in-production')
 
 DEBUG = os.getenv('DEBUG', 'false').lower() == 'true'
+
+# True while the Django test runner is active. Used to skip side effects that
+# reach external services (e.g. the dynsec MQTT sync fired on model save).
+TESTING = 'test' in sys.argv
 
 ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1,server').split(',')
 
@@ -89,6 +94,46 @@ if 'sqlite3' in _db_engine:
         ),
     }
 
+# Persistent DB connections in production (Postgres). Without this every request
+# opens and tears down a fresh connection — expensive under the demo's
+# concurrency and wasteful now that the read path is cached. CONN_HEALTH_CHECKS
+# revalidates a reused connection before use so a stale one can't 500 a request.
+#
+# Only when NOT DEBUG: production runs gunicorn with a *fixed* worker×thread
+# pool, so persistent connections stay bounded. The dev `runserver` spawns an
+# unbounded thread per request, and holding a connection per thread for
+# CONN_MAX_AGE seconds exhausts Postgres ("too many clients"). Dev/SQLite/tests
+# keep the default per-request connection.
+if 'postgresql' in _db_engine and not DEBUG:
+    DATABASES['default']['CONN_MAX_AGE'] = int(os.getenv('CONN_MAX_AGE', '60'))
+    DATABASES['default']['CONN_HEALTH_CHECKS'] = True
+
+# Cache — Redis (dev + prod) backs the read-API response cache and the
+# single-flight locks that collapse a stampede of identical /history requests
+# into one DB query. Falls back to per-process local memory when REDIS_URL is
+# unset (tests, or a bare `manage.py runserver` without the compose stack);
+# LocMem has no cross-process lock, so single-flight degrades to per-process
+# there — fine for a single worker. IGNORE_EXCEPTIONS keeps the API serving
+# straight from Postgres if Redis is down, so the cache is a speedup, never a
+# hard dependency.
+REDIS_URL = os.getenv('REDIS_URL')
+if REDIS_URL:
+    CACHES = {
+        'default': {
+            'BACKEND': 'django_redis.cache.RedisCache',
+            'LOCATION': REDIS_URL,
+            'OPTIONS': {
+                'CLIENT_CLASS': 'django_redis.client.DefaultClient',
+                'IGNORE_EXCEPTIONS': True,
+            },
+        }
+    }
+    DJANGO_REDIS_LOG_IGNORED_EXCEPTIONS = True
+else:
+    CACHES = {
+        'default': {'BACKEND': 'django.core.cache.backends.locmem.LocMemCache'},
+    }
+
 # Password validation
 AUTH_PASSWORD_VALIDATORS = [
     {'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator'},
@@ -121,6 +166,18 @@ REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'rest_framework.authentication.SessionAuthentication',
     ],
+    # Per-visitor API cap. Share-link visitors all authenticate as one
+    # demo_viewer user, so a user-keyed throttle would lump them together;
+    # SessionOrIPRateThrottle keys on the session/IP instead. Login and
+    # share-token endpoints get stricter IP-keyed throttles applied per-view.
+    'DEFAULT_THROTTLE_CLASSES': [
+        'api.throttles.SessionOrIPRateThrottle',
+    ],
+    'DEFAULT_THROTTLE_RATES': {
+        'session': '120/min',
+        'login': '10/min',
+        'share_auth': '20/min',
+    },
 }
 
 # CORS - allow frontend dev server
@@ -140,6 +197,16 @@ CSRF_TRUSTED_ORIGINS = os.getenv(
     'CSRF_TRUSTED_ORIGINS',
     'http://localhost:5173,http://localhost:5174,http://localhost:3000,http://127.0.0.1:5173,http://127.0.0.1:5174'
 ).split(',')
+
+# In production, TLS is terminated at Caddy and Django is reached over http on
+# the internal network. Trust the proxy's scheme header and mark cookies Secure
+# so they aren't sent over plain http. (Caddy already does the http->https
+# redirect and can set HSTS, so those aren't duplicated here.) Left off in DEBUG
+# so local http dev keeps working.
+if not DEBUG:
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
 
 # MQTT settings
 MQTT_BROKER_HOST = os.getenv('MQTT_BROKER_HOST', 'localhost')

@@ -1,6 +1,8 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
 import { useScannersStore } from '../stores/scanners'
+import { useAuthStore } from '../stores/auth'
+import { SCRUBBER_HOURS } from '../constants'
 import D3SpectrumChart from './D3SpectrumChart.vue'
 import SpectrogramChart from './SpectrogramChart.vue'
 import TimeScrubber from './TimeScrubber.vue'
@@ -69,6 +71,14 @@ const props = defineProps({
 const emit = defineEmits(['update:selected'])
 
 const store = useScannersStore()
+const auth = useAuthStore()
+
+// Read-only share sessions only get a short live window from the API, so lock
+// the scrubber to that window (matches the server's readonly cap) instead of
+// letting viewers scrub into hours that return empty. SCRUBBER_HOURS (~10 min)
+// mirrors the server's READONLY_MAX_HISTORY_SECONDS.
+const scrubberLockHours = computed(() => (auth.isReadonly ? SCRUBBER_HOURS : null))
+
 const chartRef = ref(null)
 const spectrogramRef = ref(null)
 
@@ -715,6 +725,7 @@ watch(() => props.band.name, async () => {
       :band-name="band.name"
       :timeline="timeline"
       :max-hours="timelineHours"
+      :locked-max-hours="scrubberLockHours"
       :height="50"
       :showing-live="showingLive"
       :current-time="currentDisplayTime"

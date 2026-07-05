@@ -2,6 +2,9 @@
 # Handles TLS/HTTPS automatically via Let's Encrypt
 
 {$DOMAIN:localhost} {
+    # Compress responses (the scan/history JSON payloads gzip/zstd very well).
+    encode zstd gzip
+
     # API routes to Django backend
     handle /api/* {
         reverse_proxy server:8000

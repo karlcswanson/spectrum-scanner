@@ -2,6 +2,7 @@
 
 from rest_framework import serializers
 from core.models import Scanner, Band, Scan, ScanSummary, ScannerGroup, MonitoredFrequency, Access
+from core.decimation import decimate_power
 
 
 class BandSerializer(serializers.ModelSerializer):
@@ -109,21 +110,7 @@ class DecimatedScanSummarySerializer(serializers.ModelSerializer):
         ]
 
     def get_power(self, obj):
-        if not obj.peak_power:
-            return []
-        target_points = 1920
-        original = obj.peak_power
-        if len(original) <= target_points:
-            return original
-        factor = len(original) / target_points
-        result = []
-        for i in range(target_points):
-            start = int(i * factor)
-            end = int((i + 1) * factor)
-            chunk = original[start:end]
-            if chunk:
-                result.append(max(chunk))
-        return result
+        return decimate_power(obj.peak_power)
 
 
 class ScannerGroupSerializer(serializers.ModelSerializer):
@@ -192,28 +179,7 @@ class DecimatedScanSerializer(serializers.ModelSerializer):
 
     def get_power(self, obj):
         """Decimate power array to ~1920 points using max-pooling."""
-        if not obj.power:
-            return []
-
-        target_points = 1920
-        original = obj.power
-
-        if len(original) <= target_points:
-            return original
-
-        # Calculate decimation factor
-        factor = len(original) / target_points
-        result = []
-
-        for i in range(target_points):
-            start = int(i * factor)
-            end = int((i + 1) * factor)
-            # Use max value in each bin to preserve peaks
-            chunk = original[start:end]
-            if chunk:
-                result.append(max(chunk))
-
-        return result
+        return decimate_power(obj.power)
 
 
 class ScanCreateSerializer(serializers.Serializer):

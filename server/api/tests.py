@@ -1,0 +1,381 @@
+"""Tests for API permission scoping, read-only enforcement, and input parsing.
+
+These cover the security-review fixes: request-aware scanner scoping
+(F3), the ReadOnlyIfShareSession guarantee, and the F5 input clamps.
+"""
+
+from datetime import timedelta
+
+from django.contrib.auth.models import User
+from django.core.cache import cache
+from django.test import Client, RequestFactory, SimpleTestCase, TestCase
+from django.utils import timezone
+
+from core.models import Access, Band, Scan, Scanner
+from api.cache import (
+    bucket_epoch, cached_or_compute, history_cache_key, register_warm,
+    warm_spec, WARM_PREFIX, _warm_sig,
+)
+from api.permissions import (
+    HasScannerAccess, ReadOnlyIfShareSession, get_request_scanner_ids,
+    get_request_max_history_seconds, READONLY_MAX_HISTORY_SECONDS,
+)
+from api.views import _parse_hours, _parse_int
+
+
+class GetRequestScannerIdsTest(TestCase):
+    """Request-aware scoping used by ScanViewSet / at_time / BandViewSet."""
+
+    def setUp(self):
+        self.factory = RequestFactory()
+        self.s1 = Scanner.objects.create(name="S1")
+        self.s2 = Scanner.objects.create(name="S2")
+
+    def _req(self, user, session=None):
+        req = self.factory.get("/api/scans/")
+        req.user = user
+        req.session = session or {}
+        return req
+
+    def test_staff_unrestricted(self):
+        staff = User.objects.create_user("staff", is_staff=True)
+        self.assertIsNone(get_request_scanner_ids(self._req(staff)))
+
+    def test_user_grant_scopes_to_granted_scanner(self):
+        u = User.objects.create_user("u1")
+        Access.objects.create(user=u, scanner=self.s1, permission="r")
+        self.assertEqual(get_request_scanner_ids(self._req(u)), {self.s1.id})
+
+    def test_share_access_id_scopes_to_grant(self):
+        demo = User.objects.create_user("demo_viewer")
+        access = Access.objects.create(token="tok-share", scanner=self.s2, permission="r")
+        req = self._req(demo, {"access_id": str(access.id), "readonly": True})
+        got = get_request_scanner_ids(req)
+        self.assertEqual(got, {self.s2.id})
+        # The key IDOR guarantee: a share scoped to s2 cannot see s1.
+        self.assertNotIn(self.s1.id, got)
+
+    def test_legacy_readonly_share_is_unrestricted(self):
+        # Legacy ShareLink: readonly flag, no access_id -> global demo (None).
+        demo = User.objects.create_user("demo_viewer")
+        self.assertIsNone(get_request_scanner_ids(self._req(demo, {"readonly": True})))
+
+    def test_plain_user_without_grants_sees_nothing(self):
+        u = User.objects.create_user("nobody")
+        self.assertEqual(get_request_scanner_ids(self._req(u)), set())
+
+    def test_inactive_share_grant_excluded(self):
+        demo = User.objects.create_user("demo_viewer")
+        access = Access.objects.create(
+            token="tok-dead", scanner=self.s2, permission="r", is_active=False
+        )
+        req = self._req(demo, {"access_id": str(access.id)})
+        # is_active=False -> not found by the active-only lookup -> empty.
+        self.assertEqual(get_request_scanner_ids(req), set())
+
+
+class ReadOnlyIfShareSessionTest(SimpleTestCase):
+    def setUp(self):
+        self.factory = RequestFactory()
+        self.perm = ReadOnlyIfShareSession()
+
+    def test_safe_method_allowed_for_share(self):
+        req = self.factory.get("/x")
+        req.session = {"readonly": True}
+        self.assertTrue(self.perm.has_permission(req, None))
+
+    def test_write_blocked_for_share(self):
+        req = self.factory.post("/x")
+        req.session = {"readonly": True}
+        self.assertFalse(self.perm.has_permission(req, None))
+
+    def test_write_allowed_for_non_share(self):
+        req = self.factory.post("/x")
+        req.session = {}
+        self.assertTrue(self.perm.has_permission(req, None))
+
+
+class HasScannerAccessReadTest(TestCase):
+    """Object permission: reads are request-aware (share sessions work),
+    writes still require an rw grant for the user."""
+
+    def setUp(self):
+        self.factory = RequestFactory()
+        self.perm = HasScannerAccess()
+        self.s1 = Scanner.objects.create(name="A")
+        self.s2 = Scanner.objects.create(name="B")
+
+    def _req(self, method, user, session):
+        req = getattr(self.factory, method)("/x")
+        req.user = user
+        req.session = session
+        return req
+
+    def test_share_session_reads_only_granted_scanner(self):
+        demo = User.objects.create_user("demo_viewer")
+        access = Access.objects.create(token="t-read", scanner=self.s1, permission="r")
+        req = self._req("get", demo, {"access_id": str(access.id), "readonly": True})
+        self.assertTrue(self.perm.has_object_permission(req, None, self.s1))
+        # Scoped share must not read a scanner outside its grant.
+        self.assertFalse(self.perm.has_object_permission(req, None, self.s2))
+
+    def test_staff_reads_any_scanner(self):
+        staff = User.objects.create_user("staff-read", is_staff=True)
+        req = self._req("get", staff, {})
+        self.assertTrue(self.perm.has_object_permission(req, None, self.s1))
+
+    def test_write_requires_rw_grant(self):
+        u = User.objects.create_user("writer")
+        Access.objects.create(user=u, scanner=self.s1, permission="r")
+        req = self._req("post", u, {})
+        self.assertFalse(self.perm.has_object_permission(req, None, self.s1))
+        Access.objects.create(user=u, scanner=self.s1, permission="rw")
+        self.assertTrue(self.perm.has_object_permission(req, None, self.s1))
+
+
+class CachedOrComputeTest(SimpleTestCase):
+    """Single-flight cache wrapper: computes once, then serves from cache."""
+
+    def setUp(self):
+        cache.clear()
+        self.addCleanup(cache.clear)
+
+    def test_miss_then_hit_computes_once(self):
+        calls = []
+
+        def compute():
+            calls.append(1)
+            return {"v": 42}
+
+        data, hit = cached_or_compute("k1", 30, compute)
+        self.assertEqual(data, {"v": 42})
+        self.assertFalse(hit)
+
+        def _boom():
+            raise AssertionError("must not recompute on a hit")
+
+        data2, hit2 = cached_or_compute("k1", 30, _boom)
+        self.assertEqual(data2, {"v": 42})
+        self.assertTrue(hit2)
+        self.assertEqual(len(calls), 1)
+
+    def test_none_is_cached_as_a_hit(self):
+        # at_time caches "not found" as None; it must count as a hit, not a
+        # perpetual miss that recomputes every request.
+        data, hit = cached_or_compute("k-none", 30, lambda: None)
+        self.assertIsNone(data)
+        self.assertFalse(hit)
+        data2, hit2 = cached_or_compute("k-none", 30, lambda: "RECOMPUTED")
+        self.assertIsNone(data2)
+        self.assertTrue(hit2)
+
+    def test_bucket_epoch_floors_to_window(self):
+        t = timezone.now()
+        b = bucket_epoch(t, 10)
+        self.assertEqual(b % 10, 0)
+        self.assertEqual(bucket_epoch(t, 10), bucket_epoch(t, 10))
+
+
+class HistoryEndpointShareScopeTest(TestCase):
+    """End-to-end: a scoped share session can read its granted scanner's
+    history (F3 completion) and the response is cached (X-Cache)."""
+
+    def setUp(self):
+        cache.clear()
+        self.addCleanup(cache.clear)
+        self.granted = Scanner.objects.create(name="Granted")
+        self.foreign = Scanner.objects.create(name="Foreign")
+        self.band = Band.objects.create(
+            scanner=self.granted, name="UHF",
+            start_hz=470_000_000, stop_hz=473_000_000,
+        )
+        Scan.objects.create(
+            scanner=self.granted, band=self.band, timestamp=timezone.now(),
+            hz_lo=470_000_000, hz_hi=473_000_000, step_hz=1_000_000.0,
+            power=[1.0, 2.0, 3.0], metadata={},
+        )
+        self.demo = User.objects.create_user("demo_viewer")
+        self.access = Access.objects.create(
+            token="share-tok", scanner=self.granted, permission="r",
+        )
+
+    def _share_client(self):
+        client = Client()
+        client.force_login(self.demo)
+        session = client.session
+        session["access_id"] = str(self.access.id)
+        session["readonly"] = True
+        session.save()
+        return client
+
+    def test_share_reads_granted_history_with_cache(self):
+        client = self._share_client()
+        r1 = client.get(f"/api/scanners/{self.granted.id}/history/")
+        self.assertEqual(r1.status_code, 200)
+        self.assertEqual(r1["X-Cache"], "MISS")
+        self.assertEqual(len(r1.json()), 1)
+
+        r2 = client.get(f"/api/scanners/{self.granted.id}/history/")
+        self.assertEqual(r2.status_code, 200)
+        self.assertEqual(r2["X-Cache"], "HIT")
+
+    def test_share_cannot_read_foreign_history(self):
+        client = self._share_client()
+        r = client.get(f"/api/scanners/{self.foreign.id}/history/")
+        self.assertEqual(r.status_code, 404)
+
+
+class ReadOnlyHistoryCapTest(TestCase):
+    """Read-only share sessions are bounded to the recent live window; full
+    logins keep unlimited history."""
+
+    def setUp(self):
+        cache.clear()
+        self.addCleanup(cache.clear)
+        self.factory = RequestFactory()
+        self.scanner = Scanner.objects.create(name="Capped")
+        self.band = Band.objects.create(
+            scanner=self.scanner, name="UHF",
+            start_hz=470_000_000, stop_hz=473_000_000,
+        )
+        now = timezone.now()
+        # One scan inside the 10-min window, one well outside it.
+        self.recent = Scan.objects.create(
+            scanner=self.scanner, band=self.band, timestamp=now - timedelta(minutes=1),
+            hz_lo=470_000_000, hz_hi=473_000_000, step_hz=1_000_000.0,
+            power=[1.0, 2.0, 3.0], metadata={},
+        )
+        self.old = Scan.objects.create(
+            scanner=self.scanner, band=self.band, timestamp=now - timedelta(minutes=30),
+            hz_lo=470_000_000, hz_hi=473_000_000, step_hz=1_000_000.0,
+            power=[4.0, 5.0, 6.0], metadata={},
+        )
+        self.demo = User.objects.create_user("demo_viewer")
+        self.access = Access.objects.create(
+            token="cap-tok", scanner=self.scanner, permission="r",
+        )
+        self.staff = User.objects.create_user("cap-staff", is_staff=True)
+
+    def _req(self, session):
+        req = self.factory.get("/x")
+        req.session = session
+        return req
+
+    def test_helper_caps_readonly_only(self):
+        self.assertEqual(
+            get_request_max_history_seconds(self._req({"readonly": True})),
+            READONLY_MAX_HISTORY_SECONDS,
+        )
+        self.assertIsNone(get_request_max_history_seconds(self._req({})))
+        self.assertIsNone(get_request_max_history_seconds(self._req({"access_id": "x"})))
+
+    def _share_client(self):
+        client = Client()
+        client.force_login(self.demo)
+        session = client.session
+        session["access_id"] = str(self.access.id)
+        session["readonly"] = True
+        session.save()
+        return client
+
+    def test_share_history_excludes_data_older_than_window(self):
+        # Even asking for hours=24, a read-only share only sees the last 10 min.
+        client = self._share_client()
+        r = client.get(f"/api/scanners/{self.scanner.id}/history/?hours=24")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(len(r.json()), 1)  # only the recent scan
+
+    def test_full_login_sees_full_history(self):
+        client = Client()
+        client.force_login(self.staff)
+        r = client.get(f"/api/scanners/{self.scanner.id}/history/?hours=24")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(len(r.json()), 2)  # both scans
+
+    def test_share_at_time_rejects_old_timestamp(self):
+        client = self._share_client()
+        old = (timezone.now() - timedelta(minutes=30)).isoformat()
+        r = client.get(f"/api/scans/at_time/?scanner={self.scanner.id}&time={old}")
+        self.assertEqual(r.status_code, 404)
+
+
+class WarmRegistryTest(SimpleTestCase):
+    """Demand-driven warm markers: registration writes a retrievable spec."""
+
+    def setUp(self):
+        cache.clear()
+        self.addCleanup(cache.clear)
+
+    def test_register_warm_writes_marker(self):
+        spec = {
+            "kind": "history", "scanner_id": "abc", "band": "UHF",
+            "hours": 24.0, "limit": 1000, "decimated": True,
+        }
+        register_warm(spec)
+        self.assertEqual(cache.get(f"{WARM_PREFIX}{_warm_sig(spec)}"), spec)
+
+    def test_identical_requests_share_one_marker(self):
+        base = {
+            "kind": "timeline", "scanner_id": "abc", "band": None, "hours": 24.0,
+        }
+        register_warm(dict(base))
+        register_warm(dict(base))
+        self.assertEqual(_warm_sig(base), _warm_sig(dict(base)))
+
+
+class WarmNoDriftTest(TestCase):
+    """The warmer must fill the *exact* key a real request reads — otherwise
+    warming is a silent no-op. Proven end-to-end: warm a spec, then the
+    matching endpoint request is a HIT with no client-triggered compute."""
+
+    def setUp(self):
+        cache.clear()
+        self.addCleanup(cache.clear)
+        self.scanner = Scanner.objects.create(name="Warmed")
+        self.band = Band.objects.create(
+            scanner=self.scanner, name="UHF",
+            start_hz=470_000_000, stop_hz=473_000_000,
+        )
+        Scan.objects.create(
+            scanner=self.scanner, band=self.band, timestamp=timezone.now(),
+            hz_lo=470_000_000, hz_hi=473_000_000, step_hz=1_000_000.0,
+            power=[1.0, 2.0, 3.0], metadata={},
+        )
+        self.staff = User.objects.create_user("warm-staff", is_staff=True)
+
+    def test_warm_prefills_key_endpoint_reads(self):
+        # The spec matching the endpoint's default history request.
+        spec = {
+            "kind": "history", "scanner_id": str(self.scanner.id), "band": None,
+            "hours": 24.0, "limit": 1000, "decimated": False,
+        }
+        key = warm_spec(spec)
+        # The warmed key is populated straight from the warmer (no request yet).
+        self.assertIsNotNone(cache.get(key))
+        self.assertEqual(
+            key, history_cache_key(self.scanner.id, None, "h24.0", 1000, False)
+        )
+
+        # A real request with the same params must hit that pre-filled key.
+        client = Client()
+        client.force_login(self.staff)
+        r = client.get(f"/api/scanners/{self.scanner.id}/history/")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r["X-Cache"], "HIT")
+        self.assertEqual(len(r.json()), 1)
+
+
+class ParseHelpersTest(SimpleTestCase):
+    def test_parse_hours_clamps_and_defaults(self):
+        self.assertEqual(_parse_hours("abc"), 24.0)      # garbage -> default
+        self.assertEqual(_parse_hours(None), 24.0)
+        self.assertEqual(_parse_hours("1e18"), 8760.0)   # clamp to max
+        self.assertEqual(_parse_hours("-5"), 0.0)        # clamp to min
+        self.assertEqual(_parse_hours("5"), 5.0)
+
+    def test_parse_int_clamps_and_defaults(self):
+        self.assertEqual(_parse_int("abc", 100, minimum=1, maximum=5000), 100)
+        self.assertEqual(_parse_int(None, 100, minimum=1, maximum=5000), 100)
+        self.assertEqual(_parse_int("99999", 100, minimum=1, maximum=5000), 5000)
+        self.assertEqual(_parse_int("0", 100, minimum=1, maximum=5000), 1)
+        self.assertEqual(_parse_int("50", 100, minimum=1, maximum=5000), 50)

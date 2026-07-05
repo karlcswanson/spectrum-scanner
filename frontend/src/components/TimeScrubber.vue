@@ -57,6 +57,14 @@ const props = defineProps({
     type: Number,
     default: 0,
   },
+  // When set, the scrubber is locked to a fixed recent window of this many
+  // hours: the range presets + custom picker are hidden and the domain can't be
+  // dragged past it. Used for read-only share sessions, whose server API only
+  // serves a short live window (deep scrubbing would just return empty).
+  lockedMaxHours: {
+    type: Number,
+    default: null,
+  },
 })
 
 // Time range presets
@@ -120,10 +128,14 @@ const summaryCount = computed(() => {
 
 // Time range - computed fresh in draw(), using selected range
 function getTimeRange() {
+  const now = new Date()
+  // Locked (read-only) mode: fixed recent window, ignore preset/custom selection.
+  if (props.lockedMaxHours != null) {
+    return { start: new Date(now.getTime() - props.lockedMaxHours * 60 * 60 * 1000), end: now }
+  }
   if (isCustomRange.value && customRangeStart.value && customRangeEnd.value) {
     return { start: customRangeStart.value, end: customRangeEnd.value }
   }
-  const now = new Date()
   const hours = selectedRange.value || props.maxHours
   const start = new Date(now.getTime() - hours * 60 * 60 * 1000)
   return { start, end: now }
@@ -591,8 +603,9 @@ const selectedTimeDisplay = computed(() => {
         Live
       </button>
     </div>
-    <!-- Row 2: time range presets, right-aligned -->
-    <div class="flex flex-wrap justify-end gap-1 mb-2">
+    <!-- Row 2: time range presets, right-aligned. Hidden when locked to a
+         fixed window (read-only sessions). -->
+    <div v-if="lockedMaxHours == null" class="flex flex-wrap justify-end gap-1 mb-2">
       <button
         v-for="opt in timeRangeOptions"
         :key="opt.hours"

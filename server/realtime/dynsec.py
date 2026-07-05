@@ -235,6 +235,20 @@ def _staff_role_acls() -> list[dict]:
     ]
 
 
+def _read_all_scanners_role_acls() -> list[dict]:
+    """ACLs for the global read-only role used by legacy demo share links.
+
+    Subscribe/receive every scanner (so the live scan stream reaches the demo
+    viewer) but no command publish — the broker mirror of the REST "unrestricted
+    read" a legacy ShareLink session gets. Scoped Access shares use the
+    per-scanner read role instead.
+    """
+    return [
+        {'acltype': 'subscribePattern', 'topic': 'spectrum/scanners/#', 'allow': True},
+        {'acltype': 'publishClientReceive', 'topic': 'spectrum/scanners/#', 'allow': True},
+    ]
+
+
 def scanner_device_role_acls(scanner_id: str) -> list[dict]:
     """ACLs for a scanner device role."""
     return [
@@ -266,13 +280,14 @@ def scanner_rw_role_acls(scanner_id: str) -> list[dict]:
 # ── Provisioning helpers ──
 
 # Role name prefixes managed by dynsec sync (used for diffing)
-MANAGED_PREFIXES = ('scanner-', 'staff-all-scanners', 'bridge-service')
+MANAGED_PREFIXES = ('scanner-', 'staff-all-scanners', 'read-all-scanners', 'bridge-service')
 
 
 def ensure_static_roles(dynsec: DynSecClient):
-    """Create static roles (bridge-service, staff-all-scanners)."""
+    """Create static roles (bridge-service, staff-all-scanners, read-all-scanners)."""
     dynsec.create_role('bridge-service', _bridge_role_acls())
     dynsec.create_role('staff-all-scanners', _staff_role_acls())
+    dynsec.create_role('read-all-scanners', _read_all_scanners_role_acls())
 
 
 def ensure_bridge_client(dynsec: DynSecClient):
@@ -332,13 +347,16 @@ def _resolve_scanner_ids(grant) -> set[str]:
     return set()
 
 
-def sync_user_roles(user, dynsec: DynSecClient, access_id: str | None = None):
+def sync_user_roles(user, dynsec: DynSecClient, access_id: str | None = None,
+                    global_read: bool = False):
     """Synchronise a user's dynsec roles with their Django Access grants.
 
     Args:
         user: Django User instance.
         dynsec: DynSecClient instance.
         access_id: Optional Access grant UUID (for share-link / token-based sessions).
+        global_read: Grant the global read-only role (legacy ShareLink demo
+            session, which has unrestricted REST read and no access_id).
     """
     from core.models import UserMQTTCredentials
 
@@ -361,25 +379,7 @@ def sync_user_roles(user, dynsec: DynSecClient, access_id: str | None = None):
     client_data = dynsec.get_client(mqtt_username)
     current_roles = {r['rolename'] for r in client_data.get('roles', [])}
 
-    # Calculate desired roles
-    if user.is_staff:
-        desired_roles = {'staff-all-scanners'}
-    else:
-        desired_roles = set()
-
-        # User-linked Access grants
-        for grant in get_active_grants(user):
-            _add_grant_roles(grant, desired_roles)
-
-        # Token-linked Access grant (share-link session)
-        if access_id:
-            from core.models import Access
-            try:
-                grant = Access.objects.get(pk=access_id, is_active=True)
-                if grant.is_valid():
-                    _add_grant_roles(grant, desired_roles)
-            except Access.DoesNotExist:
-                pass
+    desired_roles = compute_desired_roles(user, access_id=access_id, global_read=global_read)
 
     # Only touch managed roles when diffing
     managed_current = {r for r in current_roles if any(r.startswith(p) for p in MANAGED_PREFIXES)}
@@ -391,6 +391,38 @@ def sync_user_roles(user, dynsec: DynSecClient, access_id: str | None = None):
         dynsec.add_client_role(mqtt_username, r)
     for r in to_remove:
         dynsec.remove_client_role(mqtt_username, r)
+
+
+def compute_desired_roles(user, access_id: str | None = None,
+                          global_read: bool = False) -> set:
+    """The dynsec roles a principal should hold — the broker-side mirror of the
+    REST scope in ``api.permissions.get_request_scanner_ids``.
+
+    - staff -> all scanners (with command publish)
+    - legacy ShareLink global demo (readonly, no access_id) -> global read-only
+    - otherwise -> the user's active grants, plus the share session's access_id
+      grant if present (scoped per-scanner read/rw)
+    """
+    if user.is_staff:
+        return {'staff-all-scanners'}
+    if global_read:
+        # Legacy ShareLink global demo: unrestricted read, no command publish.
+        return {'read-all-scanners'}
+
+    desired_roles = set()
+    for grant in get_active_grants(user):
+        _add_grant_roles(grant, desired_roles)
+
+    if access_id:
+        from core.models import Access
+        try:
+            grant = Access.objects.get(pk=access_id, is_active=True)
+            if grant.is_valid():
+                _add_grant_roles(grant, desired_roles)
+        except Access.DoesNotExist:
+            pass
+
+    return desired_roles
 
 
 def _add_grant_roles(grant, desired_roles: set):

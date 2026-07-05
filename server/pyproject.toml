@@ -15,4 +15,5 @@ dependencies = [
     "gunicorn>=21.0",
     "numpy>=2.0",
     "apscheduler>=3.10,<4",
+    "django-redis>=5.4",
 ]

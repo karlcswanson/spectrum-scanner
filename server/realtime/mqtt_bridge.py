@@ -17,6 +17,8 @@ import paho.mqtt.client as mqtt
 from django.conf import settings
 from django.utils import timezone
 
+from core.decimation import decimate_power
+
 logger = logging.getLogger(__name__)
 
 
@@ -235,8 +237,12 @@ class MQTTBridge:
         """Publish a timeline update notification to MQTT.
 
         This tells the frontend that a new scan was stored in the database,
-        so the time scrubber can add a new marker without polling.
-        Includes full scan data so frontend can add to cache without API call.
+        so the time scrubber can add a new marker without polling. It carries a
+        decimated copy of the scan for the scrubber's preview cache — the live
+        full-resolution view comes from the scan topic, and selecting a point
+        re-fetches full res via the API, so preview resolution is enough here.
+        Decimating this duplicate is the biggest single MQTT egress win (it's
+        broadcast to every browser on every scan).
         """
         try:
             timeline_topic = f"{self.topic_prefix}/scanners/{scanner_id}/timeline"
@@ -244,12 +250,13 @@ class MQTTBridge:
                 'id': scan.id,
                 'timestamp': scan.timestamp.isoformat(),
                 'band__name': band_name,
-                # Include full scan data for caching
+                # Decimated scan data for the scrubber preview cache (not the
+                # live view). See core.decimation / the decimation policy.
                 'scan': {
                     'hz_lo': scan.hz_lo,
                     'hz_hi': scan.hz_hi,
                     'step_hz': scan.step_hz,
-                    'power': scan.power,
+                    'power': decimate_power(scan.power),
                 }
             }
             self.client.publish(

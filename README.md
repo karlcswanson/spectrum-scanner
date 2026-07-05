@@ -134,10 +134,16 @@ docker compose -f docker-compose.prod.yml up -d --build
 
 | Band | Frequency Range | Use Case           |
 |------|-----------------|--------------------|
-| UHF | 470 - 608 MHz | Wireless mics, IEMs |
+| VHF | 174 - 216 MHz | Wireless mics, IEMs (VHF high) |
 | Business Radio | 450 - 470 MHz | Two-way radios     |
+| UHF | 470 - 636 MHz | Wireless mics, IEMs |
+| 900 MHz ISM | 902 - 928 MHz | Unlicensed mic gear |
+| STL | 944 - 960 MHz | Studio-transmitter link |
 | DECT | 1920 - 1930 MHz | Intercom           |
 | WiFi 2.4 | 2400 - 2500 MHz | WiFi, Intercom     |
+
+Bands are defined once in `spectrum-ios/SpectrumScanner/Models/Models.swift`
+(`Band.defaultBands`); keep the scanner/server defaults in sync with that list.
 
 ## License
 
