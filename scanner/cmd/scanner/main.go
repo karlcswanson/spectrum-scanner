@@ -106,6 +106,14 @@ func main() {
 		server.WSHub().BroadcastConfig(cfg)
 	})
 
+	// Persist remote band edits (over MQTT) back to the config file so they
+	// survive a restart.
+	if configPath != "" {
+		r.Engine.SetConfigSaveFunc(func() error {
+			return config.SaveToFile(configPath, cfg)
+		})
+	}
+
 	log.Printf("Starting HTTP server on %s", configOpts.ListenAddr)
 	log.Printf("API endpoints:")
 	log.Printf("  GET  /api/status     - Scanner status")

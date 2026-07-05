@@ -141,9 +141,14 @@ docker compose -f docker-compose.prod.yml up -d --build
 | STL | 944 - 960 MHz | Studio-transmitter link |
 | DECT | 1920 - 1930 MHz | Intercom           |
 | WiFi 2.4 | 2400 - 2500 MHz | WiFi, Intercom     |
+| CBRS | 3550 - 3700 MHz | Private LTE / 5G (venues) |
+| WiFi 5 | 5150 - 5850 MHz | WiFi (UNII-1..4)   |
 
-Bands are defined once in `spectrum-ios/SpectrumScanner/Models/Models.swift`
-(`Band.defaultBands`); keep the scanner/server defaults in sync with that list.
+Only **UHF** is enabled by default. The canonical list lives in
+[`common/bands.json`](common/bands.json) (mirroring iOS
+`SpectrumScanner/Models/Models.swift` `Band.defaultBands`); keep
+`config.yaml.example`, the scanner's `config.go` defaults, the calibrate tool,
+and `frontend/src/constants.js` `DEFAULT_BANDS` in sync with it.
 
 ## License
 

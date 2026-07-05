@@ -13,39 +13,55 @@ mode: Average  # Average or PeakDetect
 rx_gain: 30           # RX gain in dB (0-73)
 rx_gain_mode: Manual  # manual, slow_attack, or fast_attack
 
-# Frequency bands to scan
-# Each band can be enabled/disabled independently
+# Frequency bands to scan. Each band can be enabled/disabled independently.
+# This is the default set from common/bands.json (the source of truth, mirroring
+# iOS Band.defaultBands). UHF is enabled by default — the primary wireless-mic
+# band; enable others as needed for your event.
 bands:
+  - name: VHF
+    start_mhz: 174
+    stop_mhz: 216
+    enabled: false
+
   - name: Business Radio
     start_mhz: 450
     stop_mhz: 470
-    enabled: true
+    enabled: false
 
   - name: UHF
     start_mhz: 470
-    stop_mhz: 608
+    stop_mhz: 636
     enabled: true
+
+  - name: 900 MHz ISM
+    start_mhz: 902
+    stop_mhz: 928
+    enabled: false
+
+  - name: STL
+    start_mhz: 944
+    stop_mhz: 960
+    enabled: false
 
   - name: DECT
     start_mhz: 1920
     stop_mhz: 1930
-    enabled: true
+    enabled: false
 
   - name: WiFi 2.4
     start_mhz: 2400
     stop_mhz: 2500
-    enabled: true
+    enabled: false
+
+  - name: CBRS
+    start_mhz: 3550
+    stop_mhz: 3700
+    enabled: false
 
   - name: WiFi 5
     start_mhz: 5150
     stop_mhz: 5850
     enabled: false
-
-# Add custom bands as needed:
-#  - name: ISM 900
-#    start_mhz: 902
-#    stop_mhz: 928
-#    enabled: false
 
 # MQTT publishing (optional)
 # Configure to publish scan data to a central server

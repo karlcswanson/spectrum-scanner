@@ -5,6 +5,7 @@ import { useScannersStore } from '../stores/scanners'
 import { useAuthStore } from '../stores/auth'
 import { SCRUBBER_HOURS } from '../constants'
 import BandChart from '../components/BandChart.vue'
+import BandEditor from '../components/BandEditor.vue'
 
 const route = useRoute()
 const store = useScannersStore()
@@ -62,14 +63,6 @@ function stopScanning() {
   store.sendStopCommand(scannerId.value)
 }
 
-function toggleBand(bandName) {
-  const bands = allBands.value.map(b => ({
-    ...b,
-    enabled: b.name === bandName ? !b.enabled : b.enabled,
-  }))
-  store.sendBandsCommand(scannerId.value, bands)
-}
-
 function applyGain() {
   store.sendGainCommand(scannerId.value, gainValue.value, gainMode.value)
 }
@@ -93,6 +86,10 @@ watch(scannerId, (newId, oldId) => {
     store.subscribe(newId)
     subscribedId = newId
     store.fetchMonitoredFrequencies(newId)
+    // Load scanner metadata (incl. user_permission, which gates write controls
+    // like the band editor) so a direct load / refresh of this page works —
+    // don't rely on the Dashboard having fetched it first.
+    store.fetchScanners()
   }
 }, { immediate: true })
 
@@ -238,32 +235,13 @@ onUnmounted(() => {
                   </button>
                 </div>
               </div>
+
+              <!-- Band editor (inside the settings dropdown) -->
+              <div class="col-span-full border-t border-gray-700 pt-3 mt-1">
+                <BandEditor :scanner-id="scannerId" :bands="allBands" :online="scanner?.online" />
+              </div>
             </template>
           </div>
-        </div>
-      </div>
-
-      <!-- Band Selection (hidden for readonly users) -->
-      <div v-if="canWrite && allBands.length > 0" class="bg-gray-800 rounded-lg p-3 sm:p-6">
-        <h3 class="text-lg font-semibold text-cyan-400 mb-3">Bands</h3>
-        <div class="flex flex-wrap gap-3">
-          <label
-            v-for="band in allBands"
-            :key="band.name"
-            class="flex items-center gap-2 px-3 py-2 rounded cursor-pointer transition-colors"
-            :class="band.enabled ? 'bg-cyan-900/50 border border-cyan-500' : 'bg-gray-700 hover:bg-gray-600'"
-          >
-            <input
-              type="checkbox"
-              :checked="band.enabled"
-              @change="toggleBand(band.name)"
-              class="w-4 h-4 accent-cyan-400"
-            />
-            <span class="font-medium">{{ band.name }}</span>
-            <span class="text-gray-400 text-sm">
-              ({{ (band.start_hz / 1e6).toFixed(0) }}-{{ (band.stop_hz / 1e6).toFixed(0) }} MHz)
-            </span>
-          </label>
         </div>
       </div>
 
