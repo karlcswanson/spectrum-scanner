@@ -108,6 +108,16 @@ if 'postgresql' in _db_engine and not DEBUG:
     DATABASES['default']['CONN_MAX_AGE'] = int(os.getenv('CONN_MAX_AGE', '60'))
     DATABASES['default']['CONN_HEALTH_CHECKS'] = True
 
+# Safety net: cap how long any single query may run so a pathological one can't
+# peg Postgres and hang the whole box (dev + prod). Normal queries finish in
+# milliseconds; the rollup's largest batch is well under this. A timed-out
+# query just errors that one request/cycle. Tune via env if needed.
+if 'postgresql' in _db_engine:
+    DATABASES['default'].setdefault('OPTIONS', {})
+    DATABASES['default']['OPTIONS']['options'] = (
+        f"-c statement_timeout={os.getenv('DB_STATEMENT_TIMEOUT_MS', '30000')}"
+    )
+
 # Cache — Redis (dev + prod) backs the read-API response cache and the
 # single-flight locks that collapse a stampede of identical /history requests
 # into one DB query. Falls back to per-process local memory when REDIS_URL is

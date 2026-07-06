@@ -206,36 +206,80 @@ def compute_history(scanner_id, band_name, start_time, end_time, limit, decimate
     )
 
 
+# Timeline bounding. The scrubber is an overview — a screen only shows ~2000
+# markers regardless of span — so a wide window is bucketed to a coarse time
+# grain instead of returning every row (an unbounded return here could load
+# 100k+ rows and lock up the box). Short windows (incl. the read-only 10-min
+# view) stay per-scan for full resolution; drilling in via at_time always
+# returns the full-res stored scan.
+TIMELINE_MAX_POINTS = 2000
+TIMELINE_NO_BUCKET_SECONDS = 3600   # <= 1h: per-scan, no bucketing
+TIMELINE_HARD_ROW_CAP = 5000        # backstop for the per-scan path
+
+
+def _timeline_grain(start_time, end_time):
+    """``None`` (per-scan) for short windows, else a ``Trunc`` grain that keeps
+    the bucket count near ``TIMELINE_MAX_POINTS``. Trunc is DB-agnostic."""
+    span = (end_time - start_time).total_seconds()
+    if span <= TIMELINE_NO_BUCKET_SECONDS:
+        return None
+    if span <= TIMELINE_MAX_POINTS * 60:       # <= ~33h -> per-minute
+        return 'minute'
+    if span <= TIMELINE_MAX_POINTS * 3600:     # <= ~83d -> per-hour
+        return 'hour'
+    return 'day'
+
+
 def compute_timeline(scanner_id, band_name, start_time, end_time):
     """Scan + summary timestamps in the window (no power data), for the
-    scrubber. Returns a time-sorted list of lightweight entries."""
+    scrubber. Bounded (see ``_timeline_grain``). Returns a time-sorted list of
+    lightweight entries: ``{id, timestamp, band__name, source}``."""
     from core.models import Scan, ScanSummary
+    from django.db.models import Min
+    from django.db.models.functions import Trunc
 
     scan_qs = Scan.objects.filter(
-        scanner_id=scanner_id,
-        timestamp__gte=start_time,
-        timestamp__lte=end_time,
-    ).order_by('timestamp')
+        scanner_id=scanner_id, timestamp__gte=start_time, timestamp__lte=end_time,
+    )
+    summary_qs = ScanSummary.objects.filter(
+        scanner_id=scanner_id, bucket_start__gte=start_time, bucket_start__lte=end_time,
+    )
     if band_name:
         scan_qs = scan_qs.filter(band__name=band_name)
-
-    scan_entries = [
-        {**s, 'source': 'raw'}
-        for s in scan_qs.values('id', 'timestamp', 'band__name')
-    ]
-
-    summary_qs = ScanSummary.objects.filter(
-        scanner_id=scanner_id,
-        bucket_start__gte=start_time,
-        bucket_start__lte=end_time,
-    ).order_by('bucket_start')
-    if band_name:
         summary_qs = summary_qs.filter(band__name=band_name)
 
-    summary_entries = [
-        {'id': s['id'], 'timestamp': s['bucket_start'], 'band__name': s['band__name'], 'source': 'summary'}
-        for s in summary_qs.values('id', 'bucket_start', 'band__name')
-    ]
+    grain = _timeline_grain(start_time, end_time)
+
+    if grain is None:
+        # Short window: per-scan, hard-capped as a backstop.
+        scan_entries = [
+            {**s, 'source': 'raw'}
+            for s in scan_qs.order_by('timestamp')
+            .values('id', 'timestamp', 'band__name')[:TIMELINE_HARD_ROW_CAP]
+        ]
+        summary_entries = [
+            {'id': s['id'], 'timestamp': s['bucket_start'], 'band__name': s['band__name'], 'source': 'summary'}
+            for s in summary_qs.order_by('bucket_start')
+            .values('id', 'bucket_start', 'band__name')[:TIMELINE_HARD_ROW_CAP]
+        ]
+    else:
+        # Wide window: one representative marker per (bucket, band) — bounded.
+        scan_entries = [
+            {'id': s['rep_id'], 'timestamp': s['bucket'], 'band__name': s['band__name'], 'source': 'raw'}
+            for s in scan_qs
+            .annotate(bucket=Trunc('timestamp', grain))
+            .values('bucket', 'band__name')
+            .annotate(rep_id=Min('id'))
+            .order_by('bucket')
+        ]
+        summary_entries = [
+            {'id': s['rep_id'], 'timestamp': s['bucket'], 'band__name': s['band__name'], 'source': 'summary'}
+            for s in summary_qs
+            .annotate(bucket=Trunc('bucket_start', grain))
+            .values('bucket', 'band__name')
+            .annotate(rep_id=Min('id'))
+            .order_by('bucket')
+        ]
 
     all_entries = scan_entries + summary_entries
     all_entries.sort(key=lambda x: x['timestamp'])

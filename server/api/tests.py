@@ -14,7 +14,7 @@ from django.utils import timezone
 from core.models import Access, Band, Scan, Scanner
 from api.cache import (
     bucket_epoch, cached_or_compute, history_cache_key, register_warm,
-    warm_spec, WARM_PREFIX, _warm_sig,
+    warm_spec, WARM_PREFIX, _warm_sig, compute_timeline, _timeline_grain,
 )
 from api.permissions import (
     HasScannerAccess, ReadOnlyIfShareSession, get_request_scanner_ids,
@@ -297,6 +297,52 @@ class ReadOnlyHistoryCapTest(TestCase):
         old = (timezone.now() - timedelta(minutes=30)).isoformat()
         r = client.get(f"/api/scans/at_time/?scanner={self.scanner.id}&time={old}")
         self.assertEqual(r.status_code, 404)
+
+
+class TimelineBoundingTest(TestCase):
+    """Wide scrubber windows are bucketed so the timeline can't return 100k+
+    rows (which locked up the server); short windows stay per-scan."""
+
+    def setUp(self):
+        self.scanner = Scanner.objects.create(name="TL")
+        self.band = Band.objects.create(
+            scanner=self.scanner, name="UHF",
+            start_hz=470_000_000, stop_hz=473_000_000,
+        )
+
+    def _scan(self, ts):
+        Scan.objects.create(
+            scanner=self.scanner, band=self.band, timestamp=ts,
+            hz_lo=470_000_000, hz_hi=473_000_000, step_hz=1_000_000.0,
+            power=[1.0], metadata={},
+        )
+
+    def test_grain_selection(self):
+        now = timezone.now()
+        self.assertIsNone(_timeline_grain(now - timedelta(minutes=30), now))
+        self.assertEqual(_timeline_grain(now - timedelta(hours=24), now), 'minute')
+        self.assertEqual(_timeline_grain(now - timedelta(days=30), now), 'hour')
+        self.assertEqual(_timeline_grain(now - timedelta(days=200), now), 'day')
+
+    def test_wide_window_collapses_dense_scans(self):
+        now = timezone.now()
+        base = (now - timedelta(hours=2)).replace(second=0, microsecond=0)  # 2h -> minute grain
+        for i in range(12):  # 12 scans, 5s apart, all within one minute
+            self._scan(base + timedelta(seconds=i * 5))
+        entries = compute_timeline(self.scanner.id, "UHF", base - timedelta(seconds=1), now)
+        self.assertEqual(len(entries), 1)  # collapsed to a single bucket marker
+        self.assertEqual(entries[0]['band__name'], "UHF")
+        self.assertIn('id', entries[0])
+
+    def test_short_window_is_per_scan(self):
+        now = timezone.now()
+        base = now - timedelta(minutes=10)  # <= 1h -> per-scan
+        for i in range(20):
+            self._scan(base + timedelta(seconds=i * 30))
+        entries = compute_timeline(self.scanner.id, "UHF", base - timedelta(seconds=1), now)
+        self.assertEqual(len(entries), 20)  # every scan
+        ts = [e['timestamp'] for e in entries]
+        self.assertEqual(ts, sorted(ts))
 
 
 class WarmRegistryTest(SimpleTestCase):

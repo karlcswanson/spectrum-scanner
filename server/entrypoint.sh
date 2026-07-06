@@ -17,6 +17,7 @@ exec uv run gunicorn \
     --bind 0.0.0.0:8000 \
     --workers ${GUNICORN_WORKERS:-4} \
     --threads ${GUNICORN_THREADS:-4} \
+    --timeout ${GUNICORN_TIMEOUT:-60} \
     --max-requests 500 \
     --max-requests-jitter 50 \
     config.wsgi:application

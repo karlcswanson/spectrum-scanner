@@ -80,6 +80,10 @@ services:
       context: .
       dockerfile: Dockerfile.prod
     restart: unless-stopped
+    # Cap memory so a runaway request OOM-kills + restarts THIS container in
+    # seconds instead of swap-thrashing the whole VM. Tune to your instance
+    # (default assumes a few GB free for the API).
+    mem_limit: ${SERVER_MEM_LIMIT:-2g}
     environment:
       - DEBUG=${DEBUG:-false}
       - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY:?Set DJANGO_SECRET_KEY in .env}
@@ -117,6 +121,7 @@ services:
       context: .
       dockerfile: Dockerfile.prod
     restart: unless-stopped
+    mem_limit: ${BRIDGE_MEM_LIMIT:-1g}
     environment:
       - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY:?Set DJANGO_SECRET_KEY in .env}
       - MQTT_BROKER_HOST=mosquitto
@@ -143,6 +148,7 @@ services:
       context: .
       dockerfile: Dockerfile.prod
     restart: unless-stopped
+    mem_limit: ${SCHEDULER_MEM_LIMIT:-1g}
     environment:
       - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY:?Set DJANGO_SECRET_KEY in .env}
       - DB_ENGINE=django.db.backends.postgresql
