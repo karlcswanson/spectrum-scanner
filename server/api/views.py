@@ -26,7 +26,7 @@ from .permissions import (
     get_request_scanner_ids, get_request_max_history_seconds,
 )
 from .cache import (
-    cached_or_compute, bucket_epoch, register_warm,
+    cached_or_compute, bucket_epoch, register_warm, apply_browser_cache,
     resolve_hours_window, resolve_range_window, resolve_capped_window,
     history_cache_key, timeline_cache_key,
     compute_history, compute_timeline,
@@ -240,6 +240,7 @@ class ScannerViewSet(viewsets.ModelViewSet):
         )
         response = Response(data)
         response['X-Cache'] = 'HIT' if hit else 'MISS'
+        apply_browser_cache(response, HISTORY_CACHE_TTL)
         return response
 
     @action(detail=True, methods=['get'])
@@ -296,6 +297,7 @@ class ScannerViewSet(viewsets.ModelViewSet):
         )
         response = Response(data)
         response['X-Cache'] = 'HIT' if hit else 'MISS'
+        apply_browser_cache(response, TIMELINE_CACHE_TTL)
         return response
 
 
@@ -487,6 +489,7 @@ class ScanViewSet(viewsets.ModelViewSet):
         else:
             response = Response(data)
         response['X-Cache'] = 'HIT' if hit else 'MISS'
+        apply_browser_cache(response, AT_TIME_CACHE_TTL)
         return response
 
 

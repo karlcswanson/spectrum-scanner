@@ -23,6 +23,7 @@ from datetime import timedelta
 
 from django.core.cache import cache
 from django.utils import timezone
+from django.utils.cache import patch_cache_control, patch_vary_headers
 
 logger = logging.getLogger(__name__)
 
@@ -86,6 +87,21 @@ def cached_or_compute(key, ttl, compute, *, lock_timeout=20, blocking_timeout=10
         data = compute()
         cache.set(key, data, ttl)
         return data, False
+
+
+def apply_browser_cache(response, ttl):
+    """Let the browser reuse this response for ``ttl`` seconds so repeat requests
+    (re-renders, refreshes, extra tabs) don't hit the server at all.
+
+    ``private`` + ``Vary: Cookie`` because these endpoints vary by session — the
+    read-only share window and scanner scope differ per viewer, so a shared/CDN
+    cache must never serve one session's scoped data to another. (Edge caching
+    for the full 200-viewer fan-out would need a session-aware key + CloudFront;
+    that's deliberately out of this simple, safe policy.)
+    """
+    patch_cache_control(response, private=True, max_age=ttl)
+    patch_vary_headers(response, ['Cookie'])
+    return response
 
 
 def bucket_epoch(dt, seconds=10):
