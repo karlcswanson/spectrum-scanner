@@ -1,6 +1,7 @@
 """API views for Spectrum Server."""
 
 import logging
+import os
 from datetime import timedelta
 from django.utils import timezone
 from rest_framework import viewsets, status
@@ -526,6 +527,17 @@ def mqtt_credentials(request):
     return Response({
         'username': str(creds.mqtt_id),
         'password': creds.auth_token,
+    })
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def api_version(request):
+    """Build metadata (git commit/ref), baked into the image at build time so a
+    running server reports exactly what's deployed."""
+    return Response({
+        'commit': os.getenv('GIT_SHA', 'unknown'),
+        'ref': os.getenv('GIT_REF', 'unknown'),
     })
 
 

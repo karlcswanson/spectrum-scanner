@@ -8,6 +8,11 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 ENV UV_PROJECT_ENVIRONMENT=/usr/local
 
+# Build metadata (passed by CI via --build-arg), exposed to /api/version.
+ARG GIT_SHA=unknown
+ARG GIT_REF=unknown
+ENV GIT_SHA=$GIT_SHA GIT_REF=$GIT_REF
+
 WORKDIR /app
 
 # Install dependencies

@@ -76,9 +76,15 @@ services:
 
   # Django Backend (REST API + MQTT auth)
   server:
+    # Pull-based deploys: `docker compose pull && up -d`. `build:` still works
+    # for local builds (tags the same name). SERVER_TAG picks the image tag.
+    image: ghcr.io/karlcswanson/spectrum-server:${SERVER_TAG:-latest}
     build:
       context: .
       dockerfile: Dockerfile.prod
+      args:
+        GIT_SHA: ${GIT_SHA:-}
+        GIT_REF: ${GIT_REF:-}
     restart: unless-stopped
     # Cap memory so a runaway request OOM-kills + restarts THIS container in
     # seconds instead of swap-thrashing the whole VM. Tune to your instance
@@ -117,6 +123,7 @@ services:
 
   # MQTT Bridge (stores scans to database)
   mqtt-bridge:
+    image: ghcr.io/karlcswanson/spectrum-server:${SERVER_TAG:-latest}
     build:
       context: .
       dockerfile: Dockerfile.prod
@@ -144,6 +151,7 @@ services:
 
   # Scheduler (per-scanner rollup + periodic dynsec sync via APScheduler)
   scheduler:
+    image: ghcr.io/karlcswanson/spectrum-server:${SERVER_TAG:-latest}
     build:
       context: .
       dockerfile: Dockerfile.prod
@@ -172,6 +180,7 @@ services:
 
   # Frontend build (runs once, copies static files to volume)
   frontend:
+    image: ghcr.io/karlcswanson/spectrum-frontend:${FRONTEND_TAG:-latest}
     build:
       context: ../frontend
       dockerfile: Dockerfile

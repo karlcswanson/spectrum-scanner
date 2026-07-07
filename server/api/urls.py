@@ -6,7 +6,7 @@ from rest_framework.routers import DefaultRouter
 from .views import (
     ScannerViewSet, BandViewSet, ScanViewSet, ScannerGroupViewSet,
     MonitoredFrequencyViewSet,
-    mqtt_credentials,
+    mqtt_credentials, api_version,
     auth_user, auth_login, auth_logout,
     share_token_auth, generate_share_link,
     list_access, create_access, revoke_access,
@@ -21,6 +21,8 @@ router.register(r'monitored-frequencies', MonitoredFrequencyViewSet)
 
 urlpatterns = [
     path('', include(router.urls)),
+    # Build metadata (git commit/ref baked into the image)
+    path('version/', api_version, name='api-version'),
     # Frontend fetches MQTT credentials (provisions dynsec client lazily)
     path('mqtt/credentials/', mqtt_credentials, name='mqtt-credentials'),
     # User authentication

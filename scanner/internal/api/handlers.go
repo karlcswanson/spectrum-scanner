@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"scanner/internal/models"
+	"scanner/internal/version"
 )
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -36,6 +37,13 @@ func (s *Server) handleGetRadio(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(info)
+}
+
+func (s *Server) handleGetVersion(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(version.Get()); err != nil {
+		log.Printf("Error encoding version: %v", err)
+	}
 }
 
 func (s *Server) handleGetStatus(w http.ResponseWriter, r *http.Request) {
