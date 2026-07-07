@@ -50,6 +50,52 @@ def get_accessible_group_ids(user):
     )
 
 
+def get_rw_scanner_ids(user):
+    """Scanner IDs a non-staff user has read/write on (direct grant or via a
+    group grant)."""
+    grants = get_active_grants(user).filter(permission='rw')
+    scanner_ids = set(
+        grants.filter(scanner__isnull=False).values_list('scanner_id', flat=True)
+    )
+    group_ids = list(
+        grants.filter(scanner_group__isnull=False).values_list('scanner_group_id', flat=True)
+    )
+    if group_ids:
+        scanner_ids.update(
+            Scanner.objects.filter(scanner_groups__id__in=group_ids).values_list('id', flat=True)
+        )
+    return scanner_ids
+
+
+def can_write_monitored_frequency(request, freq):
+    """Whether the request may edit/delete a monitored frequency.
+
+    Mirrors the scanner write model: staff -> any; otherwise the user needs rw
+    on a scanner (or group) the frequency is scoped to. Global frequencies (no
+    scanner/group scope) are staff-only, since they apply to everything.
+    """
+    user = request.user
+    if getattr(user, 'is_staff', False):
+        return True
+
+    scanner_ids = set(freq.scanners.values_list('id', flat=True))
+    group_ids = set(freq.groups.values_list('id', flat=True))
+    if not scanner_ids and not group_ids:
+        return False  # global -> staff only
+
+    if scanner_ids & get_rw_scanner_ids(user):
+        return True
+    if group_ids:
+        rw_group_ids = set(
+            get_active_grants(user)
+            .filter(permission='rw', scanner_group__isnull=False)
+            .values_list('scanner_group_id', flat=True)
+        )
+        if group_ids & rw_group_ids:
+            return True
+    return False
+
+
 def _grant_scanner_ids(grant):
     """Scanner IDs covered by a single Access grant (direct or via its group)."""
     ids = set()
@@ -184,3 +230,14 @@ class IsStaffOrReadOnly(BasePermission):
         if request.method in SAFE_METHODS:
             return True
         return request.user.is_staff
+
+
+class CanWriteMonitoredFrequency(BasePermission):
+    """Object-level write permission for monitored frequencies (create is scope-
+    checked in the view). Reads pass; writes need write access to the freq's
+    scope (see ``can_write_monitored_frequency``)."""
+
+    def has_object_permission(self, request, view, obj):
+        if request.method in SAFE_METHODS:
+            return True
+        return can_write_monitored_frequency(request, obj)

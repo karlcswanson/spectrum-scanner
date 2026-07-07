@@ -141,6 +141,10 @@ class ScannerGroupDetailSerializer(ScannerGroupSerializer):
 
 class MonitoredFrequencySerializer(serializers.ModelSerializer):
     frequency_mhz = serializers.FloatField(read_only=True)
+    # Free-text category (predefined + custom). The model's `choices` are only
+    # admin suggestions; the API accepts any label so users can add their own
+    # (e.g. "Public Safety") without a migration.
+    category = serializers.CharField(max_length=50, required=False, allow_blank=True)
 
     class Meta:
         model = MonitoredFrequency

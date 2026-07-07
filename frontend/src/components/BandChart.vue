@@ -7,6 +7,7 @@ import D3SpectrumChart from './D3SpectrumChart.vue'
 import SpectrogramChart from './SpectrogramChart.vue'
 import TimeScrubber from './TimeScrubber.vue'
 import FrequencyTimePlot from './FrequencyTimePlot.vue'
+import MonitoredFrequencyEditor from './MonitoredFrequencyEditor.vue'
 
 const props = defineProps({
   scannerId: {
@@ -699,6 +700,13 @@ watch(() => props.band.name, async () => {
       @freq-pin="handleFreqPin"
       @zoom="handleSpectrogramZoom"
     />
+      <!-- Monitored-frequency editor (rw/staff only) -->
+      <MonitoredFrequencyEditor
+        v-if="canWrite"
+        :scanner-id="scannerId"
+        :band="band"
+        :frequencies="monitoredFrequencies"
+      />
     </div>
 
     <!-- Frequency time-series plot for pinned frequencies (requires waterfall open for data) -->

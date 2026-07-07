@@ -7,13 +7,14 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action, api_view, permission_classes, throttle_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import ValidationError, PermissionDenied
+from django.db.models import Q
 
 from .throttles import LoginRateThrottle, ShareAuthRateThrottle
 
 from django.contrib.auth import authenticate, login, logout
 
-from core.models import Scanner, Band, Scan, ScanSummary, UserMQTTCredentials, ScannerGroup, Access, get_monitored_frequencies_for_scanner
+from core.models import Scanner, Band, Scan, ScanSummary, UserMQTTCredentials, ScannerGroup, Access, MonitoredFrequency, get_monitored_frequencies_for_scanner
 from .serializers import (
     ScannerSerializer, BandSerializer, ScanSerializer, ScanCreateSerializer,
     ScanSummaryAsScanSerializer,
@@ -24,6 +25,7 @@ from .permissions import (
     ReadOnlyIfShareSession, HasScannerAccess, HasScannerGroupAccess,
     IsStaffOrReadOnly, get_accessible_group_ids,
     get_request_scanner_ids, get_request_max_history_seconds,
+    CanWriteMonitoredFrequency, get_rw_scanner_ids,
 )
 from .cache import (
     cached_or_compute, bucket_epoch, register_warm, apply_browser_cache,
@@ -647,6 +649,77 @@ class ScannerGroupViewSet(viewsets.ModelViewSet):
         scanners = Scanner.objects.filter(id__in=scanner_ids)
         group.scanners.remove(*scanners)
         return Response({'status': 'released', 'count': scanners.count()})
+
+
+# ============== Monitored Frequencies ==============
+
+
+class MonitoredFrequencyViewSet(viewsets.ModelViewSet):
+    """CRUD for monitored frequencies (mic channels, IEMs, etc.).
+
+    Read: resolved per scanner via ``?scanner=<id>`` (direct + group + global),
+    or all for staff. Write: staff, or rw on a scanner the frequency is scoped
+    to (global freqs are staff-only); share sessions are read-only. Creating
+    with ``scanner`` scopes the new frequency to that scanner.
+    """
+
+    queryset = MonitoredFrequency.objects.all()
+    serializer_class = MonitoredFrequencySerializer
+    permission_classes = [IsAuthenticated, ReadOnlyIfShareSession, CanWriteMonitoredFrequency]
+
+    def get_queryset(self):
+        user = self.request.user
+        scanner_id = self.request.query_params.get('scanner')
+
+        if scanner_id:
+            # Frequencies resolved for one scanner (direct + group + global).
+            try:
+                scanner = Scanner.objects.get(pk=scanner_id)
+            except Scanner.DoesNotExist:
+                return MonitoredFrequency.objects.none()
+            allowed = get_request_scanner_ids(self.request)
+            if allowed is not None and scanner.id not in allowed:
+                return MonitoredFrequency.objects.none()
+            return get_monitored_frequencies_for_scanner(scanner)
+
+        if user.is_staff:
+            return MonitoredFrequency.objects.all()
+
+        allowed = get_request_scanner_ids(self.request)
+        if allowed is None:
+            return MonitoredFrequency.objects.all()
+        # Global frequencies + those scoped to accessible scanners.
+        return MonitoredFrequency.objects.filter(
+            Q(scanners__id__in=allowed) |
+            Q(scanners__isnull=True, groups__isnull=True)
+        ).distinct()
+
+    def perform_create(self, serializer):
+        scanner_id = self.request.data.get('scanner')
+        if not scanner_id:
+            raise ValidationError('scanner is required to create a monitored frequency')
+        try:
+            scanner = Scanner.objects.get(pk=scanner_id)
+        except Scanner.DoesNotExist:
+            raise ValidationError('Scanner not found')
+        if not (self.request.user.is_staff or scanner.id in get_rw_scanner_ids(self.request.user)):
+            raise PermissionDenied('Requires read/write access to this scanner')
+        freq = serializer.save()
+        freq.scanners.add(scanner)
+
+    @action(detail=False, methods=['get'])
+    def categories(self, request):
+        """Category labels for the editor's combobox: the predefined defaults
+        plus any label already in use (so custom ones like 'Public Safety'
+        surface for reuse without being hard-coded)."""
+        predefined = [c[0] for c in MonitoredFrequency.CATEGORY_CHOICES]
+        in_use = (
+            MonitoredFrequency.objects.exclude(category='')
+            .order_by()  # clear the model's default ordering so distinct dedupes on category alone
+            .values_list('category', flat=True)
+            .distinct()
+        )
+        return Response(sorted(set(predefined) | set(in_use)))
 
 
 # ============== Access Management ==============

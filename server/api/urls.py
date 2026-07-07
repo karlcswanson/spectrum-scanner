@@ -5,6 +5,7 @@ from rest_framework.routers import DefaultRouter
 
 from .views import (
     ScannerViewSet, BandViewSet, ScanViewSet, ScannerGroupViewSet,
+    MonitoredFrequencyViewSet,
     mqtt_credentials,
     auth_user, auth_login, auth_logout,
     share_token_auth, generate_share_link,
@@ -16,6 +17,7 @@ router.register(r'scanners', ScannerViewSet)
 router.register(r'bands', BandViewSet)
 router.register(r'scans', ScanViewSet)
 router.register(r'groups', ScannerGroupViewSet)
+router.register(r'monitored-frequencies', MonitoredFrequencyViewSet)
 
 urlpatterns = [
     path('', include(router.urls)),

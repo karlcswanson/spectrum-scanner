@@ -4,6 +4,7 @@ These cover the security-review fixes: request-aware scanner scoping
 (F3), the ReadOnlyIfShareSession guarantee, and the F5 input clamps.
 """
 
+import json
 from datetime import timedelta
 
 from django.contrib.auth.models import User
@@ -11,7 +12,7 @@ from django.core.cache import cache
 from django.test import Client, RequestFactory, SimpleTestCase, TestCase
 from django.utils import timezone
 
-from core.models import Access, Band, Scan, Scanner
+from core.models import Access, Band, MonitoredFrequency, Scan, Scanner
 from api.cache import (
     bucket_epoch, cached_or_compute, history_cache_key, register_warm,
     warm_spec, WARM_PREFIX, _warm_sig, compute_timeline, _timeline_grain,
@@ -409,6 +410,96 @@ class WarmNoDriftTest(TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r["X-Cache"], "HIT")
         self.assertEqual(len(r.json()), 1)
+
+
+class MonitoredFrequencyCRUDTest(TestCase):
+    """CRUD + permissions for monitored frequencies (existing perm model)."""
+
+    def setUp(self):
+        self.s1 = Scanner.objects.create(name="S1")
+        self.s2 = Scanner.objects.create(name="S2")
+        self.staff = User.objects.create_user("mf-staff", is_staff=True)
+        self.rw = User.objects.create_user("mf-rw")
+        Access.objects.create(user=self.rw, scanner=self.s1, permission="rw")
+        self.ro = User.objects.create_user("mf-ro")
+        Access.objects.create(user=self.ro, scanner=self.s1, permission="r")
+
+    def _client(self, user):
+        c = Client()
+        c.force_login(user)
+        return c
+
+    def _post(self, client, scanner):
+        return client.post(
+            '/api/monitored-frequencies/',
+            data=json.dumps({'frequency_hz': 517000000, 'name': 'Vox 1', 'scanner': str(scanner.id)}),
+            content_type='application/json',
+        )
+
+    def _freq_on(self, scanner, name='F'):
+        f = MonitoredFrequency.objects.create(frequency_hz=517000000, name=name)
+        f.scanners.add(scanner)
+        return f
+
+    def test_rw_user_creates_scoped_freq(self):
+        r = self._post(self._client(self.rw), self.s1)
+        self.assertEqual(r.status_code, 201)
+        freq = MonitoredFrequency.objects.get(name='Vox 1')
+        self.assertIn(self.s1, list(freq.scanners.all()))
+
+    def test_readonly_grant_cannot_create(self):
+        self.assertEqual(self._post(self._client(self.ro), self.s1).status_code, 403)
+
+    def test_rw_cannot_create_for_other_scanner(self):
+        self.assertEqual(self._post(self._client(self.rw), self.s2).status_code, 403)
+
+    def test_rw_updates_own_freq(self):
+        freq = self._freq_on(self.s1)
+        r = self._client(self.rw).patch(
+            f'/api/monitored-frequencies/{freq.id}/',
+            data=json.dumps({'name': 'Vox 2'}), content_type='application/json',
+        )
+        self.assertEqual(r.status_code, 200)
+        freq.refresh_from_db()
+        self.assertEqual(freq.name, 'Vox 2')
+
+    def test_nonstaff_cannot_edit_global_freq(self):
+        gf = MonitoredFrequency.objects.create(frequency_hz=500000000, name='Global')  # no scope
+        r = self._client(self.rw).patch(
+            f'/api/monitored-frequencies/{gf.id}/',
+            data=json.dumps({'name': 'Hacked'}), content_type='application/json',
+        )
+        self.assertEqual(r.status_code, 403)
+
+    def test_staff_edits_global_freq(self):
+        gf = MonitoredFrequency.objects.create(frequency_hz=500000000, name='Global')
+        r = self._client(self.staff).patch(
+            f'/api/monitored-frequencies/{gf.id}/',
+            data=json.dumps({'name': 'Updated'}), content_type='application/json',
+        )
+        self.assertEqual(r.status_code, 200)
+
+    def test_share_session_cannot_write(self):
+        demo = User.objects.create_user("demo_viewer")
+        access = Access.objects.create(token="mf-share", scanner=self.s1, permission="r")
+        client = Client()
+        client.force_login(demo)
+        sess = client.session
+        sess['access_id'] = str(access.id)
+        sess['readonly'] = True
+        sess.save()
+        freq = self._freq_on(self.s1)
+        r = client.patch(
+            f'/api/monitored-frequencies/{freq.id}/',
+            data=json.dumps({'name': 'X'}), content_type='application/json',
+        )
+        self.assertEqual(r.status_code, 403)
+
+    def test_rw_deletes_own_freq(self):
+        freq = self._freq_on(self.s1)
+        r = self._client(self.rw).delete(f'/api/monitored-frequencies/{freq.id}/')
+        self.assertEqual(r.status_code, 204)
+        self.assertFalse(MonitoredFrequency.objects.filter(id=freq.id).exists())
 
 
 class ParseHelpersTest(SimpleTestCase):
