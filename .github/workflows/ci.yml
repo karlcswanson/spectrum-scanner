@@ -35,25 +35,10 @@ jobs:
 
   server:
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: spectrum
-          POSTGRES_PASSWORD: spectrum
-          POSTGRES_DB: spectrum
-        ports: ['5432:5432']
-        options: >-
-          --health-cmd "pg_isready -U spectrum"
-          --health-interval 5s --health-timeout 5s --health-retries 5
+    # Tests run on the SQLite default (all array data is JSONField, no
+    # Postgres-specific fields) — no DB service needed, faster and cheaper.
     env:
       DJANGO_SECRET_KEY: ci-secret
-      DB_ENGINE: django.db.backends.postgresql
-      DB_NAME: spectrum
-      DB_USER: spectrum
-      DB_PASSWORD: spectrum
-      DB_HOST: localhost
-      DB_PORT: '5432'
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
