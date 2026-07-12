@@ -252,13 +252,17 @@ export const useScannersStore = defineStore('scanners', () => {
 
   function handleConfig(scannerId, data) {
     logger.debug('handleConfig:', scannerId, 'bands:', data.bands)
+    const existing = scanners.value[scannerId] || {}
     scanners.value[scannerId] = {
-      ...scanners.value[scannerId],
+      ...existing,
       id: scannerId,
-      name: data.name || scannerId,
-      scanner_type: data.type || 'unknown',
-      location: data.location || '',
-      description: data.description || '',
+      scanner_type: data.type || existing.scanner_type || 'unknown',
+      // Identity (name/location/description) is owned by the server model and
+      // arrives via REST — the MQTT config message no longer carries it. Preserve
+      // what REST loaded; only fall back to the UUID for a never-before-seen unit.
+      name: existing.name || scannerId,
+      location: existing.location || '',
+      description: existing.description || '',
       bands: data.bands || [],
       settings: data.settings || {},
       online: true,

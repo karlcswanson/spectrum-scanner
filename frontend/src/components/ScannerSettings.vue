@@ -2,34 +2,21 @@
 import { ref, watch } from 'vue'
 
 const props = defineProps({
-  config: { type: Object, default: null },
   bands: { type: Array, default: () => [] },
   settings: { type: Object, default: () => ({ rx_gain: 40, rx_gain_mode: 'manual' }) },
 })
 
-const emit = defineEmits(['update:name', 'update:gain', 'toggle-band'])
+const emit = defineEmits(['update:gain', 'toggle-band'])
 
 // Local form state
-const scannerName = ref('')
 const gainValue = ref(40)
 const gainMode = ref('manual')
-
-// Sync scanner name from config
-watch(() => props.config, (config) => {
-  if (config) {
-    scannerName.value = config.name || ''
-  }
-}, { immediate: true })
 
 // Sync gain from settings
 watch(() => props.settings, (settings) => {
   gainValue.value = settings.rx_gain
   gainMode.value = settings.rx_gain_mode.toLowerCase()
 }, { immediate: true })
-
-function applyName() {
-  emit('update:name', scannerName.value)
-}
 
 function applyGain() {
   emit('update:gain', gainValue.value, gainMode.value)
@@ -41,27 +28,7 @@ function handleToggleBand(bandName) {
 </script>
 
 <template>
-  <div class="grid md:grid-cols-3 gap-6">
-    <!-- Scanner Name -->
-    <div>
-      <h4 class="text-sm font-medium text-gray-300 mb-3">Scanner Name</h4>
-      <div class="flex items-center gap-2">
-        <input
-          v-model="scannerName"
-          type="text"
-          placeholder="e.g. Studio A"
-          class="flex-1 px-3 py-1.5 bg-gray-900 border border-gray-600 rounded text-sm"
-        />
-        <button
-          @click="applyName"
-          class="px-3 py-1.5 bg-cyan-500 hover:bg-cyan-600 text-black text-sm font-medium rounded"
-        >
-          Apply
-        </button>
-      </div>
-      <p class="text-xs text-gray-500 mt-1">Identifies this scanner instance</p>
-    </div>
-
+  <div class="grid md:grid-cols-2 gap-6">
     <!-- Bands -->
     <div>
       <h4 class="text-sm font-medium text-gray-300 mb-3">Bands</h4>

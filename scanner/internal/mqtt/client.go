@@ -1,9 +1,12 @@
 package mqtt
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"strings"
 	"time"
 
@@ -67,13 +70,10 @@ type StatusMessage struct {
 
 // ConfigMessage is the MQTT message format for scanner configuration
 type ConfigMessage struct {
-	ID          string       `json:"id"`
-	Name        string       `json:"name"`
-	Type        string       `json:"type"`
-	Location    string       `json:"location,omitempty"`
-	Description string       `json:"description,omitempty"`
-	Bands       []BandConfig `json:"bands"`
-	Settings    Settings     `json:"settings"`
+	ID       string       `json:"id"`
+	Type     string       `json:"type"`
+	Bands    []BandConfig `json:"bands"`
+	Settings Settings     `json:"settings"`
 }
 
 // BandConfig represents a band in the config message
@@ -146,6 +146,18 @@ func NewClient(mqttConfig *models.MQTTConfig, scannerConfig *models.Config) (*Cl
 			}
 		})
 
+	// TLS transport for wss:// / ssl:// brokers (443/8883). Paho passes this
+	// config straight to the websocket/TLS dialer, which fills ServerName from
+	// the URL host; a valid public cert needs no config, so this is only non-nil
+	// when the scheme is TLS-based (and layers on ca_file / tls_insecure).
+	tlsCfg, err := brokerTLSConfig(mqttConfig)
+	if err != nil {
+		return nil, err
+	}
+	if tlsCfg != nil {
+		opts.SetTLSConfig(tlsCfg)
+	}
+
 	// Authenticate with scanner ID (UUID) and token
 	if mqttConfig.ID != "" && mqttConfig.Token != "" {
 		opts.SetUsername(mqttConfig.ID)
@@ -160,6 +172,44 @@ func NewClient(mqttConfig *models.MQTTConfig, scannerConfig *models.Config) (*Cl
 	c.client = pahomqtt.NewClient(opts)
 
 	return c, nil
+}
+
+// brokerUsesTLS reports whether the broker URL uses a TLS-based transport, i.e.
+// the connection must be TLS-terminated (wss/ssl/tls/mqtts/tcps).
+func brokerUsesTLS(broker string) bool {
+	for _, scheme := range []string{"wss://", "ssl://", "tls://", "mqtts://", "mqtt+ssl://", "tcps://"} {
+		if strings.HasPrefix(broker, scheme) {
+			return true
+		}
+	}
+	return false
+}
+
+// brokerTLSConfig returns the TLS config for a TLS-based broker scheme, or nil
+// for plain tcp:// / ws:// (where Paho ignores TLS settings). A valid public
+// cert (Let's Encrypt via Caddy) verifies against the system roots with no
+// config; CAFile trusts a private CA; TLSInsecure skips verification for a
+// self-signed broker on a trusted LAN (event appliance).
+func brokerTLSConfig(cfg *models.MQTTConfig) (*tls.Config, error) {
+	if !brokerUsesTLS(cfg.Broker) {
+		return nil, nil
+	}
+	tlsCfg := &tls.Config{MinVersion: tls.VersionTLS12}
+	if cfg.TLSInsecure {
+		tlsCfg.InsecureSkipVerify = true
+	}
+	if cfg.CAFile != "" {
+		pem, err := os.ReadFile(cfg.CAFile)
+		if err != nil {
+			return nil, fmt.Errorf("mqtt ca_file: %w", err)
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(pem) {
+			return nil, fmt.Errorf("mqtt ca_file %q: no PEM certificates found", cfg.CAFile)
+		}
+		tlsCfg.RootCAs = pool
+	}
+	return tlsCfg, nil
 }
 
 // Connect establishes the MQTT connection asynchronously.
@@ -274,19 +324,12 @@ func (c *Client) PublishConfig() {
 		}
 	}
 
-	// Always use scanner config name (single source of truth)
-	name := c.scannerConfig.Name
-	if name == "" {
-		name = c.scannerID
-	}
-
+	// Identity (name/location/description) is owned by the server's Scanner
+	// model; the scanner reports only its UUID and the server labels it.
 	msg := ConfigMessage{
-		ID:          c.scannerID,
-		Name:        name,
-		Type:        "pluto", // ADALM-Pluto scanner
-		Location:    c.config.Location,
-		Description: c.scannerConfig.Description,
-		Bands:       bands,
+		ID:    c.scannerID,
+		Type:  "pluto", // ADALM-Pluto scanner
+		Bands: bands,
 		Settings: Settings{
 			DwellTimeMs: c.scannerConfig.DwellTimeMs,
 			RxGain:      c.scannerConfig.RxGain,

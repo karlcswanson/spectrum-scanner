@@ -83,13 +83,13 @@ backend:
   url: https://192.168.2.1
 
 # Publish to the central server (fill id/token from the server, or enroll).
+# Name/location are set server-side (Django admin / web UI), keyed by the id.
+# broker: wss://host/mqtt (public, TLS via Caddy) or tcp://host:1883 (LAN/ZeroTier).
 mqtt:
   enabled: false
-  broker: "tcp://your-server:1883"
+  broker: "wss://your-domain/mqtt"
   id: ""
   token: ""
-  name: "My Scanner"
-  location: "My Location"
 EOF
   log "Wrote config template $CONFIG_DIR/config.yaml (edit it)"
 else

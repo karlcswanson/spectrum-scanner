@@ -104,6 +104,37 @@ docker compose -f docker-compose.prod.yml exec server python manage.py createsup
 docker compose -f docker-compose.prod.yml logs -f
 ```
 
+#### Deploy from source vs. pull prebuilt images
+
+Every custom service in `docker-compose.prod.yml` declares **both** `build:` and
+`image:`, so you can deploy either way — the `image:` name is just the tag the
+local build gets; it does not force a registry pull.
+
+**From source (default; no CI, no registry auth needed):** check out the branch
+on the server and build there.
+
+```bash
+docker compose -f docker-compose.prod.yml up -d --build
+```
+
+Use `--build` (or `pull` below) explicitly — a bare `up -d` uses whatever image
+is already local and only builds if none exists. To populate `/api/version` on a
+source build, pass the git refs as build args:
+
+```bash
+GIT_SHA=$(git rev-parse --short HEAD) GIT_REF=$(git rev-parse --abbrev-ref HEAD) \
+  docker compose -f docker-compose.prod.yml up -d --build
+```
+
+**From prebuilt images (CI publishes to GHCR):** pull instead of build. Pick the
+tag with `SERVER_TAG` / `FRONTEND_TAG` (default `latest`; CI also tags `main`,
+`sha-<short>`, and semver on `v*` tags).
+
+```bash
+SERVER_TAG=main FRONTEND_TAG=main docker compose -f docker-compose.prod.yml pull
+docker compose -f docker-compose.prod.yml up -d
+```
+
 #### First Run Setup
 
 After starting the server, create an admin user and configure scanners:
@@ -129,8 +160,11 @@ After starting the server, create an admin user and configure scanners:
 |---------|-------------|-------|
 | `caddy` | Reverse proxy + auto HTTPS | 80, 443 |
 | `server` | Django + Gunicorn (4 workers) | internal |
+| `postgres` | PostgreSQL database | internal |
+| `redis` | Read-cache (history/timeline) | internal |
 | `mosquitto` | MQTT broker | 1883 (scanners) |
 | `mqtt-bridge` | Saves scans to database | internal |
+| `scheduler` | Retention rollup + cache pre-warm | internal |
 | `frontend` | Vue static files | internal |
 
 #### Environment Variables
@@ -152,6 +186,15 @@ ALLOWED_HOSTS=spectrum.example.com,localhost,server
 DB_NAME=spectrum
 DB_USER=spectrum
 DB_PASSWORD=db-password
+
+# Redis read-cache + MQTT bridge identity (defaults shown; override if needed)
+REDIS_URL=redis://redis:6379/0
+MQTT_BRIDGE_USERNAME=spectrum-bridge
+
+# Image tags for pull-based deploys (default: latest). See "Deploy from source
+# vs. pull prebuilt images" above.
+# SERVER_TAG=main
+# FRONTEND_TAG=main
 ```
 
 #### SSL/HTTPS

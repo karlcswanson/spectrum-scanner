@@ -98,7 +98,7 @@ func (a *App) startup(ctx context.Context) {
 		log.Printf("Using default configuration")
 	}
 
-	log.Printf("Desktop app started - %s (%s)", a.config.Name, a.config.DeviceID)
+	log.Printf("Desktop app started - %s", a.config.DeviceID)
 
 	// Start MQTT and web server independently of Pluto connection
 	// These should run even if the tuner isn't available
@@ -533,24 +533,6 @@ func (a *App) GetGain() map[string]interface{} {
 	}
 }
 
-// SetName sets the scanner name
-func (a *App) SetName(name string) error {
-	a.mu.Lock()
-	a.config.Name = name
-	configPath := a.configPath
-	cfg := a.config
-	a.mu.Unlock()
-
-	// Save to YAML so setting persists
-	if err := config.SaveToFile(configPath, cfg); err != nil {
-		log.Printf("Warning: failed to save config after name change: %v", err)
-		return err
-	}
-
-	log.Printf("Scanner name set to: %s", name)
-	return nil
-}
-
 // Pluto detection addresses (tried in order)
 var plutoDetectAddresses = []string{
 	defaultPlutoAddress,   // Default USB
@@ -682,7 +664,7 @@ func (a *App) GetWebConfig() *models.WebConfig {
 }
 
 // SetMQTTConfig updates the MQTT configuration and saves to file
-func (a *App) SetMQTTConfig(enabled bool, broker, id, token, location string) error {
+func (a *App) SetMQTTConfig(enabled bool, broker, id, token string) error {
 	a.mu.Lock()
 
 	if a.config.MQTT == nil {
@@ -695,7 +677,6 @@ func (a *App) SetMQTTConfig(enabled bool, broker, id, token, location string) er
 	a.config.MQTT.Broker = broker
 	a.config.MQTT.ID = id
 	a.config.MQTT.Token = token
-	a.config.MQTT.Location = location
 
 	configPath := a.configPath
 	cfg := a.config

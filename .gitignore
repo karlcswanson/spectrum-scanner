@@ -66,6 +66,8 @@ config.yaml
 /scanner/calibration.json
 /scanner/cmd/calibrate/level_sweep_out/
 /scanner/cmd/calibrate/level_sweep_gains/
+/scanner/cmd/calibrate/calibrations/
+/scanner/calibrations/
 
 # Root-level local tooling: a ~1.6GB scans.db, a Python venv, and calibration
 # scripts. Anchored to the repo root so it does NOT also match ios/tools/ — those

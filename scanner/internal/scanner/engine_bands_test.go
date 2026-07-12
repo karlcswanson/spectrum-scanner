@@ -95,8 +95,8 @@ func TestHandleBandsRejectsInvalid(t *testing.T) {
 func TestHandleBandsPersistsAcrossReload(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	cfg := &models.Config{
-		Name:  "T",
-		Bands: []models.Band{{Name: "UHF", StartHz: 470e6, StopHz: 636e6, Enabled: true}},
+		DeviceID: "test-scanner",
+		Bands:    []models.Band{{Name: "UHF", StartHz: 470e6, StopHz: 636e6, Enabled: true}},
 	}
 	if err := config.SaveToFile(path, cfg); err != nil {
 		t.Fatalf("seed config: %v", err)

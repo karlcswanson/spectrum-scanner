@@ -68,11 +68,19 @@ bands:
 mqtt:
   enabled: false  # Set to true and configure below
 
-  broker: "tcp://localhost:1883"
+  # broker scheme selects the transport:
+  #   wss://host/mqtt    MQTT over WebSocket+TLS on 443 (public server via Caddy) — default
+  #   tcp://host:1883    plain MQTT (LAN / ZeroTier)
+  #   ssl://host:8883    MQTT over TLS
+  broker: "wss://your-domain/mqtt"
   id: "your-scanner-uuid"        # Get from Django admin after creating scanner
   token: "your-scanner-token"    # Get from Django admin after creating scanner
-
-  # Display info
-  name: "My Scanner"             # Human-readable name (e.g., "Studio A Scanner")
-  location: "My Location"        # Physical location (e.g., "Studio A", "Main Stage")
   # topic_prefix: "spectrum"     # Default: "spectrum"
+
+  # TLS options for wss:// / ssl:// brokers. A public cert (Let's Encrypt via
+  # Caddy) needs neither. For a private CA (offline event appliance):
+  #   ca_file: "/etc/spectrum-scanner/ca.pem"   # trust a specific CA, or
+  #   tls_insecure: true                        # skip verification (trusted LAN only)
+
+  # Note: scanner name/location/description are set on the server (Django admin
+  # or the web UI), keyed by the scanner id above — not configured here.

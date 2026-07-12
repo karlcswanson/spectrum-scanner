@@ -58,8 +58,7 @@ func (s *Server) handleGetStatus(w http.ResponseWriter, r *http.Request) {
 
 	status := models.ScannerStatus{
 		ID:          s.config.DeviceID,
-		Name:        s.config.Name,
-		Description: s.config.Description,
+		Name:        s.config.DeviceID, // identity (name/location) is server-side; label with the ID here
 		Online:      s.engine != nil,
 		Scanning:    scanning,
 		CurrentBand: currentBand,
@@ -85,13 +84,8 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Update configuration
-	if newConfig.Name != "" {
-		s.config.Name = newConfig.Name
-	}
-	if newConfig.Description != "" {
-		s.config.Description = newConfig.Description
-	}
+	// Update configuration. Identity (name/location/description) is managed
+	// server-side on the Scanner model, not editable from the scanner config.
 	if newConfig.DwellTimeMs > 0 {
 		s.config.DwellTimeMs = newConfig.DwellTimeMs
 	}
@@ -110,7 +104,7 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	// Persist to disk if callback set
 	s.saveConfig()
 
-	log.Printf("Configuration updated: %s", s.config.Name)
+	log.Printf("Configuration updated: %s", s.config.DeviceID)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(s.config)

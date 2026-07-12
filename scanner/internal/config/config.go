@@ -16,8 +16,6 @@ import (
 func DefaultConfig() *models.Config {
 	return &models.Config{
 		DeviceID:    uuid.New().String(),
-		Name:        "Spectrum Scanner",
-		Description: "ADALM-Pluto Scanner",
 		DwellTimeMs: 50,
 		Mode:        "Average",
 		RxGain:      30,       // 30 dB provides linear response

@@ -15,6 +15,7 @@ import (
 	"math"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -55,6 +56,7 @@ type CalibrationPoint struct {
 
 // Calibration holds the full calibration data
 type Calibration struct {
+	Serial       string             `json:"serial,omitempty" yaml:"serial,omitempty"`
 	ReferenceDBm float64            `json:"reference_dbm" yaml:"reference_dbm"`
 	RxGain       float64            `json:"rx_gain" yaml:"rx_gain"`
 	Timestamp    time.Time          `json:"timestamp" yaml:"timestamp"`
@@ -149,7 +151,9 @@ func main() {
 	tinysaPort := flag.String("tinysa", "/dev/tty.usbmodem4001", "tinySA serial port")
 	plutoURL := flag.String("pluto", "https://192.168.2.1", "Pluto maia-httpd URL")
 	outputFile := flag.String("output", "calibration.yaml", "Output YAML file (paste into config.yaml)")
-	jsonFile := flag.String("json", "calibration.json", "Output JSON file (for iOS client handoff)")
+	jsonFile := flag.String("json", "calibration_standalone.json", "Output JSON file (for iOS client handoff)")
+	serial := flag.String("serial", "", "Physical unit tag for this run (e.g. Pluto serial). Recommended when comparing multiple units.")
+	outDir := flag.String("outdir", "calibrations", "Directory that per-unit output folders are created under (used when -serial is set).")
 	level := flag.Float64("level", DefaultLevelDBm, "tinySA output level in dBm (whole numbers; the device truncates fractions)")
 	pad := flag.Float64("pad", DefaultPadDB, "Inline attenuator between tinySA and Pluto, in dB. The recorded reference is level-pad.")
 	rxGain := flag.Float64("gain", DefaultGainDB, "RX gain to use during calibration")
@@ -159,6 +163,28 @@ func main() {
 
 	if len(bands) == 0 {
 		bands = defaultBands
+	}
+
+	setFlags := map[string]bool{}
+	flag.Visit(func(f *flag.Flag) { setFlags[f.Name] = true })
+
+	// When a unit is tagged, isolate its outputs under calibrations/<serial>/ so
+	// runs on different units sit side by side for the comparison step (and don't
+	// overwrite each other). Only redirect the default filenames — an explicit
+	// -output/-json still wins.
+	if *serial != "" {
+		unitDir := filepath.Join(*outDir, sanitizeSerial(*serial))
+		if err := os.MkdirAll(unitDir, 0755); err != nil {
+			log.Fatalf("Failed to create output dir %s: %v", unitDir, err)
+		}
+		if !setFlags["output"] {
+			*outputFile = filepath.Join(unitDir, "calibration.yaml")
+		}
+		if !setFlags["json"] {
+			*jsonFile = filepath.Join(unitDir, "calibration_standalone.json")
+		}
+	} else {
+		log.Printf("WARNING: no -serial given; outputs won't be unit-tagged. Pass -serial <id> to compare multiple units.")
 	}
 
 	// The tinySA drives all of these from its low-output RF/LOW port; bands above
@@ -175,6 +201,9 @@ func main() {
 	referenceDBm := *level - *pad
 
 	log.Printf("Calibration Tool")
+	if *serial != "" {
+		log.Printf("  Unit serial: %s", *serial)
+	}
 	log.Printf("  tinySA: %s", *tinysaPort)
 	log.Printf("  Pluto: %s", *plutoURL)
 	log.Printf("  Output level: %.1f dBm  (pad %.1f dB -> reference %.1f dBm at Pluto)", *level, *pad, referenceDBm)
@@ -296,6 +325,7 @@ func main() {
 	// Build calibration struct. Field tags match models.Calibration, so the JSON
 	// is byte-compatible with what the server's REST endpoint serves to iOS.
 	cal := Calibration{
+		Serial:       *serial,
 		ReferenceDBm: referenceDBm,
 		RxGain:       *rxGain,
 		Timestamp:    time.Now(),
@@ -325,6 +355,25 @@ func main() {
 	log.Printf("  JSON (iOS):         %s", *jsonFile)
 	fmt.Println("\nCalibration data (YAML):")
 	fmt.Println(string(yamlData))
+}
+
+// sanitizeSerial makes an operator-supplied serial safe to use as a directory
+// name (keeps alnum, dash, underscore, dot; collapses everything else to '_').
+func sanitizeSerial(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_', r == '.':
+			b.WriteRune(r)
+		default:
+			b.WriteRune('_')
+		}
+	}
+	out := b.String()
+	if out == "" {
+		return "unknown"
+	}
+	return out
 }
 
 // bandLabel returns the band name, or a frequency range if unnamed.

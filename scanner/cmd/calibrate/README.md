@@ -56,6 +56,8 @@ out of scope here; calibrate those separately if you need them.
 | `-pluto` | `https://192.168.2.1` | Pluto maia-httpd URL |
 | `-output` | `calibration.yaml` | YAML output (paste into `config.yaml`) |
 | `-json` | `calibration.json` | JSON output (iOS client handoff) |
+| `-serial` | *(none)* | Physical unit tag; redirects output to `calibrations/<serial>/` |
+| `-outdir` | `calibrations` | Parent dir for per-unit folders (used with `-serial`) |
 | `-level` | `-28.0` | tinySA output level in dBm (use whole numbers) |
 | `-pad` | `0.0` | Inline attenuator in dB; recorded reference is `level - pad` |
 | `-gain` | `30.0` | Pluto RX gain during calibration |
@@ -100,6 +102,50 @@ Use a level that's well above the noise floor but won't compress the Pluto's fro
 ### Gain
 - **30 dB** recommended - linear response across power levels
 - **40+ dB** can cause compression with stronger signals
+
+## Comparing multiple units (is one default calibration safe?)
+
+To decide whether a single baked-in default calibration is good enough — or
+whether each Pluto needs its own — calibrate every unit with a `-serial` tag,
+then run the comparison script.
+
+maia-httpd doesn't expose the Pluto's hardware serial, so `-serial` is an
+operator-supplied tag: use the sticker serial, `PlutoA`/`PlutoB`, or any label
+that tells the units apart.
+
+```bash
+# 1. Calibrate each unit, tagged. Output lands in calibrations/<serial>/.
+#    Keep -gain identical across units so the curves are comparable.
+./calibrate -serial PlutoA          # -> calibrations/PlutoA/calibration.{json,yaml}
+./calibrate -serial PlutoB          # -> calibrations/PlutoB/calibration.{json,yaml}
+
+# 2. Compare. Globs calibrations/*/calibration_standalone.json by default.
+python3 compare_calibrations.py                       # verdict at +/-1.0 dB
+python3 compare_calibrations.py --tol 1.5             # looser tolerance
+python3 compare_calibrations.py --emit-default default_calibration.json
+
+# The plot needs matplotlib; uv pulls it in ephemerally without installing it:
+uv run --with matplotlib python compare_calibrations.py --plot compare.png
+```
+
+The script computes each unit's **correction curve**
+(`correction = reference_dbm − measured_dbm`, the dB the scanner adds), aligns
+them on a common frequency grid using the same clamped linear interpolation the
+scanner uses, and reports:
+
+- the correction each unit wants per frequency and the **spread** between units,
+- a proposed shared **default** (the per-frequency mean across units),
+- the **worst-case error** if that default were shipped to every unit, and
+- a **verdict** against the tolerance: if the worst unit lands within `±tol` dB
+  of the mean, one shared default is safe; otherwise it names the units that
+  need their own calibration.
+
+`--emit-default` writes the mean curve as a `calibration.json` you can drop into
+`config.yaml` (or ship as the baked-in default). The correction curve is roughly
+gain-independent in the linear window, but the compression knee is not — the
+script warns if the runs used different `-gain`, so keep gain matched.
+
+Only the numeric report needs the standard library; `--plot` is optional.
 
 ## Output Format
 

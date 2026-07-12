@@ -241,7 +241,7 @@ func CreateBackend(cfg *models.Config) (scanner.Backend, error) {
 		if cfg.Backend != nil && cfg.Backend.URL != "" {
 			url = cfg.Backend.URL
 		}
-		return pluto.NewClient(url, cfg.Name), nil
+		return pluto.NewClient(url, cfg.DeviceID), nil
 	}
 
 	switch backendType {
@@ -251,7 +251,7 @@ func CreateBackend(cfg *models.Config) (scanner.Backend, error) {
 		if cfg.Backend != nil && cfg.Backend.URL != "" {
 			url = cfg.Backend.URL
 		}
-		return pluto.NewClient(url, cfg.Name), nil
+		return pluto.NewClient(url, cfg.DeviceID), nil
 
 	case "owon":
 		// OWON HSA1000 series via SCPI/TCP
@@ -262,7 +262,7 @@ func CreateBackend(cfg *models.Config) (scanner.Backend, error) {
 		if port == 0 {
 			port = owon.DefaultPort
 		}
-		return owon.NewClient(cfg.Backend.Address, port, cfg.Name), nil
+		return owon.NewClient(cfg.Backend.Address, port, cfg.DeviceID), nil
 
 	case "tinysa":
 		// tinySA Ultra via serial
