@@ -51,6 +51,9 @@ class ScannerSerializer(serializers.ModelSerializer):
 
 
 class ScanSerializer(serializers.ModelSerializer):
+    # Full resolution AND full precision: live view, at_time (scrub-settle),
+    # and export all go through here and must stay untouched. Only the decimated
+    # scrubber-preview serializers below reduce points/precision.
     scanner_id = serializers.UUIDField(source='scanner.id', read_only=True)
     scanner_name = serializers.CharField(source='scanner.name', read_only=True)
     band_name = serializers.CharField(source='band.name', read_only=True, allow_null=True)

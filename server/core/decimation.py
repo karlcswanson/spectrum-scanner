@@ -16,10 +16,12 @@ DEFAULT_TARGET_POINTS = 1920
 def decimate_power(power, target_points=DEFAULT_TARGET_POINTS):
     """Max-pool ``power`` down to ~``target_points``, preserving peaks.
 
-    Returns the input unchanged when it is empty or already within the target.
-    Vectorised with ``np.maximum.reduceat`` — the max over every bin is computed
-    in one C-level pass rather than a Python loop, which matters because this
-    runs on every timeline push and up to thousands of times per decimated
+    Point reduction only — values keep full precision. This is the sole loss on
+    the scrubber-preview path; the full-res live/at_time/export paths are never
+    touched. Returns the input unchanged when it is empty or already within the
+    target. Vectorised with ``np.maximum.reduceat`` — the max over every bin is
+    computed in one C-level pass rather than a Python loop, which matters because
+    this runs on every timeline push and up to thousands of times per decimated
     history request.
     """
     if not power:

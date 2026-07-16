@@ -48,9 +48,14 @@ const props = defineProps({
 const emit = defineEmits(['cursor-move', 'select', 'freq-pin', 'zoom'])
 
 const container = ref(null)
-const canvasRef = ref(null)
+const canvasRef = ref(null)      // high-res layer (max-pool, chunked, fades in when ready)
+const loCanvasRef = ref(null)    // low-res layer (nth-point, fast, always behind — tracks zoom)
 const svgRef = ref(null)
 const legendCanvas = ref(null)
+
+// Interactive level-of-detail: the fast low-res layer shows during zoom/slide
+// while the high-res layer re-renders hidden, then fades to the front when done.
+const hiReady = ref(true)
 
 // dBm range for color mapping (adjustable per-instance, persisted per band)
 const DEFAULT_MIN_DB = -110
@@ -151,33 +156,125 @@ function dbmToIndex(dbm) {
   return Math.round(((clamped - colorMin.value) / dbRange.value) * 255)
 }
 
+// Hot-loop variant: takes the color range as plain numbers so the per-pixel
+// render loops don't hit a reactive `.value` getter hundreds of thousands of
+// times per frame. Callers hoist `colorMin.value`/`colorMax.value` once.
+function dbmToIndexFast(dbm, cMin, cMax, range) {
+  const clamped = dbm < cMin ? cMin : (dbm > cMax ? cMax : dbm)
+  return Math.round(((clamped - cMin) / range) * 255)
+}
+
 // Chart dimensions
 let plotWidth = 0
 let plotHeight = 0
 let canvasWidth = 0
 let canvasHeight = 0
 
+// The low-res layer draws into a buffer this many times smaller in each axis
+// (CSS stretches it back to full size — blocky, which is fine for a placeholder),
+// so it costs ~LO_SCALE² less to render than the high-res layer.
+const LO_SCALE = 2
+let loCanvasWidth = 0
+let loCanvasHeight = 0
+
 // Full band frequency range (from band prop)
 let startHz = 0
 let stopHz = 0
 
 let ctx = null
+let loCtx = null
 let effectiveXScale = null
+let zoomBehavior = null
+let xScaleBase = null
+// Freq domain THIS waterfall last emitted via a continuous pan/wheel gesture. Lets us
+// recognise the prop echo of our own gesture and NOT re-apply the zoom transform
+// mid-drag (which would fight the active gesture).
+let lastEmittedDomain = null
+// True while we're the active pan/zoom driver (a d3.zoom gesture is in progress) and
+// for a short settle window after it ends. During this time the visibleRange prop is
+// just echoing our own gesture back — including the spectrum chart's setZoom transition
+// replaying intermediate ranges — so we must ignore it or it snaps our transform back.
+let panning = false
+let panSettleTimer = null
 
 const cursorInfo = ref(null)
 
-// Effective frequency range (zoomed or full band)
+// Effective frequency range currently shown. effectiveXScale is the live source of
+// truth (updated by pan/wheel gestures and by external zoom sync); fall back to the
+// prop / full band before it exists.
 function getEffectiveRange() {
+  if (effectiveXScale) return effectiveXScale.domain()
+  return externalRange()
+}
+
+// The externally-driven range (from the spectrum chart, via the prop) or full band.
+function externalRange() {
   if (props.visibleRange) return props.visibleRange
   return [startHz, stopHz]
 }
 
-// Full redraw of the waterfall from buffer (used for historical load, zoom, resize)
+// True when `range` matches our own most recent pan/wheel emit (it round-trips back to
+// us through the prop; re-applying the transform mid-gesture would fight the drag).
+function isEcho(range) {
+  if (!lastEmittedDomain) return false
+  const tol = Math.max(1, (stopHz - startHz) * 1e-4)
+  return Math.abs(lastEmittedDomain[0] - range[0]) < tol &&
+         Math.abs(lastEmittedDomain[1] - range[1]) < tol
+}
+
+// Align the d3.zoom transform to a freq domain without emitting (programmatic zoom
+// events carry no sourceEvent, so the handler won't propagate). Mirrors the spectrum
+// chart's setZoom so both charts share one pan/zoom model.
+function syncZoomTransform(domain) {
+  if (!zoomBehavior || !xScaleBase || !svgRef.value) return
+  const [loHz, hiHz] = domain
+  if (!(hiHz > loHz)) return
+  const k = (stopHz - startHz) / (hiHz - loHz)
+  const tx = -xScaleBase(loHz) * k
+  const zoomEl = d3.select(svgRef.value).select('.brush .overlay')
+  if (zoomEl.empty()) return
+  zoomEl.call(zoomBehavior.transform, d3.zoomIdentity.translate(tx, 0).scale(k))
+}
+
+// Max dBm over the frequency bins that fall under one pixel column — the hottest
+// bin, so a narrow strong signal between sampled bins survives instead of being
+// dropped by single-sample striding. Returns null when the column is wholly
+// outside the scan's frequency range (caller paints the floor color).
+function columnMaxDbm(power, freqHz, hzPerPixel, scanHzLo, scanHzPerSample, scanLen) {
+  let lo = Math.floor((freqHz - scanHzLo) / scanHzPerSample)
+  let hi = Math.floor((freqHz + hzPerPixel - scanHzLo) / scanHzPerSample)
+  if (hi < 0 || lo >= scanLen) return null
+  if (lo < 0) lo = 0
+  if (hi >= scanLen) hi = scanLen - 1
+  let m = power[lo]
+  for (let j = lo + 1; j <= hi; j++) {
+    if (power[j] > m) m = power[j]
+  }
+  return m
+}
+
+// Full redraw of the waterfall from buffer (used for historical load, zoom,
+// resize). A full-res redraw of a wide canvas can take a few hundred ms, so it
+// is CHUNKED: rows are painted in ~8ms slices across animation frames, and the
+// partially-filled image is blitted after each slice. This keeps the main thread
+// responsive (no single long task) while staying full-res on the main thread. A
+// newer render (`renderGen`) supersedes any in-flight one. Each render seeds its
+// buffer from the CURRENT canvas (not a blank one), so on zoom the previous frame
+// stays visible and is overwritten row-by-row instead of flashing blank.
+let rafHandle = null
+let renderGen = 0
+
+function cancelChunkedRender() {
+  renderGen++
+  if (rafHandle) { cancelAnimationFrame(rafHandle); rafHandle = null }
+}
+
 function renderWaterfall() {
   if (!ctx || canvasWidth === 0 || canvasHeight === 0) return
 
   const buf = scanBuffer.value
   if (buf.length === 0) {
+    cancelChunkedRender()
     ctx.clearRect(0, 0, canvasWidth, canvasHeight)
     return
   }
@@ -186,51 +283,130 @@ function renderWaterfall() {
   if (renderStopHz <= renderStartHz) return
   const hzPerPixel = (renderStopHz - renderStartHz) / canvasWidth
 
-  const imgData = ctx.createImageData(canvasWidth, canvasHeight)
+  // Seed from the current canvas so un-rendered rows keep the previous frame
+  // (no blank flash); rendered rows overwrite it. Context is willReadFrequently.
+  const imgData = ctx.getImageData(0, 0, canvasWidth, canvasHeight)
   const pixels32 = new Uint32Array(imgData.data.buffer)
 
   const oldestTs = buf[0].timestamp
   const newestTs = buf[buf.length - 1].timestamp
   const timeSpan = newestTs - oldestTs || 1
+  const cMin = colorMin.value, cMax = colorMax.value, range = (cMax - cMin) || 1
+
+  cancelChunkedRender()
+  const gen = renderGen
+  let row = 0
+  let searchIdx = 0
+
+  const renderChunk = () => {
+    if (gen !== renderGen) return // superseded by a newer render
+    const t0 = performance.now()
+    while (row < canvasHeight && performance.now() - t0 < 8) {
+      const r = row++
+      const rowTime = oldestTs + (r / (canvasHeight - 1 || 1)) * timeSpan
+      while (searchIdx < buf.length - 1 && buf[searchIdx + 1].timestamp <= rowTime) {
+        searchIdx++
+      }
+      if (rowTime - buf[searchIdx].timestamp > 120000) continue
+
+      const scan = buf[searchIdx]
+      const power = scan.power
+      const scanHzLo = scan.hz_lo
+      const scanLen = power.length
+      const scanHzPerSample = (scan.hz_hi - scanHzLo) / scanLen
+      const rowOffset = r * canvasWidth
+
+      for (let col = 0; col < canvasWidth; col++) {
+        const freqHz = renderStartHz + col * hzPerPixel
+        const dbm = columnMaxDbm(power, freqHz, hzPerPixel, scanHzLo, scanHzPerSample, scanLen)
+        pixels32[rowOffset + col] = VIRIDIS_U32[dbmToIndexFast(dbm === null ? cMin : dbm, cMin, cMax, range)]
+      }
+    }
+
+    ctx.putImageData(imgData, 0, 0)
+    if (row < canvasHeight) {
+      rafHandle = requestAnimationFrame(renderChunk)
+    } else {
+      rafHandle = null
+      hiReady.value = true // full-res render done → fade the hi layer to the front
+    }
+  }
+
+  renderChunk() // first slice runs now; the rest are scheduled per frame
+}
+
+// Low-res layer: fast nth-point (single-sample-per-column) render. It skips the
+// per-column max-pool, so it's ~15x cheaper — cheap enough to run synchronously
+// on every zoom/slide, giving an instant preview that tracks the line chart while
+// the high-res layer re-renders behind the scenes.
+function renderLoRes() {
+  if (!loCtx || loCanvasWidth === 0 || loCanvasHeight === 0) return
+  const buf = scanBuffer.value
+  if (buf.length === 0) {
+    loCtx.clearRect(0, 0, loCanvasWidth, loCanvasHeight)
+    return
+  }
+
+  const [renderStartHz, renderStopHz] = getEffectiveRange()
+  if (renderStopHz <= renderStartHz) return
+  const hzPerPixel = (renderStopHz - renderStartHz) / loCanvasWidth
+
+  const imgData = loCtx.createImageData(loCanvasWidth, loCanvasHeight)
+  const pixels32 = new Uint32Array(imgData.data.buffer)
+
+  const oldestTs = buf[0].timestamp
+  const newestTs = buf[buf.length - 1].timestamp
+  const timeSpan = newestTs - oldestTs || 1
+  const cMin = colorMin.value, cMax = colorMax.value, range = (cMax - cMin) || 1
 
   let searchIdx = 0
-  for (let row = 0; row < canvasHeight; row++) {
-    const rowTime = oldestTs + (row / (canvasHeight - 1 || 1)) * timeSpan
-
+  for (let row = 0; row < loCanvasHeight; row++) {
+    const rowTime = oldestTs + (row / (loCanvasHeight - 1 || 1)) * timeSpan
     while (searchIdx < buf.length - 1 && buf[searchIdx + 1].timestamp <= rowTime) {
       searchIdx++
     }
-
     if (rowTime - buf[searchIdx].timestamp > 120000) continue
 
     const scan = buf[searchIdx]
     const power = scan.power
     const scanHzLo = scan.hz_lo
-    const scanHzHi = scan.hz_hi
     const scanLen = power.length
-    const scanHzPerSample = (scanHzHi - scanHzLo) / scanLen
-    const rowOffset = row * canvasWidth
+    const scanHzPerSample = (scan.hz_hi - scanHzLo) / scanLen
+    const rowOffset = row * loCanvasWidth
 
-    for (let col = 0; col < canvasWidth; col++) {
+    for (let col = 0; col < loCanvasWidth; col++) {
       const freqHz = renderStartHz + col * hzPerPixel
       const sampleIdx = (freqHz - scanHzLo) / scanHzPerSample
-      let dbm
-      if (sampleIdx < 0 || sampleIdx >= scanLen) {
-        dbm = colorMin.value
-      } else {
-        dbm = power[Math.round(sampleIdx)]
-      }
-      pixels32[rowOffset + col] = VIRIDIS_U32[dbmToIndex(dbm)]
+      const dbm = (sampleIdx < 0 || sampleIdx >= scanLen) ? cMin : power[Math.round(sampleIdx)]
+      pixels32[rowOffset + col] = VIRIDIS_U32[dbmToIndexFast(dbm, cMin, cMax, range)]
     }
   }
+  loCtx.putImageData(imgData, 0, 0)
+}
 
-  ctx.putImageData(imgData, 0, 0)
+// Show the low-res layer instantly, then (debounced) kick the high-res redraw
+// which fades to the front on completion. Used for zoom/slide/color/resize.
+let hiTimer = null
+function refreshWaterfall(immediate = false) {
+  hiReady.value = false // reveal the low-res layer
+  renderLoRes()
+  if (immediate) {
+    if (hiTimer) { clearTimeout(hiTimer); hiTimer = null }
+    renderWaterfall()
+    return
+  }
+  if (hiTimer) clearTimeout(hiTimer)
+  hiTimer = setTimeout(() => { hiTimer = null; renderWaterfall() }, 140)
 }
 
 // Fast path: shift canvas up by 1 row, paint only the newest scan at the bottom
 function renderLiveRow(scan) {
   if (!ctx || canvasWidth === 0 || canvasHeight === 0) return
   if (!scan?.power?.length) return
+  // A full chunked redraw is in flight and owns the canvas; skip the shift-and-
+  // paint (which would corrupt the partially-drawn image). The new scan is in the
+  // buffer, so it lands on the next full render / subsequent live rows.
+  if (rafHandle) return
 
   const [renderStartHz, renderStopHz] = getEffectiveRange()
   if (renderStopHz <= renderStartHz) return
@@ -252,14 +428,8 @@ function renderLiveRow(scan) {
 
   for (let col = 0; col < canvasWidth; col++) {
     const freqHz = renderStartHz + col * hzPerPixel
-    const sampleIdx = (freqHz - scanHzLo) / scanHzPerSample
-    let dbm
-    if (sampleIdx < 0 || sampleIdx >= scanLen) {
-      dbm = colorMin.value
-    } else {
-      dbm = power[Math.round(sampleIdx)]
-    }
-    rowPixels32[col] = VIRIDIS_U32[dbmToIndex(dbm)]
+    const dbm = columnMaxDbm(power, freqHz, hzPerPixel, scanHzLo, scanHzPerSample, scanLen)
+    rowPixels32[col] = VIRIDIS_U32[dbmToIndex(dbm === null ? colorMin.value : dbm)]
   }
 
   ctx.putImageData(rowData, 0, canvasHeight - 1)
@@ -319,15 +489,31 @@ function buildAxes() {
     .domain([renderStartHz, renderStopHz])
     .range([0, plotWidth])
 
-  // Size canvas to plot area
+  // High-res layer: full internal resolution (sharp). Low-res layer: a smaller
+  // internal buffer (LO_SCALE× smaller per axis) stretched by CSS to the same
+  // display size — blocky, but ~LO_SCALE² cheaper so it can render synchronously
+  // on every zoom/slide as an instant placeholder.
   if (canvasRef.value) {
-    canvasRef.value.width = canvasWidth
-    canvasRef.value.height = canvasHeight
-    canvasRef.value.style.width = canvasWidth + 'px'
-    canvasRef.value.style.height = canvasHeight + 'px'
-    canvasRef.value.style.left = margin.left + 'px'
-    canvasRef.value.style.top = margin.top + 'px'
-    ctx = canvasRef.value.getContext('2d', { willReadFrequently: true })
+    const el = canvasRef.value
+    el.width = canvasWidth
+    el.height = canvasHeight
+    el.style.width = canvasWidth + 'px'
+    el.style.height = canvasHeight + 'px'
+    el.style.left = margin.left + 'px'
+    el.style.top = margin.top + 'px'
+    ctx = el.getContext('2d', { willReadFrequently: true })
+  }
+  if (loCanvasRef.value) {
+    const el = loCanvasRef.value
+    loCanvasWidth = Math.max(1, Math.ceil(canvasWidth / LO_SCALE))
+    loCanvasHeight = Math.max(1, Math.ceil(canvasHeight / LO_SCALE))
+    el.width = loCanvasWidth
+    el.height = loCanvasHeight
+    el.style.width = canvasWidth + 'px' // display at full size; browser upscales the small buffer
+    el.style.height = canvasHeight + 'px'
+    el.style.left = margin.left + 'px'
+    el.style.top = margin.top + 'px'
+    loCtx = el.getContext('2d')
   }
 
   const svg = d3.select(svgRef.value)
@@ -348,16 +534,13 @@ function buildAxes() {
     .attr('stroke', '#666').attr('stroke-width', 1)
     .attr('stroke-dasharray', '4,4').attr('opacity', 0)
 
-  // Overlays group for highlight row and pinned markers (below mouse overlay)
+  // Overlays group for highlight row and pinned markers (below the brush overlay)
   chart.append('g').attr('class', 'chart-overlays')
 
-  // Mouse overlay for cursor and scroll-to-zoom
-  chart.append('rect').attr('class', 'mouse-overlay')
-    .attr('width', plotWidth).attr('height', plotHeight)
-    .attr('fill', 'transparent').attr('pointer-events', 'all')
-    .style('cursor', 'crosshair')
-
-  // Brush group for click-drag-to-zoom
+  // Single interaction surface: the brush group. d3-brush creates its own
+  // full-extent .overlay rect, and setupMouseHandlers hangs the cursor/click/
+  // wheel listeners on that same rect — one overlay, two listener sets, so
+  // there's no second transparent rect competing for pointer events.
   chart.append('g').attr('class', 'brush')
 
   setupMouseHandlers()
@@ -443,7 +626,6 @@ function emitScanSelect(scan) {
 
 function setupMouseHandlers() {
   const svg = d3.select(svgRef.value)
-  const mouseOverlay = svg.select('.mouse-overlay')
   const cursorLine = svg.select('.cursor-line')
 
   function clearCursor() {
@@ -492,9 +674,56 @@ function setupMouseHandlers() {
     .attr('stroke', '#00d4ff')
     .attr('stroke-opacity', 0.5)
 
-  // Cursor tracking and click handlers — attached to brush overlay (topmost element)
-  const brushOverlayEl = brushGroup.select('.overlay')
-  const eventTarget = brushOverlayEl.empty() ? mouseOverlay : brushOverlayEl
+  // Pan/zoom mirroring the spectrum chart above: plain drag pans the frequency window,
+  // wheel zooms about the cursor. Shift+drag is left to the brush (filtered out here);
+  // dblclick reset is handled below. Attached to the brush's own overlay rect.
+  xScaleBase = d3.scaleLinear().domain([startHz, stopHz]).range([0, plotWidth])
+  zoomBehavior = d3.zoom()
+    .scaleExtent([1, 20])
+    .translateExtent([[0, 0], [plotWidth, plotHeight]])
+    .extent([[0, 0], [plotWidth, plotHeight]])
+    .filter((event) => {
+      if (event.type === 'dblclick') return false
+      if (event.type === 'mousedown' && event.shiftKey) return false // brush handles Shift+drag
+      return true
+    })
+    .on('start', (event) => {
+      // A real gesture (drag/wheel) makes us the driver: hold off on prop-driven syncs.
+      if (event.sourceEvent) {
+        if (panSettleTimer) { clearTimeout(panSettleTimer); panSettleTimer = null }
+        panning = true
+      }
+    })
+    .on('zoom', (event) => {
+      effectiveXScale = event.transform.rescaleX(xScaleBase)
+      if (!event.sourceEvent) return // programmatic sync — don't propagate or re-render
+      const [lo, hi] = effectiveXScale.domain()
+      const full = lo <= startHz + 1 && hi >= stopHz - 1
+      lastEmittedDomain = full ? [startHz, stopHz] : [lo, hi]
+      emit('zoom', full ? null : [lo, hi])
+      refreshWaterfall()
+      drawOverlays()
+    })
+    .on('end', (event) => {
+      // Keep ignoring the prop for a beat: the spectrum chart's setZoom animates toward
+      // our emitted domain over ~300ms, re-emitting intermediate ranges that would snap
+      // our transform backwards right after the drag ends.
+      if (event.sourceEvent) {
+        if (panSettleTimer) clearTimeout(panSettleTimer)
+        panSettleTimer = setTimeout(() => { panning = false; panSettleTimer = null }, 350)
+      }
+    })
+  brushGroup.select('.overlay').call(zoomBehavior)
+  // Start the transform at the current window so the first drag continues smoothly.
+  syncZoomTransform(getEffectiveRange())
+
+  // Cursor tracking and click handlers hang on the brush's own .overlay rect —
+  // the single interaction surface. It already covers the full [0,0]→[plotWidth,
+  // plotHeight] extent with pointer-events:all; we just add crosshair + our
+  // listeners alongside d3-brush's own.
+  const eventTarget = brushGroup.select('.overlay')
+    .attr('pointer-events', 'all')
+    .style('cursor', 'crosshair')
 
   eventTarget
     .on('mousemove', (event) => {
@@ -595,38 +824,8 @@ function setupMouseHandlers() {
       clearCursor()
     })
 
-  // Scroll-to-zoom (x-axis only, same feel as spectrum chart)
-  eventTarget.on('wheel.zoom', (event) => {
-    if (!effectiveXScale) return
-    event.preventDefault()
-    const [mx] = d3.pointer(event)
-    const [curLo, curHi] = effectiveXScale.domain()
-    const cursorHz = effectiveXScale.invert(mx)
-    const span = curHi - curLo
-    const fullSpan = stopHz - startHz
-    // Zoom factor: positive deltaY = zoom out, negative = zoom in
-    const factor = event.deltaY > 0 ? 1.15 : 1 / 1.15
-    let newSpan = span * factor
-    // Clamp: don't zoom beyond full range or below 1/20th
-    newSpan = Math.max(fullSpan / 20, Math.min(fullSpan, newSpan))
-    // Keep cursor position proportionally stable
-    const ratio = (cursorHz - curLo) / span
-    let newLo = cursorHz - ratio * newSpan
-    let newHi = cursorHz + (1 - ratio) * newSpan
-    // Clamp to band bounds
-    if (newLo < startHz) { newHi += startHz - newLo; newLo = startHz }
-    if (newHi > stopHz) { newLo -= newHi - stopHz; newHi = stopHz }
-    newLo = Math.max(startHz, newLo)
-    newHi = Math.min(stopHz, newHi)
-    // If back to full range, emit null to reset
-    if (Math.abs(newSpan - fullSpan) < fullSpan * 0.01) {
-      emit('zoom', null)
-    } else {
-      emit('zoom', [newLo, newHi])
-    }
-  }, { passive: false })
-
-  // Double-click to reset zoom
+  // Double-click to reset zoom (d3.zoom's own dblclick is filtered out above so this
+  // wins; emitting null round-trips back to a full-band window + identity transform).
   eventTarget.on('dblclick.zoom', () => {
     emit('zoom', null)
   })
@@ -657,7 +856,7 @@ function loadHistorical(scans) {
     }
   })
 
-  renderWaterfall()
+  refreshWaterfall(true) // initial load: low-res instantly, high-res right after
   updateTimeAxis()
   drawOverlays()
 }
@@ -699,9 +898,9 @@ watch(() => props.isLive, () => {
   drawOverlays()
 })
 
-// Re-render when color scale range changes
+// Re-render when color scale range changes.
 watch([colorMin, colorMax], () => {
-  renderWaterfall()
+  refreshWaterfall()
   renderLegend()
   const key = storageKey()
   if (key) {
@@ -709,13 +908,22 @@ watch([colorMin, colorMax], () => {
   }
 })
 
-// Watch zoom changes from line chart
+// Watch zoom/slide from the line chart — the low-res layer re-renders instantly
+// so the waterfall tracks the same range in tandem, while the high-res layer
+// re-renders behind and fades to the front once it settles.
 watch(() => props.visibleRange, () => {
-  const [renderStartHz, renderStopHz] = getEffectiveRange()
+  // We're mid-gesture (or just finished): our own transform is authoritative and the
+  // prop is only echoing us back — ignore it so it can't snap the pan backwards.
+  if (panning) return
+  const [lo, hi] = externalRange()
   effectiveXScale = d3.scaleLinear()
-    .domain([renderStartHz, renderStopHz])
+    .domain([lo, hi])
     .range([0, plotWidth])
-  renderWaterfall()
+  // Echo of our own pan/wheel gesture: the transform is already correct and the
+  // gesture already re-rendered — re-applying it would be redundant.
+  if (isEcho([lo, hi])) return
+  syncZoomTransform([lo, hi])
+  refreshWaterfall()
   drawOverlays()
 })
 
@@ -831,9 +1039,15 @@ function drawOverlays() {
 // Resize handling
 let resizeObserver = null
 
+// ResizeObserver can fire spuriously (same size) — and re-rendering inside it
+// can re-trigger it, forming a render loop. Only act on a real width change.
+let lastResizeW = -1
 function handleResize() {
+  const w = container.value ? Math.round(container.value.getBoundingClientRect().width) : 0
+  if (w === lastResizeW) return
+  lastResizeW = w
   buildAxes()
-  renderWaterfall()
+  refreshWaterfall()
   renderLegend()
   drawOverlays()
 }
@@ -861,6 +1075,9 @@ onMounted(() => {
 
 onUnmounted(() => {
   if (resizeObserver) resizeObserver.disconnect()
+  if (rafHandle) cancelAnimationFrame(rafHandle)
+  if (hiTimer) clearTimeout(hiTimer)
+  if (panSettleTimer) clearTimeout(panSettleTimer)
   document.removeEventListener('click', onDocumentClick)
 })
 
@@ -885,11 +1102,17 @@ function resetColorScale() {
 
 <template>
   <div ref="container" class="spectrogram-chart w-full relative" :style="{ height: `${height}px` }">
-    <!-- Canvas for heatmap (positioned in plot area) -->
+    <!-- Low-res heatmap layer (behind): fast nth-point render, tracks zoom/slide -->
+    <canvas
+      ref="loCanvasRef"
+      class="absolute wf-layer"
+    />
+
+    <!-- High-res heatmap layer (front): max-pool, chunked; fades in when ready -->
     <canvas
       ref="canvasRef"
-      class="absolute"
-      style="image-rendering: pixelated;"
+      class="absolute wf-layer wf-hi"
+      :style="{ opacity: hiReady ? 1 : 0 }"
     />
 
     <!-- SVG overlay for time axis + cursor -->
@@ -989,6 +1212,18 @@ function resetColorScale() {
   -webkit-touch-callout: none;
   -webkit-user-select: none;
   user-select: none;
+}
+
+.wf-layer {
+  image-rendering: pixelated;
+  /* Display-only layers — all interaction (click/drag/cursor) goes to the SVG
+     overlay on top; the canvases must not intercept pointer events. */
+  pointer-events: none;
+}
+
+/* High-res layer fades in over the low-res layer once its render completes. */
+.wf-hi {
+  transition: opacity 0.18s ease;
 }
 
 .legend-panel {
