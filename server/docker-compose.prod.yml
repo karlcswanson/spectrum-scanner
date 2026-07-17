@@ -31,6 +31,14 @@ services:
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
+    # Caddy reverse-proxies every browser WebSocket to mosquitto, so it holds
+    # ~2 fds per viewer (downstream + upstream) plus HTTP/static connections.
+    # Give it ample headroom above a launch spike so the default nofile cap
+    # doesn't throttle the proxy before mosquitto's own limit is reached.
+    ulimits:
+      nofile:
+        soft: 16384
+        hard: 16384
     ports:
       - "80:80"
       - "443:443"
@@ -52,6 +60,13 @@ services:
   mosquitto:
     image: eclipse-mosquitto:2
     restart: unless-stopped
+    # Each MQTT/WS connection is one file descriptor. The default container
+    # nofile limit (often 1024) would cap us well below the 1500 max_connections
+    # in mosquitto.prod.conf, so raise it with headroom for both listeners + logs.
+    ulimits:
+      nofile:
+        soft: 4096
+        hard: 4096
     ports:
       - "1883:1883"
       # WebSocket exposed through Caddy, not directly
