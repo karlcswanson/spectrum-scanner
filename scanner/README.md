@@ -38,7 +38,7 @@ Runs a web server with embedded Vue frontend at `http://localhost:8080`.
 
 ```bash
 # Pluto via USB network (default)
-go run ./cmd/scanner -config ../config.yaml
+go run ./cmd/scanner -config config.yaml
 
 # Pluto with explicit address
 go run ./cmd/scanner -backend pluto -addr https://192.168.2.1

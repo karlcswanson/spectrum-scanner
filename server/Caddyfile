@@ -1,5 +1,14 @@
 # Production Caddyfile for Spectrum Scanner
-# Handles TLS/HTTPS automatically via Let's Encrypt
+# HTTPS via Let's Encrypt (public) or a self-signed internal CA (LAN) — see
+# SITE_TLS in .env.
+
+{
+    # Serve the correct cert to clients that connect by bare IP. An IP connection
+    # sends no SNI, so without this Caddy can't select a cert and aborts the TLS
+    # handshake (browsers show ERR_SSL_PROTOCOL_ERROR). Fall back to DOMAIN as the
+    # server name; harmless for hostname/public access, where real SNI is sent.
+    default_sni {$DOMAIN:localhost}
+}
 
 {$DOMAIN:localhost} {
     # TLS mode is env-driven so ONE Caddyfile serves both deployments:

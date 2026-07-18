@@ -94,7 +94,7 @@ Run a scanner with local web UI at `http://localhost:8080`:
 cd scanner
 
 # With ADALM-Pluto
-go run ./cmd/scanner -config ../config.yaml
+go run ./cmd/scanner -config config.yaml
 
 # With OWON spectrum analyzer
 go run ./cmd/scanner -backend owon -addr 10.10.125.155
@@ -147,7 +147,7 @@ docker compose -f docker-compose.prod.yml up -d --build
 Only **UHF** is enabled by default. The canonical list lives in
 [`common/bands.json`](common/bands.json) (mirroring iOS
 `SpectrumScanner/Models/Models.swift` `Band.defaultBands`); keep
-`config.yaml.example`, the scanner's `config.go` defaults, the calibrate tool,
+`scanner/config.yaml.example`, the scanner's `config.go` defaults, the calibrate tool,
 and `frontend/src/constants.js` `DEFAULT_BANDS` in sync with it.
 
 ## License

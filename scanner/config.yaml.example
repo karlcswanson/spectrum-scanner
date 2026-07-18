@@ -68,9 +68,11 @@ bands:
 mqtt:
   enabled: false  # Set to true and configure below
 
-  # broker scheme selects the transport:
+  # broker scheme selects the transport. All require the id/token below — the
+  # broker runs allow_anonymous=false and rejects unauthenticated clients:
   #   wss://host/mqtt    MQTT over WebSocket+TLS on 443 (public server via Caddy) — default
-  #   tcp://host:1883    plain MQTT (LAN / ZeroTier)
+  #   tcp://host:1883    plain MQTT (mqtt:// is an accepted alias) — authenticated
+  #                      but NOT encrypted (token in cleartext); trusted LAN / ZeroTier only
   #   ssl://host:8883    MQTT over TLS
   broker: "wss://your-domain/mqtt"
   id: "your-scanner-uuid"        # Get from Django admin after creating scanner
