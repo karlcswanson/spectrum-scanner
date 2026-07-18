@@ -2,6 +2,11 @@
 # Handles TLS/HTTPS automatically via Let's Encrypt
 
 {$DOMAIN:localhost} {
+    # TLS mode is env-driven so ONE Caddyfile serves both deployments:
+    #   public  → SITE_TLS empty        → automatic Let's Encrypt
+    #   LAN     → SITE_TLS="tls internal" → Caddy's self-signed local CA
+    {$SITE_TLS:}
+
     # Compress responses (the scan/history JSON payloads gzip/zstd very well).
     encode zstd gzip
 

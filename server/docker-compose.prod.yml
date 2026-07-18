@@ -44,6 +44,8 @@ services:
       - "443:443"
     environment:
       - DOMAIN=${DOMAIN:-localhost}
+      # Empty for public (automatic Let's Encrypt); "tls internal" for LAN/offline.
+      - SITE_TLS=${SITE_TLS:-}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - frontend_dist:/srv/frontend:ro
