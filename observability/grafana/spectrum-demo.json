@@ -157,14 +157,14 @@
         {
           "refId": "A",
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "sum(rate(caddy_http_requests_total{host=\"$host\"}[$__rate_interval]))",
+          "expr": "sum(rate(prometheus_caddy_http_requests_total{host=\"$host\"}[$__rate_interval]))",
           "legendFormat": "req/s"
         }
       ]
     },
     {
       "type": "timeseries",
-      "title": "Errors/s (Caddy 5xx/4xx handler errors)",
+      "title": "Errors/s (Caddy 4xx/5xx responses)",
       "datasource": { "type": "prometheus", "uid": "${datasource}" },
       "gridPos": { "h": 8, "w": 8, "x": 8, "y": 20 },
       "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "drawStyle": "line", "fillOpacity": 10 } }, "overrides": [] },
@@ -172,7 +172,7 @@
         {
           "refId": "A",
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "sum(rate(caddy_http_request_errors_total{host=\"$host\"}[$__rate_interval]))",
+          "expr": "sum(rate(prometheus_caddy_http_request_duration_seconds_count{host=\"$host\", code=~\"[45]..\"}[$__rate_interval]))",
           "legendFormat": "errors/s"
         }
       ]
@@ -187,8 +187,38 @@
         {
           "refId": "A",
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "histogram_quantile(0.99, sum(rate(caddy_http_request_duration_seconds_bucket{host=\"$host\"}[$__rate_interval])) by (le))",
+          "expr": "histogram_quantile(0.99, sum(rate(prometheus_caddy_http_request_duration_seconds_bucket{host=\"$host\"}[$__rate_interval])) by (le))",
           "legendFormat": "p99"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Requests in-flight (Caddy)",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 28 },
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "line", "fillOpacity": 10 } }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "sum(prometheus_caddy_http_requests_in_flight{host=\"$host\"})",
+          "legendFormat": "in-flight"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "HTTP egress (bytes/s, Caddy)",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 28 },
+      "fieldConfig": { "defaults": { "unit": "Bps", "custom": { "drawStyle": "line", "fillOpacity": 10 } }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "sum(rate(prometheus_caddy_http_response_size_bytes_sum{host=\"$host\"}[$__rate_interval]))",
+          "legendFormat": "egress"
         }
       ]
     }

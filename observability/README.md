@@ -73,10 +73,13 @@ egress, message rate, host CPU/mem/disk, per-container memory, and Caddy HTTP
   minus your infra clients (scanners + the server bridge + this monitor). The
   dashboard subtracts a constant you set in its `infra_clients` variable.
 - **Multiple deployments** stay separate via the `host` tag (`TELEGRAF_HOSTNAME`).
-- **Caddy metric names:** the `caddy_http_*` panels assume Telegraf's
-  `metric_version = 2` naming. If those panels are empty, browse the metrics in
-  Grafana / vmui — the influx→VM path can add a `_value` suffix or similar; adjust
-  the panel queries to what's actually stored.
+- **Caddy metric names carry a `prometheus_` prefix.** Telegraf's `inputs.prometheus`
+  namespaces scraped metrics under a `prometheus` measurement, so VM stores them as
+  `prometheus_caddy_http_requests_total`, `prometheus_caddy_http_request_duration_seconds_bucket`,
+  etc. (native inputs like cpu/mem/docker/mqtt_consumer are unprefixed). The dashboard
+  queries already use the prefixed names. The "errors/s" panel derives 4xx/5xx from the
+  request-duration histogram's `code` label (there's no `caddy_http_request_errors_total`
+  until a proxy-level error occurs).
 - **Web analytics** are handled separately by the frontend/Django `ANALYTICS_EMBED`
   (Umami/Plausible/etc.) — see `server/.env.example`. This worker is
   infrastructure metrics only.
