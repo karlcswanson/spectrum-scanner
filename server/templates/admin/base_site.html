@@ -1,0 +1,5 @@
+{% extends "admin/base_site.html" %}
+{# Inject the optional analytics snippet into every admin page's <head>.
+   ANALYTICS_EMBED comes from api.context_processors.analytics_embed; empty =
+   renders nothing. block.super keeps Django's own extrahead content. #}
+{% block extrahead %}{{ block.super }}{{ ANALYTICS_EMBED|safe }}{% endblock %}

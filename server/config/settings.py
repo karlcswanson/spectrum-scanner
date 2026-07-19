@@ -41,9 +41,6 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.gzip.GZipMiddleware',
-    # Inject ANALYTICS_EMBED into Django-rendered HTML (before GZip compresses).
-    # Self-removes from the chain when ANALYTICS_EMBED is unset.
-    'api.middleware.AnalyticsEmbedMiddleware',
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
@@ -54,10 +51,10 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
-# Optional analytics snippet, injected into Django-rendered HTML by
-# api.middleware.AnalyticsEmbedMiddleware. Same value as the frontend's
-# ANALYTICS_EMBED (the Vue SPA injects it at container startup), so one env var
-# covers both the Django and Vue sides.
+# Optional analytics snippet. Injected into the admin <head> via the
+# admin/base_site.html override (api.context_processors.analytics_embed). Same
+# value as the frontend's ANALYTICS_EMBED (the Vue SPA injects it at container
+# startup), so one env var covers both the Django-admin and Vue sides.
 ANALYTICS_EMBED = os.getenv('ANALYTICS_EMBED', '')
 
 ROOT_URLCONF = 'config.urls'
@@ -65,7 +62,7 @@ ROOT_URLCONF = 'config.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
+        'DIRS': [BASE_DIR / 'templates'],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -73,6 +70,7 @@ TEMPLATES = [
                 'django.template.context_processors.request',
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
+                'api.context_processors.analytics_embed',
             ],
         },
     },
