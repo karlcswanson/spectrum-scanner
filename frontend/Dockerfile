@@ -20,7 +20,9 @@ FROM alpine:latest AS production
 
 # Copy built files to a directory that can be mounted
 COPY --from=builder /app/dist /dist
+COPY publish.sh /publish.sh
+RUN chmod +x /publish.sh
 
-# This image just holds the static files
-# They get copied to a shared volume in docker-compose
-CMD ["cp", "-r", "/dist/.", "/srv/frontend/"]
+# On start: inject the ANALYTICS_EMBED snippet (runtime env, optional) into
+# index.html, then copy the static build to the shared volume.
+CMD ["/publish.sh"]

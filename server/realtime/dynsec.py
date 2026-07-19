@@ -226,6 +226,20 @@ def _bridge_role_acls() -> list[dict]:
     ]
 
 
+def _monitor_role_acls() -> list[dict]:
+    """ACLs for a read-only metrics collector (Telegraf -> VictoriaMetrics).
+
+    Broker $SYS stats only. BOTH acls are required: subscribePattern lets it
+    subscribe, publishClientReceive lets messages actually be delivered (subscribe
+    alone leaves it subscribed but with nothing arriving). No spectrum/# access,
+    no publish.
+    """
+    return [
+        {'acltype': 'subscribePattern', 'topic': '$SYS/#', 'allow': True},
+        {'acltype': 'publishClientReceive', 'topic': '$SYS/#', 'allow': True},
+    ]
+
+
 def _staff_role_acls() -> list[dict]:
     """ACLs for the staff-all-scanners role."""
     return [
@@ -296,6 +310,20 @@ def ensure_bridge_client(dynsec: DynSecClient):
         settings.MQTT_BRIDGE_USERNAME,
         settings.MQTT_BRIDGE_PASSWORD,
         roles=[{'rolename': 'bridge-service', 'priority': -1}],
+    )
+
+
+def ensure_monitor_client(dynsec: DynSecClient):
+    """Create the read-only $SYS metrics client — only when MQTT_MONITOR_PASSWORD
+    is set (i.e. the observability/ metrics worker is in use). No-op otherwise, so
+    deployments without metrics don't get a dangling client."""
+    if not settings.MQTT_MONITOR_PASSWORD:
+        return
+    dynsec.create_role('monitor', _monitor_role_acls())
+    dynsec.create_client(
+        settings.MQTT_MONITOR_USERNAME,
+        settings.MQTT_MONITOR_PASSWORD,
+        roles=[{'rolename': 'monitor', 'priority': -1}],
     )
 
 
@@ -444,6 +472,7 @@ def full_sync(dynsec: DynSecClient):
 
     ensure_static_roles(dynsec)
     ensure_bridge_client(dynsec)
+    ensure_monitor_client(dynsec)
     for scanner in Scanner.objects.all():
         ensure_scanner_roles(dynsec, scanner)
     for creds in UserMQTTCredentials.objects.select_related('user').all():

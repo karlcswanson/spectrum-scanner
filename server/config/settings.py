@@ -41,6 +41,9 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.gzip.GZipMiddleware',
+    # Inject ANALYTICS_EMBED into Django-rendered HTML (before GZip compresses).
+    # Self-removes from the chain when ANALYTICS_EMBED is unset.
+    'api.middleware.AnalyticsEmbedMiddleware',
     'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
@@ -50,6 +53,12 @@ MIDDLEWARE = [
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
+
+# Optional analytics snippet, injected into Django-rendered HTML by
+# api.middleware.AnalyticsEmbedMiddleware. Same value as the frontend's
+# ANALYTICS_EMBED (the Vue SPA injects it at container startup), so one env var
+# covers both the Django and Vue sides.
+ANALYTICS_EMBED = os.getenv('ANALYTICS_EMBED', '')
 
 ROOT_URLCONF = 'config.urls'
 
@@ -226,6 +235,10 @@ MQTT_TOPIC_PREFIX = os.getenv('MQTT_TOPIC_PREFIX', 'spectrum')
 # MQTT bridge service credentials (subscribe-only internal service)
 MQTT_BRIDGE_USERNAME = os.getenv('MQTT_BRIDGE_USERNAME', '')
 MQTT_BRIDGE_PASSWORD = os.getenv('MQTT_BRIDGE_PASSWORD', '')
+# Read-only $SYS metrics user (optional — dynsec provisions it only when the
+# password is set; must match observability/.env's MQTT_MONITOR_PASSWORD).
+MQTT_MONITOR_USERNAME = os.getenv('MQTT_MONITOR_USERNAME', 'monitor')
+MQTT_MONITOR_PASSWORD = os.getenv('MQTT_MONITOR_PASSWORD', '')
 # MQTT Dynamic Security admin credentials (for provisioning clients/roles)
 MQTT_DYNSEC_USERNAME = os.getenv('MOSQUITTO_DYNSEC_USERNAME', 'admin')
 MQTT_DYNSEC_PASSWORD = os.getenv('MOSQUITTO_DYNSEC_PASSWORD', '')
