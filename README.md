@@ -1,8 +1,5 @@
 # Spectrum Scanner
 
-![Built with Claude](https://img.shields.io/badge/Built_with-Claude-D97757?style=for-the-badge&logo=claude&logoColor=white)
-
-
 Multi-band RF spectrum monitor for frequency coordination.
 
 ## Features
@@ -94,7 +91,7 @@ Run a scanner with local web UI at `http://localhost:8080`:
 cd scanner
 
 # With ADALM-Pluto
-go run ./cmd/scanner -config ../config.yaml
+go run ./cmd/scanner -config config.yaml
 
 # With OWON spectrum analyzer
 go run ./cmd/scanner -backend owon -addr 10.10.125.155
@@ -134,10 +131,24 @@ docker compose -f docker-compose.prod.yml up -d --build
 
 | Band | Frequency Range | Use Case           |
 |------|-----------------|--------------------|
-| UHF | 470 - 608 MHz | Wireless mics, IEMs |
+| VHF | 174 - 216 MHz | Wireless mics, IEMs (VHF high) |
 | Business Radio | 450 - 470 MHz | Two-way radios     |
+| UHF | 470 - 636 MHz | Wireless mics, IEMs |
+| 900 MHz ISM | 902 - 928 MHz | Unlicensed mic gear |
+| STL | 944 - 960 MHz | Studio-transmitter link |
 | DECT | 1920 - 1930 MHz | Intercom           |
 | WiFi 2.4 | 2400 - 2500 MHz | WiFi, Intercom     |
+| CBRS | 3550 - 3700 MHz | Private LTE / 5G (venues) |
+| WiFi 5 | 5150 - 5850 MHz | WiFi (UNII-1..4)   |
+
+Only **UHF** is enabled by default. The canonical list lives in
+[`common/bands.json`](common/bands.json) (mirroring iOS
+`SpectrumScanner/Models/Models.swift` `Band.defaultBands`); keep
+`scanner/config.yaml.example`, the scanner's `config.go` defaults, the calibrate tool,
+and `frontend/src/constants.js` `DEFAULT_BANDS` in sync with it.
+
+
+![Built with Claude](https://img.shields.io/badge/Built_with-Claude-D97757?style=for-the-badge&logo=claude&logoColor=white)
 
 ## License
 

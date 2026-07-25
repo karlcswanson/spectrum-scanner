@@ -31,14 +31,18 @@ Runs a web server with embedded Vue frontend at `http://localhost:8080`.
   -addr string     Backend address (IP, URL, or serial port)
   -backend string  Backend type: pluto, owon, tinysa
   -config string   Config file path
-  -auto-start      Start scanning on startup
+  -no-store        Disable local scan history storage
+  -version         Print version and exit
 ```
+
+Scanning on startup is controlled by `auto_start` in the config file (on by
+default), not a CLI flag.
 
 ### Examples
 
 ```bash
 # Pluto via USB network (default)
-go run ./cmd/scanner -config ../config.yaml
+go run ./cmd/scanner -config config.yaml
 
 # Pluto with explicit address
 go run ./cmd/scanner -backend pluto -addr https://192.168.2.1
@@ -49,8 +53,8 @@ go run ./cmd/scanner -backend owon -addr 10.10.125.155
 # tinySA Ultra
 go run ./cmd/scanner -backend tinysa -addr /dev/tty.usbmodem4001
 
-# Custom port with auto-start
-go run ./cmd/scanner -listen :9000 -auto-start
+# Custom port
+go run ./cmd/scanner -listen :9000
 ```
 
 ### Environment Variables

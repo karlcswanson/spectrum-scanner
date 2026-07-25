@@ -16,38 +16,23 @@ import (
 func DefaultConfig() *models.Config {
 	return &models.Config{
 		DeviceID:    uuid.New().String(),
-		Name:        "Spectrum Scanner",
-		Description: "ADALM-Pluto Scanner",
 		DwellTimeMs: 50,
 		Mode:        "Average",
 		RxGain:      30,       // 30 dB provides linear response
 		RxGainMode:  "manual", // manual gain for consistent sweeps
 		AutoStart:   true,     // Start scanning on launch
+		// Default bands mirror common/bands.json (the source of truth, from iOS
+		// Band.defaultBands). Only UHF is enabled by default. Keep in sync.
 		Bands: []models.Band{
-			{
-				Name:    "Business Radio",
-				StartHz: 450_000_000,
-				StopHz:  470_000_000,
-				Enabled: false,
-			},
-			{
-				Name:    "UHF",
-				StartHz: 470_000_000,
-				StopHz:  608_000_000,
-				Enabled: true,
-			},
-			{
-				Name:    "DECT",
-				StartHz: 1_920_000_000,
-				StopHz:  1_930_000_000,
-				Enabled: false,
-			},
-			{
-				Name:    "WiFi 2.4",
-				StartHz: 2_400_000_000,
-				StopHz:  2_500_000_000,
-				Enabled: false,
-			},
+			{Name: "VHF", StartHz: 174_000_000, StopHz: 216_000_000, Enabled: false},
+			{Name: "Business Radio", StartHz: 450_000_000, StopHz: 470_000_000, Enabled: false},
+			{Name: "UHF", StartHz: 470_000_000, StopHz: 636_000_000, Enabled: true},
+			{Name: "900 MHz ISM", StartHz: 902_000_000, StopHz: 928_000_000, Enabled: false},
+			{Name: "STL", StartHz: 944_000_000, StopHz: 960_000_000, Enabled: false},
+			{Name: "DECT", StartHz: 1_920_000_000, StopHz: 1_930_000_000, Enabled: false},
+			{Name: "WiFi 2.4", StartHz: 2_400_000_000, StopHz: 2_500_000_000, Enabled: false},
+			{Name: "CBRS", StartHz: 3_550_000_000, StopHz: 3_700_000_000, Enabled: false},
+			{Name: "WiFi 5", StartHz: 5_150_000_000, StopHz: 5_850_000_000, Enabled: false},
 		},
 	}
 }

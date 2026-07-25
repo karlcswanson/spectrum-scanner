@@ -3,7 +3,9 @@ package scanner
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"strings"
 	"sync"
 
 	"scanner/internal/models"
@@ -36,6 +38,10 @@ type Engine struct {
 
 	// Config change callback (for notifying frontends of remote config changes)
 	onConfigChange ConfigChangeFunc
+
+	// Persists the config after a remote change (e.g. band edits via MQTT).
+	// Wired by the caller to config.SaveToFile; nil = no persistence.
+	configSaveFunc func() error
 }
 
 // NewEngine creates a new sweep engine with the given backend.
@@ -110,6 +116,14 @@ func (e *Engine) SetConfigChangeCallback(fn ConfigChangeFunc) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.onConfigChange = fn
+}
+
+// SetConfigSaveFunc sets the function used to persist config after a remote
+// change (e.g. band edits over MQTT). Wired by the caller to config.SaveToFile.
+func (e *Engine) SetConfigSaveFunc(fn func() error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.configSaveFunc = fn
 }
 
 // notifyStatusChange calls the status change callback if set
@@ -364,21 +378,50 @@ func (e *Engine) HandleStop() {
 }
 
 // HandleBands implements mqtt.CommandHandler - updates band configuration
+// HandleBands applies a remote band update. The payload is the *complete*
+// desired band set (declarative): the engine validates it, replaces its band
+// list, persists to the config file, and republishes the retained config so the
+// server and browsers reconcile. An invalid update is rejected and the current
+// config is left untouched. See docs/remote-band-editing.md.
 func (e *Engine) HandleBands(bands []mqtt.BandConfig) error {
-	e.mu.Lock()
-
-	// Update band enabled states
-	for _, newBand := range bands {
-		for i := range e.config.Bands {
-			if e.config.Bands[i].Name == newBand.Name {
-				e.config.Bands[i].Enabled = newBand.Enabled
-				log.Printf("Band %s enabled=%v", newBand.Name, newBand.Enabled)
-				break
-			}
-		}
+	// Validate before mutating so a bad command can't corrupt the config.
+	var minHz, maxHz int64
+	if e.backend != nil {
+		minHz, maxHz = e.backend.FrequencyRange()
+	}
+	if err := validateBands(bands, minHz, maxHz); err != nil {
+		log.Printf("HandleBands: rejecting invalid band update: %v", err)
+		return fmt.Errorf("invalid band update: %w", err)
 	}
 
-	// Re-publish config
+	e.mu.Lock()
+
+	// Authoritative replace: match/add/remove all happen by taking the desired
+	// list wholesale.
+	newBands := make([]models.Band, len(bands))
+	for i, b := range bands {
+		newBands[i] = models.Band{
+			Name:    strings.TrimSpace(b.Name),
+			StartHz: b.StartHz,
+			StopHz:  b.StopHz,
+			Enabled: b.Enabled,
+		}
+	}
+	e.config.Bands = newBands
+
+	// Persist (under the lock so a concurrent update can't interleave the file
+	// write). Band commands are rare and user-driven, so the brief hold is fine.
+	if e.configSaveFunc != nil {
+		if err := e.configSaveFunc(); err != nil {
+			log.Printf("HandleBands: applied %d band(s) but failed to persist: %v", len(newBands), err)
+		} else {
+			log.Printf("HandleBands: applied and persisted %d band(s)", len(newBands))
+		}
+	} else {
+		log.Printf("HandleBands: applied %d band(s) (persistence not configured)", len(newBands))
+	}
+
+	// Re-publish config (retained) so the server + browsers reconcile.
 	if e.mqtt != nil && e.mqtt.IsConnected() {
 		e.mqtt.PublishConfig()
 	}
@@ -388,6 +431,40 @@ func (e *Engine) HandleBands(bands []mqtt.BandConfig) error {
 	// Notify frontends of config change (outside lock to avoid deadlock)
 	e.notifyConfigChange()
 
+	return nil
+}
+
+// validateBands checks a desired band set before it is applied. minHz/maxHz are
+// the backend's supported range; pass 0 to skip the hardware-range check.
+func validateBands(bands []mqtt.BandConfig, minHz, maxHz int64) error {
+	if len(bands) == 0 {
+		return fmt.Errorf("band list is empty")
+	}
+	seen := make(map[string]bool, len(bands))
+	for _, b := range bands {
+		name := strings.TrimSpace(b.Name)
+		if name == "" {
+			return fmt.Errorf("band has an empty name")
+		}
+		key := strings.ToLower(name)
+		if seen[key] {
+			return fmt.Errorf("duplicate band name %q", name)
+		}
+		seen[key] = true
+
+		if b.StartHz <= 0 || b.StopHz <= 0 {
+			return fmt.Errorf("band %q: frequencies must be positive", name)
+		}
+		if b.StartHz >= b.StopHz {
+			return fmt.Errorf("band %q: start (%d Hz) must be below stop (%d Hz)", name, b.StartHz, b.StopHz)
+		}
+		if minHz > 0 && b.StartHz < minHz {
+			return fmt.Errorf("band %q: start %d Hz is below the hardware minimum %d Hz", name, b.StartHz, minHz)
+		}
+		if maxHz > 0 && b.StopHz > maxHz {
+			return fmt.Errorf("band %q: stop %d Hz is above the hardware maximum %d Hz", name, b.StopHz, maxHz)
+		}
+	}
 	return nil
 }
 

@@ -1,0 +1,14 @@
+{
+  "$comment": "Canonical default frequency bands — the single source of truth, mirroring iOS SpectrumScanner/Models/Models.swift `Band.defaultBands`. Frequencies in Hz. Only UHF is enabled by default (where most wireless-mic activity lives). Keep in sync: config.yaml.example, scanner config.go DefaultConfig, the calibrate defaults, the README band table, and frontend src/constants.js DEFAULT_BANDS (used by the band editor's Reset to defaults). See docs/remote-band-editing.md.",
+  "bands": [
+    {"name": "VHF",            "start_hz":  174000000, "stop_hz":  216000000, "enabled": false, "description": "VHF high — ATSC Ch 7-13; some wireless mics + IEMs."},
+    {"name": "Business Radio", "start_hz":  450000000, "stop_hz":  470000000, "enabled": false, "description": "Land-mobile / two-way radio business band."},
+    {"name": "UHF",            "start_hz":  470000000, "stop_hz":  636000000, "enabled": true,  "description": "UHF mic band (post-incentive-auction); channel overlay to Ch 51 (698 MHz)."},
+    {"name": "900 MHz ISM",    "start_hz":  902000000, "stop_hz":  928000000, "enabled": false, "description": "900 MHz ISM — Shure G-band and similar unlicensed mic gear."},
+    {"name": "STL",            "start_hz":  944000000, "stop_hz":  960000000, "enabled": false, "description": "Broadcast Studio-Transmitter Link."},
+    {"name": "DECT",           "start_hz": 1920000000, "stop_hz": 1930000000, "enabled": false, "description": "DECT 6.0 (US/NA) intercom — 5 channels @ 1.728 MHz."},
+    {"name": "WiFi 2.4",       "start_hz": 2400000000, "stop_hz": 2500000000, "enabled": false, "description": "WiFi 2.4 GHz ISM."},
+    {"name": "CBRS",           "start_hz": 3550000000, "stop_hz": 3700000000, "enabled": false, "description": "CBRS 3.5 GHz — private LTE / 5G for stadium and venue networks."},
+    {"name": "WiFi 5",         "start_hz": 5150000000, "stop_hz": 5850000000, "enabled": false, "description": "WiFi 5 — UNII-1 through UNII-4; a long sweep on Pluto, so off by default."}
+  ]
+}

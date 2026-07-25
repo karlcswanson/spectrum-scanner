@@ -55,9 +55,7 @@ export function SetBandEnabled(arg1:string,arg2:boolean):Promise<void>;
 
 export function SetGain(arg1:number,arg2:string):Promise<void>;
 
-export function SetMQTTConfig(arg1:boolean,arg2:string,arg3:string,arg4:string,arg5:string):Promise<void>;
-
-export function SetName(arg1:string):Promise<void>;
+export function SetMQTTConfig(arg1:boolean,arg2:string,arg3:string,arg4:string):Promise<void>;
 
 export function SetWebConfig(arg1:boolean,arg2:number):Promise<void>;
 

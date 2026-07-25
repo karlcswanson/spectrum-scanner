@@ -1,0 +1,48 @@
+#cloud-config
+# Ubuntu Server LTS (22.04/24.04) — server prep for the Spectrum Scanner stack.
+# Creates a deploy user with full Docker access and installs Docker CE + the
+# compose plugin from Docker's official apt repo (arch-aware: works on amd64 and
+# arm64/Graviton). Does NOT deploy the app — that's a separate step once the box
+# is up (ssh in, clone, set .env, `docker compose up`).
+#
+# Validate before use:  cloud-init schema --config-file cloud-init.yaml
+
+# Create the docker group up front so the user can join it before Docker is
+# installed (Docker's postinstall adopts an existing group without complaint).
+groups:
+  - docker
+
+users:
+  # Keep the distro's default user (e.g. `ubuntu` with the cloud keypair) as a
+  # fallback so a typo below can't lock you out. Remove if you want only `spectrum`.
+  - default
+  - name: spectrum
+    gecos: Spectrum deploy user
+    shell: /bin/bash
+    groups: [docker, sudo]          # full Docker access (no sudo needed for docker) + sudo
+    sudo: ALL=(ALL) NOPASSWD:ALL     # drop NOPASSWD if you prefer a sudo password
+    lock_passwd: true                # SSH-key login only, no password
+    ssh_authorized_keys:
+      - __SSH_PUBLIC_KEY__           # <-- paste your public key (ssh-ed25519 AAAA... / ssh-rsa ...)
+
+package_update: true
+packages:
+  - ca-certificates
+  - curl
+  - git
+
+runcmd:
+  # ── Docker CE + compose plugin from the official repo (arch-aware) ──────────
+  - install -m 0755 -d /etc/apt/keyrings
+  - curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+  - chmod a+r /etc/apt/keyrings/docker.asc
+  - >
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc]
+    https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable"
+    > /etc/apt/sources.list.d/docker.list
+  - apt-get update
+  - apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+  - systemctl enable --now docker
+  # Ensure the deploy user is in the docker group even if the group was (re)created
+  # by the Docker install rather than the groups: block above.
+  - usermod -aG docker spectrum

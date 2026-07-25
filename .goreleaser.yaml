@@ -1,0 +1,45 @@
+# GoReleaser config for the scanner binary.
+# The Go module lives in scanner/; the binary embeds the standalone Vue build
+# from scanner/internal/api/web, so the release workflow builds that FIRST.
+# Run: goreleaser release --clean   (on a v* tag, via .github/workflows/release.yml)
+version: 2
+
+project_name: spectrum-scanner
+
+builds:
+  - id: scanner
+    dir: scanner            # go.mod is here
+    main: ./cmd/scanner
+    binary: spectrum-scanner
+    env:
+      - CGO_ENABLED=0       # pure Go (serial/net) -> clean cross-compile
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+      - -X scanner/internal/version.Version={{ .Version }}
+      - -X scanner/internal/version.Commit={{ .ShortCommit }}
+      - -X scanner/internal/version.Date={{ .Date }}
+    # Exactly the requested targets: macOS (Apple Silicon), Pi (arm64), Windows 64-bit.
+    targets:
+      - darwin_arm64
+      - linux_arm64
+      - windows_amd64
+
+archives:
+  - formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-dev"
+
+release:
+  github:
+    owner: karlcswanson
+    name: spectrum-scanner

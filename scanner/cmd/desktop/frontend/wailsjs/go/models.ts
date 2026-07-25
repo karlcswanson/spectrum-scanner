@@ -224,29 +224,23 @@ export namespace models {
 	    broker: string;
 	    id: string;
 	    token: string;
-	    name: string;
-	    location: string;
 	    topic_prefix: string;
-	
+
 	    static createFrom(source: any = {}) {
 	        return new MQTTConfig(source);
 	    }
-	
+
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.enabled = source["enabled"];
 	        this.broker = source["broker"];
 	        this.id = source["id"];
 	        this.token = source["token"];
-	        this.name = source["name"];
-	        this.location = source["location"];
 	        this.topic_prefix = source["topic_prefix"];
 	    }
 	}
 	export class Config {
 	    device_id: string;
-	    name: string;
-	    description: string;
 	    bands: Band[];
 	    dwell_time_ms: number;
 	    mode: string;
@@ -265,8 +259,6 @@ export namespace models {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.device_id = source["device_id"];
-	        this.name = source["name"];
-	        this.description = source["description"];
 	        this.bands = this.convertValues(source["bands"], Band);
 	        this.dwell_time_ms = source["dwell_time_ms"];
 	        this.mode = source["mode"];

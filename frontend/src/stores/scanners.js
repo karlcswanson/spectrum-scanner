@@ -252,13 +252,17 @@ export const useScannersStore = defineStore('scanners', () => {
 
   function handleConfig(scannerId, data) {
     logger.debug('handleConfig:', scannerId, 'bands:', data.bands)
+    const existing = scanners.value[scannerId] || {}
     scanners.value[scannerId] = {
-      ...scanners.value[scannerId],
+      ...existing,
       id: scannerId,
-      name: data.name || scannerId,
-      scanner_type: data.type || 'unknown',
-      location: data.location || '',
-      description: data.description || '',
+      scanner_type: data.type || existing.scanner_type || 'unknown',
+      // Identity (name/location/description) is owned by the server model and
+      // arrives via REST — the MQTT config message no longer carries it. Preserve
+      // what REST loaded; only fall back to the UUID for a never-before-seen unit.
+      name: existing.name || scannerId,
+      location: existing.location || '',
+      description: existing.description || '',
       bands: data.bands || [],
       settings: data.settings || {},
       online: true,
@@ -578,6 +582,62 @@ export const useScannersStore = defineStore('scanners', () => {
     return monitoredFreqs.value[scannerId] || []
   }
 
+  function getCsrfToken() {
+    for (let c of document.cookie.split(';')) {
+      c = c.trim()
+      if (c.startsWith('csrftoken=')) return c.substring('csrftoken='.length)
+    }
+    return null
+  }
+
+  async function _mfRequest(url, method, body) {
+    const csrf = getCsrfToken()
+    const headers = { 'Content-Type': 'application/json' }
+    if (csrf) headers['X-CSRFToken'] = csrf
+    const res = await fetch(url, {
+      method,
+      headers,
+      credentials: 'include',
+      body: body ? JSON.stringify(body) : undefined,
+    })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    return res.status === 204 ? null : res.json()
+  }
+
+  // Category labels for the editor combobox (predefined + any in use, e.g. a
+  // custom "Public Safety" already in the DB). Single source: the API.
+  const monitoredCategories = ref([])
+  async function fetchMonitoredCategories() {
+    try {
+      const res = await fetch('/api/monitored-frequencies/categories/', { credentials: 'include' })
+      if (res.ok) monitoredCategories.value = await res.json()
+    } catch (error) {
+      logger.error('Failed to fetch categories:', error)
+    }
+  }
+  function getMonitoredCategories() {
+    return monitoredCategories.value
+  }
+
+  // Monitored-frequency CRUD. Server enforces permissions (staff / rw on the
+  // scanner); the scanner scope is applied server-side from `scannerId`.
+  async function createMonitoredFrequency(scannerId, data) {
+    const result = await _mfRequest('/api/monitored-frequencies/', 'POST', { ...data, scanner: scannerId })
+    await Promise.all([fetchMonitoredFrequencies(scannerId), fetchMonitoredCategories()])
+    return result
+  }
+
+  async function updateMonitoredFrequency(scannerId, id, data) {
+    const result = await _mfRequest(`/api/monitored-frequencies/${id}/`, 'PATCH', data)
+    await Promise.all([fetchMonitoredFrequencies(scannerId), fetchMonitoredCategories()])
+    return result
+  }
+
+  async function deleteMonitoredFrequency(scannerId, id) {
+    await _mfRequest(`/api/monitored-frequencies/${id}/`, 'DELETE')
+    await fetchMonitoredFrequencies(scannerId)
+  }
+
   // Generate WWB-compatible CSV from scan data
   function generateCSV(scan) {
     if (!scan || !scan.power) return ''
@@ -778,6 +838,11 @@ export const useScannersStore = defineStore('scanners', () => {
     fetchScanners,
     fetchMonitoredFrequencies,
     getMonitoredFrequencies,
+    fetchMonitoredCategories,
+    getMonitoredCategories,
+    createMonitoredFrequency,
+    updateMonitoredFrequency,
+    deleteMonitoredFrequency,
     fetchGroups,
     fetchGroup,
     exportScanCSV,

@@ -710,13 +710,43 @@ function updateTraces() {
     const iEnd = Math.min(len - 1, Math.ceil((hiHz - hz_lo) / hzPerSample))
     const visibleSamples = iEnd - iStart + 1
 
-    // Decimate based on visible samples vs pixel width
+    // Downsample to pixel width. When more than one sample maps to a pixel
+    // column we keep BOTH the min and max of that column (a min/max envelope)
+    // rather than a single strided sample — otherwise a narrow peak that lands
+    // between the sampled indices is dropped entirely and only reappears on
+    // zoom. Max preserves signal peaks; min keeps the noise floor honest.
     const step = Math.max(1, Math.floor(visibleSamples / plotWidth))
 
-    for (let i = iStart; i <= iEnd; i += step) {
+    const pushPoint = (i) => {
       const freq = hz_lo + (i / len) * (hz_hi - hz_lo)
       const db = Math.max(minDb, Math.min(maxDb, power[i]))
       points.push({ x: xScale(freq), y: yScale(db) })
+    }
+
+    if (step === 1) {
+      // One sample (or fewer) per pixel — draw them directly.
+      for (let i = iStart; i <= iEnd; i++) pushPoint(i)
+    } else {
+      for (let i = iStart; i <= iEnd; i += step) {
+        const binEnd = Math.min(i + step, iEnd + 1)
+        let minI = i
+        let maxI = i
+        for (let j = i + 1; j < binEnd; j++) {
+          if (power[j] < power[minI]) minI = j
+          if (power[j] > power[maxI]) maxI = j
+        }
+        // Emit both extremes in ascending-frequency order so the polyline stays
+        // monotonic in x and draws the column's full vertical extent.
+        if (minI === maxI) {
+          pushPoint(minI)
+        } else if (minI < maxI) {
+          pushPoint(minI)
+          pushPoint(maxI)
+        } else {
+          pushPoint(maxI)
+          pushPoint(minI)
+        }
+      }
     }
     return points
   }
@@ -1320,13 +1350,17 @@ function getZoomElement() {
 
 function resetZoom() {
   if (!svgRef.value || !chartCache.zoomBehavior) return
+  // Instant, matching setZoom — this is the spectrogram-driven reset, and the
+  // waterfall snaps to full band immediately, so the two must reset together.
   getZoomElement()
-    .transition().duration(300)
     .call(chartCache.zoomBehavior.transform, d3.zoomIdentity)
 }
 
 // Programmatically set zoom to a given frequency domain [loHz, hiHz]
-// Used by parent to sync zoom from spectrogram
+// Used by parent to sync zoom from the spectrogram. Applied instantly (no transition):
+// the spectrogram jumps straight to the new window, so an eased animation here would
+// just lag the waterfall during a continuous pan and read as the two charts drifting
+// apart. Instant keeps them locked together.
 function setZoom(domain) {
   if (!svgRef.value || !chartCache.zoomBehavior || !chartCache.xScaleBase) return
   const [loHz, hiHz] = domain
@@ -1334,7 +1368,6 @@ function setZoom(domain) {
   const k = (stopHz - startHz) / (hiHz - loHz)
   const tx = -xScaleBase(loHz) * k
   getZoomElement()
-    .transition().duration(300)
     .call(zoomBehavior.transform, d3.zoomIdentity.translate(tx, 0).scale(k))
 }
 

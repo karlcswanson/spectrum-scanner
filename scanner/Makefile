@@ -3,6 +3,15 @@
 # Default target
 all: build
 
+# Version metadata injected into the binary (git-derived; override any on the CLI).
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
+DATE    ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+LDFLAGS := -s -w \
+	-X scanner/internal/version.Version=$(VERSION) \
+	-X scanner/internal/version.Commit=$(COMMIT) \
+	-X scanner/internal/version.Date=$(DATE)
+
 # Build Vue frontend for standalone scanner
 build-frontend:
 	cd ../frontend && npm run build:standalone
@@ -13,17 +22,17 @@ build-frontend:
 
 # Build for local development (macOS/Linux)
 build: build-frontend
-	go build -o bin/scanner ./cmd/scanner
+	go build -ldflags="$(LDFLAGS)" -o bin/scanner ./cmd/scanner
 
 # Cross-compile for ADALM Pluto (ARM)
 build-arm: build-frontend
 	GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=0 \
-		go build -ldflags="-s -w" -o bin/scanner-arm ./cmd/scanner
+		go build -ldflags="$(LDFLAGS)" -o bin/scanner-arm ./cmd/scanner
 
 # Cross-compile for GL.iNet Spitz AX / ARM64 routers
 build-glinet: build-frontend
 	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 \
-		go build -ldflags="-s -w" -o bin/scanner-glinet ./cmd/scanner
+		go build -ldflags="$(LDFLAGS)" -o bin/scanner-glinet ./cmd/scanner
 
 # Build calibration tool
 calibrate:

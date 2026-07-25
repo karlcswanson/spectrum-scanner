@@ -24,7 +24,7 @@ bands by:
 # Build the tool
 go build -o calibrate ./cmd/calibrate
 
-# Run with defaults: sweeps the full iOS band set at -28 dBm, gain 30
+# Run with defaults: sweeps the low-output (<=800 MHz) band set at -28 dBm, gain 30
 ./calibrate
 
 # Custom bands (repeat -band as needed), level and gain
@@ -56,6 +56,8 @@ out of scope here; calibrate those separately if you need them.
 | `-pluto` | `https://192.168.2.1` | Pluto maia-httpd URL |
 | `-output` | `calibration.yaml` | YAML output (paste into `config.yaml`) |
 | `-json` | `calibration.json` | JSON output (iOS client handoff) |
+| `-serial` | *(none)* | Physical unit tag; redirects output to `calibrations/<serial>/` |
+| `-outdir` | `calibrations` | Parent dir for per-unit folders (used with `-serial`) |
 | `-level` | `-28.0` | tinySA output level in dBm (use whole numbers) |
 | `-pad` | `0.0` | Inline attenuator in dB; recorded reference is `level - pad` |
 | `-gain` | `30.0` | Pluto RX gain during calibration |

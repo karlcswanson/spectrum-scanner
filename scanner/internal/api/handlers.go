@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"scanner/internal/models"
+	"scanner/internal/version"
 )
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -38,6 +39,13 @@ func (s *Server) handleGetRadio(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(info)
 }
 
+func (s *Server) handleGetVersion(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(version.Get()); err != nil {
+		log.Printf("Error encoding version: %v", err)
+	}
+}
+
 func (s *Server) handleGetStatus(w http.ResponseWriter, r *http.Request) {
 	var currentBand *string
 	var scanning bool
@@ -50,8 +58,7 @@ func (s *Server) handleGetStatus(w http.ResponseWriter, r *http.Request) {
 
 	status := models.ScannerStatus{
 		ID:          s.config.DeviceID,
-		Name:        s.config.Name,
-		Description: s.config.Description,
+		Name:        s.config.DeviceID, // identity (name/location) is server-side; label with the ID here
 		Online:      s.engine != nil,
 		Scanning:    scanning,
 		CurrentBand: currentBand,
@@ -77,13 +84,8 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Update configuration
-	if newConfig.Name != "" {
-		s.config.Name = newConfig.Name
-	}
-	if newConfig.Description != "" {
-		s.config.Description = newConfig.Description
-	}
+	// Update configuration. Identity (name/location/description) is managed
+	// server-side on the Scanner model, not editable from the scanner config.
 	if newConfig.DwellTimeMs > 0 {
 		s.config.DwellTimeMs = newConfig.DwellTimeMs
 	}
@@ -102,7 +104,7 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	// Persist to disk if callback set
 	s.saveConfig()
 
-	log.Printf("Configuration updated: %s", s.config.Name)
+	log.Printf("Configuration updated: %s", s.config.DeviceID)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(s.config)

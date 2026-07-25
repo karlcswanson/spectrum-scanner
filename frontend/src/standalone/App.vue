@@ -25,7 +25,6 @@ const settingsTab = ref('scanner') // 'scanner' or 'server'
 const mqttBroker = ref('')
 const mqttId = ref('')
 const mqttToken = ref('')
-const mqttLocation = ref('')
 const webPort = ref(8080)
 
 // Sync MQTT config from store
@@ -34,7 +33,6 @@ watch(() => store.mqttConfig, (cfg) => {
     mqttBroker.value = cfg.broker || ''
     mqttId.value = cfg.id || ''
     mqttToken.value = cfg.token || ''
-    mqttLocation.value = cfg.location || ''
   }
 }, { immediate: true })
 
@@ -74,15 +72,11 @@ async function handleExport(bandName) {
     }
   } else {
     // Browser download
-    store.downloadCSV(bandName, store.config?.name)
+    store.downloadCSV(bandName, store.config?.device_id)
   }
 }
 
 // Settings handlers
-function handleUpdateName(name) {
-  store.updateName(name)
-}
-
 function handleUpdateGain(value, mode) {
   store.updateGain(value, mode)
 }
@@ -98,7 +92,6 @@ async function saveMQTTConfig() {
     broker: mqttBroker.value,
     id: mqttId.value,
     token: mqttToken.value,
-    location: mqttLocation.value,
   })
 }
 
@@ -136,8 +129,8 @@ async function toggleWebServer() {
         <div class="flex items-center gap-4">
           <img src="/logo.png" alt="Spectrum Scanner" class="h-8 w-8" />
           <h1 class="text-xl font-bold text-white">Spectrum Scanner</h1>
-          <span v-if="store.config?.name && store.config.name !== 'Spectrum Scanner'" class="text-gray-400">
-            {{ store.config.name }}
+          <span v-if="store.config?.device_id" class="text-gray-400 font-mono text-sm">
+            {{ store.config.device_id.slice(0, 8) }}
           </span>
         </div>
 
@@ -232,10 +225,8 @@ async function toggleWebServer() {
         <!-- Scanner settings -->
         <ScannerSettings
           v-if="settingsTab === 'scanner'"
-          :config="store.config"
           :bands="store.bands"
           :settings="store.settings"
-          @update:name="handleUpdateName"
           @update:gain="handleUpdateGain"
           @toggle-band="handleToggleBand"
         />
@@ -316,15 +307,6 @@ async function toggleWebServer() {
                       class="w-full px-3 py-1.5 bg-gray-800 border border-gray-600 rounded text-sm"
                     />
                   </div>
-                </div>
-                <div>
-                  <label class="block text-xs text-gray-400 mb-1">Location</label>
-                  <input
-                    v-model="mqttLocation"
-                    type="text"
-                    placeholder="e.g. Stage Left, FOH, Studio A"
-                    class="w-full px-3 py-1.5 bg-gray-800 border border-gray-600 rounded text-sm"
-                  />
                 </div>
                 <button
                   @click="saveMQTTConfig"

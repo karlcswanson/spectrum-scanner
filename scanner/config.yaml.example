@@ -1,0 +1,87 @@
+# Spectrum Scanner Configuration
+# Copy this to config.yaml and customize for your setup
+
+# Auto-start scanning when the scanner boots
+auto_start: true
+
+# Scan settings
+dwell_time_ms: 200
+mode: Average  # Average or PeakDetect
+
+# Gain settings
+# Use manual mode for consistent sweeps across the spectrum
+rx_gain: 30           # RX gain in dB (0-73)
+rx_gain_mode: Manual  # manual, slow_attack, or fast_attack
+
+# Frequency bands to scan. Each band can be enabled/disabled independently.
+# This is the default set from common/bands.json (the source of truth, mirroring
+# iOS Band.defaultBands). UHF is enabled by default — the primary wireless-mic
+# band; enable others as needed for your event.
+bands:
+  - name: VHF
+    start_mhz: 174
+    stop_mhz: 216
+    enabled: false
+
+  - name: Business Radio
+    start_mhz: 450
+    stop_mhz: 470
+    enabled: false
+
+  - name: UHF
+    start_mhz: 470
+    stop_mhz: 636
+    enabled: true
+
+  - name: 900 MHz ISM
+    start_mhz: 902
+    stop_mhz: 928
+    enabled: false
+
+  - name: STL
+    start_mhz: 944
+    stop_mhz: 960
+    enabled: false
+
+  - name: DECT
+    start_mhz: 1920
+    stop_mhz: 1930
+    enabled: false
+
+  - name: WiFi 2.4
+    start_mhz: 2400
+    stop_mhz: 2500
+    enabled: false
+
+  - name: CBRS
+    start_mhz: 3550
+    stop_mhz: 3700
+    enabled: false
+
+  - name: WiFi 5
+    start_mhz: 5150
+    stop_mhz: 5850
+    enabled: false
+
+# MQTT publishing (optional)
+# Configure to publish scan data to a central server
+mqtt:
+  enabled: false  # Set to true and configure below
+
+  # broker scheme selects the transport. Both require the id/token below — the
+  # broker runs allow_anonymous=false and rejects unauthenticated clients:
+  #   wss://host/mqtt    MQTT over WebSocket+TLS (public server via Caddy) — encrypted; default
+  #   mqtt://host:1883   plain MQTT — authenticated but NOT encrypted (token in
+  #                      cleartext); trusted LAN / ZeroTier only
+  broker: "wss://your-domain/mqtt"
+  id: "your-scanner-uuid"        # Get from Django admin after creating scanner
+  token: "your-scanner-token"    # Get from Django admin after creating scanner
+  # topic_prefix: "spectrum"     # Default: "spectrum"
+
+  # TLS options for wss:// brokers. A public cert (Let's Encrypt via
+  # Caddy) needs neither. For a private CA (offline event appliance):
+  #   ca_file: "/etc/spectrum-scanner/ca.pem"   # trust a specific CA, or
+  #   tls_insecure: true                        # skip verification (trusted LAN only)
+
+  # Note: scanner name/location/description are set on the server (Django admin
+  # or the web UI), keyed by the scanner id above — not configured here.

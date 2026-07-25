@@ -225,20 +225,6 @@ export const useStandaloneStore = defineStore('standalone', () => {
     }
   }
 
-  async function updateName(name) {
-    try {
-      const response = await fetch(`${apiBase}/api/config`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name }),
-      })
-      if (!response.ok) throw new Error(`HTTP ${response.status}`)
-      await fetchConfig()
-    } catch (err) {
-      lastError.value = { message: `Name: ${err.message}`, timestamp: Date.now() }
-    }
-  }
-
   // Toggle single band enabled state
   function toggleBand(bandName) {
     const updated = bands.value.map(b => ({
@@ -254,13 +240,12 @@ export const useStandaloneStore = defineStore('standalone', () => {
   async function setMQTTConfig(cfg) {
     if (wailsApp?.SetMQTTConfig) {
       try {
-        // Go function expects individual arguments: (enabled, broker, id, token, location)
+        // Go function expects individual arguments: (enabled, broker, id, token)
         await wailsApp.SetMQTTConfig(
           cfg.enabled || false,
           cfg.broker || '',
           cfg.id || '',
-          cfg.token || '',
-          cfg.location || ''
+          cfg.token || ''
         )
       } catch (err) {
         lastError.value = { message: `MQTT Config: ${err.message}`, timestamp: Date.now() }
@@ -349,7 +334,6 @@ export const useStandaloneStore = defineStore('standalone', () => {
     stopScanning,
     updateBands,
     updateGain,
-    updateName,
     toggleBand,
 
     // Server mode control

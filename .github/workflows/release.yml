@@ -1,0 +1,41 @@
+name: Release scanner
+
+# On a v* tag: build the embedded frontend, then cross-compile the scanner for
+# macOS (arm64), Pi (linux/arm64) and Windows (amd64) via GoReleaser and attach
+# the archives + checksums to a GitHub Release.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write   # create the release
+
+jobs:
+  goreleaser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # GoReleaser needs full history + tags
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build embedded standalone frontend
+        run: npm ci && (cd ../scanner && make build-frontend)
+        working-directory: frontend
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache-dependency-path: scanner/go.sum
+
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: '~> v2'
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

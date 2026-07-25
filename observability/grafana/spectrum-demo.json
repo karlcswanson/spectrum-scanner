@@ -1,0 +1,226 @@
+{
+  "title": "Spectrum Demo — Observability",
+  "editable": true,
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "label": "Data source",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": {},
+        "hide": 0
+      },
+      {
+        "name": "host",
+        "label": "Host",
+        "type": "query",
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "query": "label_values(system_uptime, host)",
+        "current": { "text": "spectrum-demo", "value": "spectrum-demo" },
+        "includeAll": false,
+        "hide": 0
+      },
+      {
+        "name": "infra_clients",
+        "label": "Infra MQTT clients (scanners + bridge + monitor)",
+        "type": "constant",
+        "query": "3",
+        "current": { "text": "3", "value": "3" },
+        "hide": 0
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "row",
+      "title": "Broker ($SYS)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Concurrent viewers (connected − infra)",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 1 },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10 } }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "mqtt_consumer_value{topic=\"$SYS/broker/clients/connected\", host=\"$host\"} - $infra_clients",
+          "legendFormat": "viewers"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Broker egress (bytes/sent, 1m)",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 1 },
+      "fieldConfig": { "defaults": { "unit": "binBps", "custom": { "drawStyle": "line", "fillOpacity": 10 } }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "mqtt_consumer_value{topic=\"$SYS/broker/load/bytes/sent/1min\", host=\"$host\"}",
+          "legendFormat": "egress"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Messages sent (1m)",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 1 },
+      "fieldConfig": { "defaults": { "custom": { "drawStyle": "line", "fillOpacity": 10 } }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "mqtt_consumer_value{topic=\"$SYS/broker/load/messages/sent/1min\", host=\"$host\"}",
+          "legendFormat": "msgs/min"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Host & containers",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Host CPU %",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 10 },
+      "fieldConfig": { "defaults": { "unit": "percent", "max": 100, "custom": { "drawStyle": "line", "fillOpacity": 10 } }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "100 - cpu_usage_idle{cpu=\"cpu-total\", host=\"$host\"}",
+          "legendFormat": "cpu"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Host memory / disk %",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 10 },
+      "fieldConfig": { "defaults": { "unit": "percent", "max": 100, "custom": { "drawStyle": "line", "fillOpacity": 10 } }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "mem_used_percent{host=\"$host\"}",
+          "legendFormat": "mem"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "disk_used_percent{path=\"/\", host=\"$host\"}",
+          "legendFormat": "disk /"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Container memory (per service)",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 10 },
+      "fieldConfig": { "defaults": { "unit": "bytes", "custom": { "drawStyle": "line", "fillOpacity": 10, "stacking": { "mode": "normal" } } }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "docker_container_mem_usage{host=\"$host\"}",
+          "legendFormat": "{{container_name}}"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "title": "Edge (Caddy HTTP)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 19 }
+    },
+    {
+      "type": "timeseries",
+      "title": "Requests/s (Caddy)",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 20 },
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "drawStyle": "line", "fillOpacity": 10 } }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "sum(rate(prometheus_caddy_http_requests_total{host=\"$host\"}[$__rate_interval]))",
+          "legendFormat": "req/s"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Errors/s (Caddy 4xx/5xx responses)",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 20 },
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "drawStyle": "line", "fillOpacity": 10 } }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "sum(rate(prometheus_caddy_http_request_duration_seconds_count{host=\"$host\", code=~\"[45]..\"}[$__rate_interval]))",
+          "legendFormat": "errors/s"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Request duration p99 (Caddy)",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 20 },
+      "fieldConfig": { "defaults": { "unit": "s", "custom": { "drawStyle": "line", "fillOpacity": 10 } }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "histogram_quantile(0.99, sum(rate(prometheus_caddy_http_request_duration_seconds_bucket{host=\"$host\"}[$__rate_interval])) by (le))",
+          "legendFormat": "p99"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Requests in-flight (Caddy)",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 28 },
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "drawStyle": "line", "fillOpacity": 10 } }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "sum(prometheus_caddy_http_requests_in_flight{host=\"$host\"})",
+          "legendFormat": "in-flight"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "HTTP egress (bytes/s, Caddy)",
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 28 },
+      "fieldConfig": { "defaults": { "unit": "Bps", "custom": { "drawStyle": "line", "fillOpacity": 10 } }, "overrides": [] },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "${datasource}" },
+          "expr": "sum(rate(prometheus_caddy_http_response_size_bytes_sum{host=\"$host\"}[$__rate_interval]))",
+          "legendFormat": "egress"
+        }
+      ]
+    }
+  ]
+}

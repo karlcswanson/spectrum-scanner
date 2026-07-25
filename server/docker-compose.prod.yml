@@ -6,6 +6,15 @@ services:
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
+    # Modest tuning for the read-heavy demo. Conservative defaults (assume ~1GB
+    # RAM); bump PG_SHARED_BUFFERS/PG_EFFECTIVE_CACHE_SIZE in .env on a larger
+    # instance (shared_buffers ~= 25% of RAM).
+    command:
+      - "postgres"
+      - "-c"
+      - "shared_buffers=${PG_SHARED_BUFFERS:-256MB}"
+      - "-c"
+      - "effective_cache_size=${PG_EFFECTIVE_CACHE_SIZE:-768MB}"
     environment:
       - POSTGRES_DB=${DB_NAME:-spectrum}
       - POSTGRES_USER=${DB_USER:-spectrum}
@@ -22,11 +31,21 @@ services:
   caddy:
     image: caddy:2-alpine
     restart: unless-stopped
+    # Caddy reverse-proxies every browser WebSocket to mosquitto, so it holds
+    # ~2 fds per viewer (downstream + upstream) plus HTTP/static connections.
+    # Give it ample headroom above a launch spike so the default nofile cap
+    # doesn't throttle the proxy before mosquitto's own limit is reached.
+    ulimits:
+      nofile:
+        soft: 16384
+        hard: 16384
     ports:
       - "80:80"
       - "443:443"
     environment:
       - DOMAIN=${DOMAIN:-localhost}
+      # Empty for public (automatic Let's Encrypt); "tls internal" for LAN/offline.
+      - SITE_TLS=${SITE_TLS:-}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - frontend_dist:/srv/frontend:ro
@@ -43,6 +62,13 @@ services:
   mosquitto:
     image: eclipse-mosquitto:2
     restart: unless-stopped
+    # Each MQTT/WS connection is one file descriptor. The default container
+    # nofile limit (often 1024) would cap us well below the 1500 max_connections
+    # in mosquitto.prod.conf, so raise it with headroom for both listeners + logs.
+    ulimits:
+      nofile:
+        soft: 4096
+        hard: 4096
     ports:
       - "1883:1883"
       # WebSocket exposed through Caddy, not directly
@@ -59,12 +85,28 @@ services:
       server:
         condition: service_started
 
+  # Redis (response cache + single-flight for the public read API)
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru", "--save", ""]
+
   # Django Backend (REST API + MQTT auth)
   server:
+    # Pull-based deploys: `docker compose pull && up -d`. `build:` still works
+    # for local builds (tags the same name). SERVER_TAG picks the image tag.
+    image: ghcr.io/karlcswanson/spectrum-server:${SERVER_TAG:-latest}
     build:
       context: .
       dockerfile: Dockerfile.prod
+      args:
+        GIT_SHA: ${GIT_SHA:-}
+        GIT_REF: ${GIT_REF:-}
     restart: unless-stopped
+    # Cap memory so a runaway request OOM-kills + restarts THIS container in
+    # seconds instead of swap-thrashing the whole VM. Tune to your instance
+    # (default assumes a few GB free for the API).
+    mem_limit: ${SERVER_MEM_LIMIT:-2g}
     environment:
       - DEBUG=${DEBUG:-false}
       - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY:?Set DJANGO_SECRET_KEY in .env}
@@ -78,14 +120,20 @@ services:
       - DB_PORT=5432
       - MQTT_BRIDGE_USERNAME=${MQTT_BRIDGE_USERNAME:-spectrum-bridge}
       - MQTT_BRIDGE_PASSWORD=${MQTT_BRIDGE_PASSWORD:?Set MQTT_BRIDGE_PASSWORD in .env}
+      - MQTT_MONITOR_USERNAME=${MQTT_MONITOR_USERNAME:-monitor}
+      - MQTT_MONITOR_PASSWORD=${MQTT_MONITOR_PASSWORD:-}
       - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-}
       - CSRF_TRUSTED_ORIGINS=${CSRF_TRUSTED_ORIGINS:-}
+      - ANALYTICS_EMBED=${ANALYTICS_EMBED:-}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
     volumes:
       - server_data:/app/data
       - django_static:/app/staticfiles
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_started
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8000/admin/login/"]
       interval: 30s
@@ -95,10 +143,12 @@ services:
 
   # MQTT Bridge (stores scans to database)
   mqtt-bridge:
+    image: ghcr.io/karlcswanson/spectrum-server:${SERVER_TAG:-latest}
     build:
       context: .
       dockerfile: Dockerfile.prod
     restart: unless-stopped
+    mem_limit: ${BRIDGE_MEM_LIMIT:-1g}
     environment:
       - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY:?Set DJANGO_SECRET_KEY in .env}
       - MQTT_BROKER_HOST=mosquitto
@@ -110,6 +160,8 @@ services:
       - DB_PORT=5432
       - MQTT_BRIDGE_USERNAME=${MQTT_BRIDGE_USERNAME:-spectrum-bridge}
       - MQTT_BRIDGE_PASSWORD=${MQTT_BRIDGE_PASSWORD:?Set MQTT_BRIDGE_PASSWORD in .env}
+      - MQTT_MONITOR_USERNAME=${MQTT_MONITOR_USERNAME:-monitor}
+      - MQTT_MONITOR_PASSWORD=${MQTT_MONITOR_PASSWORD:-}
     volumes:
       - server_data:/app/data
     depends_on:
@@ -121,10 +173,12 @@ services:
 
   # Scheduler (per-scanner rollup + periodic dynsec sync via APScheduler)
   scheduler:
+    image: ghcr.io/karlcswanson/spectrum-server:${SERVER_TAG:-latest}
     build:
       context: .
       dockerfile: Dockerfile.prod
     restart: unless-stopped
+    mem_limit: ${SCHEDULER_MEM_LIMIT:-1g}
     environment:
       - DJANGO_SECRET_KEY=${DJANGO_SECRET_KEY:?Set DJANGO_SECRET_KEY in .env}
       - DB_ENGINE=django.db.backends.postgresql
@@ -136,6 +190,7 @@ services:
       - MQTT_BROKER_HOST=mosquitto
       - MOSQUITTO_DYNSEC_USERNAME=${MOSQUITTO_DYNSEC_USERNAME:-admin}
       - MOSQUITTO_DYNSEC_PASSWORD=${MOSQUITTO_DYNSEC_PASSWORD:?Set MOSQUITTO_DYNSEC_PASSWORD in .env}
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
     volumes:
       - server_data:/app/data
     depends_on:
@@ -147,9 +202,14 @@ services:
 
   # Frontend build (runs once, copies static files to volume)
   frontend:
+    image: ghcr.io/karlcswanson/spectrum-frontend:${FRONTEND_TAG:-latest}
     build:
       context: ../frontend
       dockerfile: Dockerfile
+    environment:
+      # Optional analytics snippet injected into index.html at startup (runtime —
+      # no rebuild). Set ANALYTICS_EMBED in .env to your Umami/Plausible <script>.
+      - ANALYTICS_EMBED=${ANALYTICS_EMBED:-}
     volumes:
       - frontend_dist:/srv/frontend
 

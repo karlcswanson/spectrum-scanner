@@ -105,20 +105,50 @@ def align_to_bucket(dt, bucket_seconds):
     return datetime.fromtimestamp(aligned, tz=dt.tzinfo)
 
 
-def elementwise_max(arrays):
-    """Compute element-wise maximum across a list of numeric arrays."""
+# Sweeps whose length is at least this fraction of the longest in a bucket are
+# treated as the same frequency grid with edge-bin jitter: they're truncated to
+# a common length and all kept. Shorter arrays (a failed/partial sweep or a real
+# resolution change) are dropped so they can't chop the whole bucket down to
+# their length. Observed jitter on real hardware is <1%; a genuine resolution
+# change is a large step, so 0.9 separates them cleanly.
+SWEEP_LENGTH_TOLERANCE = 0.9
+
+
+def uniform_length_subset(arrays):
+    """Return ``(kept, dropped_count, length)`` for element-wise aggregation.
+
+    Non-empty arrays within ``SWEEP_LENGTH_TOLERANCE`` of the longest are kept
+    and truncated to their common (minimum) length so they share one bin grid;
+    drastically shorter arrays are dropped. This both avoids numpy's
+    "inhomogeneous shape" error and, unlike dropping every off-length array,
+    retains the near-full sweeps that only differ by a few edge bins — important
+    so rolled-up peaks don't miss transients.
+    """
+    arrays = [a for a in arrays if a]
     if not arrays:
+        return [], 0, 0
+    longest = max(len(a) for a in arrays)
+    threshold = longest * SWEEP_LENGTH_TOLERANCE
+    kept = [a for a in arrays if len(a) >= threshold]
+    target = min(len(a) for a in kept)
+    truncated = [a[:target] for a in kept]
+    return truncated, len(arrays) - len(kept), target
+
+
+def elementwise_max(arrays):
+    """Element-wise maximum across arrays (truncated to a common length)."""
+    kept, _, _ = uniform_length_subset(arrays)
+    if not kept:
         return []
-    stacked = np.array(arrays, dtype=np.float64)
-    return stacked.max(axis=0).tolist()
+    return np.array(kept, dtype=np.float64).max(axis=0).tolist()
 
 
 def elementwise_mean(arrays):
-    """Compute element-wise mean across a list of numeric arrays."""
-    if not arrays:
+    """Element-wise mean across arrays (truncated to a common length)."""
+    kept, _, _ = uniform_length_subset(arrays)
+    if not kept:
         return []
-    stacked = np.array(arrays, dtype=np.float64)
-    return stacked.mean(axis=0).tolist()
+    return np.array(kept, dtype=np.float64).mean(axis=0).tolist()
 
 
 def weighted_mean(summaries):
@@ -126,16 +156,24 @@ def weighted_mean(summaries):
 
     Each summary's avg_power is weighted by its scan_count, so merging
     two summaries (one with 10 scans, one with 5) correctly weights the average.
+    Arrays are truncated to a common length (drastically short ones dropped) the
+    same way as ``uniform_length_subset`` so mismatched grids never crash.
     """
+    summaries = [s for s in summaries if s.avg_power]
     if not summaries:
         return [], 0
 
-    total_count = sum(s.scan_count for s in summaries)
+    longest = max(len(s.avg_power) for s in summaries)
+    threshold = longest * SWEEP_LENGTH_TOLERANCE
+    kept = [s for s in summaries if len(s.avg_power) >= threshold]
+    target = min(len(s.avg_power) for s in kept)
+
+    total_count = sum(s.scan_count for s in kept)
     if total_count == 0:
         return [], 0
 
-    weights = np.array([s.scan_count / total_count for s in summaries], dtype=np.float64)
-    stacked = np.array([s.avg_power for s in summaries], dtype=np.float64)
+    weights = np.array([s.scan_count / total_count for s in kept], dtype=np.float64)
+    stacked = np.array([s.avg_power[:target] for s in kept], dtype=np.float64)
     result = (stacked * weights[:, np.newaxis]).sum(axis=0)
 
     return result.tolist(), total_count

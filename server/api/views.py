@@ -1,28 +1,68 @@
 """API views for Spectrum Server."""
 
 import logging
+import os
 from datetime import timedelta
 from django.utils import timezone
 from rest_framework import viewsets, status
-from rest_framework.decorators import action, api_view, permission_classes
+from rest_framework.decorators import action, api_view, permission_classes, throttle_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.exceptions import ValidationError, PermissionDenied
+from django.db.models import Q
+
+from .throttles import LoginRateThrottle, ShareAuthRateThrottle
 
 from django.contrib.auth import authenticate, login, logout
 
-from core.models import Scanner, Band, Scan, ScanSummary, UserMQTTCredentials, ScannerGroup, Access, get_monitored_frequencies_for_scanner
+from core.models import Scanner, Band, Scan, ScanSummary, UserMQTTCredentials, ScannerGroup, Access, MonitoredFrequency, get_monitored_frequencies_for_scanner
 from .serializers import (
     ScannerSerializer, BandSerializer, ScanSerializer, ScanCreateSerializer,
-    DecimatedScanSerializer, ScanSummaryAsScanSerializer, DecimatedScanSummarySerializer,
+    ScanSummaryAsScanSerializer,
     ScannerGroupSerializer, ScannerGroupDetailSerializer,
     MonitoredFrequencySerializer, AccessSerializer
 )
 from .permissions import (
     ReadOnlyIfShareSession, HasScannerAccess, HasScannerGroupAccess,
-    IsStaffOrReadOnly, get_accessible_scanner_ids, get_accessible_group_ids,
+    IsStaffOrReadOnly, get_accessible_group_ids,
+    get_request_scanner_ids, get_request_max_history_seconds,
+    CanWriteMonitoredFrequency, get_rw_scanner_ids,
+)
+from .cache import (
+    cached_or_compute, bucket_epoch, register_warm, apply_browser_cache,
+    resolve_hours_window, resolve_range_window, resolve_capped_window,
+    history_cache_key, timeline_cache_key,
+    compute_history, compute_timeline,
+    HISTORY_CACHE_TTL, TIMELINE_CACHE_TTL, AT_TIME_CACHE_TTL,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _parse_int(value, default, *, minimum=None, maximum=None):
+    """Parse an int query param, falling back to default on garbage and
+    clamping to [minimum, maximum]."""
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return default
+    if minimum is not None:
+        n = max(minimum, n)
+    if maximum is not None:
+        n = min(maximum, n)
+    return n
+
+
+def _parse_hours(value, default=24.0, maximum=8760.0):
+    """Parse an `hours` query param, clamped to [0, maximum] (default 1 year).
+
+    Also covers the frontend's 'undefined'/'null'/'' sentinels (they raise
+    ValueError and fall back to the default)."""
+    try:
+        h = float(value)
+    except (TypeError, ValueError):
+        return default
+    return max(0.0, min(h, maximum))
 
 
 class ScannerViewSet(viewsets.ModelViewSet):
@@ -39,12 +79,15 @@ class ScannerViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         queryset = super().get_queryset()
-        user = self.request.user
 
-        # Non-staff users only see scanners they have access to
-        if not user.is_staff:
-            accessible_ids = get_accessible_scanner_ids(user)
-            queryset = queryset.filter(id__in=accessible_ids)
+        # Scope to scanners this request may read. Request-aware (not just the
+        # user's own grants) so share-link sessions work: every visitor is the
+        # same demo_viewer user with no grants of its own, and the scope lives
+        # on the session's access_id. None means unrestricted (staff / legacy
+        # global share).
+        allowed = get_request_scanner_ids(self.request)
+        if allowed is not None:
+            queryset = queryset.filter(id__in=allowed)
 
         group_id = self.request.query_params.get('group')
         if group_id:
@@ -154,83 +197,54 @@ class ScannerViewSet(viewsets.ModelViewSet):
         """
         from dateutil.parser import parse as parse_datetime
 
-        scanner = self.get_object()
+        scanner = self.get_object()  # enforces scope + object permission
         band_name = request.query_params.get('band')
-        limit = min(int(request.query_params.get('limit', 1000)), 5000)
+        limit = _parse_int(request.query_params.get('limit'), 1000, minimum=1, maximum=5000)
         decimated = request.query_params.get('decimated', '').lower() == 'true'
 
         # Determine time range
         start_param = request.query_params.get('start')
         end_param = request.query_params.get('end')
+        cap = get_request_max_history_seconds(request)  # read-only share window
 
-        if start_param:
-            # Absolute time range
+        if cap is not None:
+            # Read-only share: always the last `cap` seconds, ignoring any
+            # requested hours/start/end. Every share viewer collapses onto this
+            # one warm window; deep/arbitrary-range scans stay login-only.
+            start_time, end_time, range_key = resolve_capped_window(cap)
+            register_warm({
+                'kind': 'history', 'scanner_id': str(scanner.pk), 'band': band_name,
+                'cap_seconds': cap, 'limit': limit, 'decimated': decimated,
+            })
+        elif start_param:
+            # Absolute time range (one-off scrub): lazy-cached, not pre-warmed.
             try:
                 start_time = parse_datetime(start_param)
                 end_time = parse_datetime(end_param) if end_param else timezone.now()
             except Exception as e:
                 logger.error(f"history: Failed to parse date params: start={start_param}, end={end_param}, error={e}")
                 return Response({'error': f'Invalid date format: {e}'}, status=status.HTTP_400_BAD_REQUEST)
+            start_time, end_time, range_key = resolve_range_window(start_time, end_time)
         else:
-            # Relative hours (backwards compatible)
-            try:
-                hours_param = request.query_params.get('hours', '24')
-                hours = float(hours_param) if hours_param and hours_param not in ('undefined', 'null', '') else 24
-            except (ValueError, TypeError) as e:
-                logger.error(f"history: Failed to parse hours param: {hours_param}, error={e}")
-                hours = 24
-            end_time = timezone.now()
-            start_time = end_time - timedelta(hours=hours)
+            # Relative hours (the live-tail poll every viewer makes), clamped.
+            hours = _parse_hours(request.query_params.get('hours'))
+            start_time, end_time, range_key = resolve_hours_window(hours)
+            # Register this exact combo as actively viewed so the scheduler keeps
+            # it warm (demand-driven: only what's watched is warmed).
+            register_warm({
+                'kind': 'history', 'scanner_id': str(scanner.pk), 'band': band_name,
+                'hours': hours, 'limit': limit, 'decimated': decimated,
+            })
 
-        scan_qs = scanner.scans.filter(
-            timestamp__gte=start_time,
-            timestamp__lte=end_time
-        ).order_by('timestamp')
-
-        if band_name:
-            scan_qs = scan_qs.filter(band__name=band_name)
-
-        scans = list(scan_qs[:limit])
-
-        # Fill gaps with ScanSummary data (finest resolution available)
-        # Only fetch summaries for time ranges not covered by raw scans
-        if scans:
-            raw_start = scans[0].timestamp
-        else:
-            raw_start = None
-
-        summary_qs = ScanSummary.objects.filter(
-            scanner=scanner,
-            bucket_start__gte=start_time,
-            bucket_start__lte=end_time,
+        cache_key = history_cache_key(scanner.pk, band_name, range_key, limit, decimated)
+        data, hit = cached_or_compute(
+            cache_key, HISTORY_CACHE_TTL,
+            lambda: compute_history(scanner.pk, band_name, start_time, end_time, limit, decimated),
         )
-        if band_name:
-            summary_qs = summary_qs.filter(band__name=band_name)
-
-        # Exclude time range covered by raw scans
-        if raw_start:
-            summary_qs = summary_qs.filter(bucket_start__lt=raw_start)
-
-        finest = summary_qs.order_by('bucket_seconds').values_list('bucket_seconds', flat=True).first()
-        if finest is not None:
-            summary_qs = summary_qs.filter(bucket_seconds=finest).order_by('bucket_start')
-
-        remaining = max(0, limit - len(scans))
-        summaries = list(summary_qs[:remaining]) if remaining > 0 else []
-
-        # Merge: summaries (older) + raw scans (newer)
-        if decimated:
-            result = (
-                DecimatedScanSummarySerializer(summaries, many=True).data +
-                DecimatedScanSerializer(scans, many=True).data
-            )
-        else:
-            result = (
-                ScanSummaryAsScanSerializer(summaries, many=True).data +
-                ScanSerializer(scans, many=True).data
-            )
-
-        return Response(result)
+        response = Response(data)
+        response['X-Cache'] = 'HIT' if hit else 'MISS'
+        apply_browser_cache(response, HISTORY_CACHE_TTL)
+        return response
 
     @action(detail=True, methods=['get'])
     def timeline(self, request, pk=None):
@@ -246,66 +260,48 @@ class ScannerViewSet(viewsets.ModelViewSet):
         """
         from dateutil.parser import parse as parse_datetime
 
-        scanner = self.get_object()
+        scanner = self.get_object()  # enforces scope + object permission
         band_name = request.query_params.get('band')
 
         # Determine time range
         start_param = request.query_params.get('start')
         end_param = request.query_params.get('end')
+        cap = get_request_max_history_seconds(request)  # read-only share window
 
-        if start_param:
-            # Absolute time range
+        if cap is not None:
+            # Read-only share: last `cap` seconds only (see history()).
+            start_time, end_time, range_key = resolve_capped_window(cap)
+            register_warm({
+                'kind': 'timeline', 'scanner_id': str(scanner.pk),
+                'band': band_name, 'cap_seconds': cap,
+            })
+        elif start_param:
+            # Absolute time range (one-off scrub): lazy-cached, not pre-warmed.
             try:
                 start_time = parse_datetime(start_param)
                 end_time = parse_datetime(end_param) if end_param else timezone.now()
             except Exception as e:
                 logger.error(f"timeline: Failed to parse date params: start={start_param}, end={end_param}, error={e}")
                 return Response({'error': f'Invalid date format: {e}'}, status=status.HTTP_400_BAD_REQUEST)
+            start_time, end_time, range_key = resolve_range_window(start_time, end_time)
         else:
-            # Relative hours (backwards compatible)
-            try:
-                hours_param = request.query_params.get('hours', '24')
-                hours = float(hours_param) if hours_param and hours_param not in ('undefined', 'null', '') else 24
-            except (ValueError, TypeError) as e:
-                logger.error(f"timeline: Failed to parse hours param: {hours_param}, error={e}")
-                hours = 24
-            end_time = timezone.now()
-            start_time = end_time - timedelta(hours=hours)
+            # Relative hours (the live-tail poll every viewer makes), clamped.
+            hours = _parse_hours(request.query_params.get('hours'))
+            start_time, end_time, range_key = resolve_hours_window(hours)
+            register_warm({
+                'kind': 'timeline', 'scanner_id': str(scanner.pk),
+                'band': band_name, 'hours': hours,
+            })
 
-        queryset = scanner.scans.filter(
-            timestamp__gte=start_time,
-            timestamp__lte=end_time
-        ).order_by('timestamp')
-
-        if band_name:
-            queryset = queryset.filter(band__name=band_name)
-
-        # Raw scan timestamps
-        scan_entries = [
-            {**s, 'source': 'raw'}
-            for s in queryset.values('id', 'timestamp', 'band__name')
-        ]
-
-        # Also include ScanSummary timestamps for rolled-up data
-        summary_qs = ScanSummary.objects.filter(
-            scanner=scanner,
-            bucket_start__gte=start_time,
-            bucket_start__lte=end_time,
-        ).order_by('bucket_start')
-
-        if band_name:
-            summary_qs = summary_qs.filter(band__name=band_name)
-
-        summary_entries = [
-            {'id': s['id'], 'timestamp': s['bucket_start'], 'band__name': s['band__name'], 'source': 'summary'}
-            for s in summary_qs.values('id', 'bucket_start', 'band__name')
-        ]
-
-        # Merge and sort by timestamp
-        all_entries = scan_entries + summary_entries
-        all_entries.sort(key=lambda x: x['timestamp'])
-
-        return Response(all_entries)
+        cache_key = timeline_cache_key(scanner.pk, band_name, range_key)
+        data, hit = cached_or_compute(
+            cache_key, TIMELINE_CACHE_TTL,
+            lambda: compute_timeline(scanner.pk, band_name, start_time, end_time),
+        )
+        response = Response(data)
+        response['X-Cache'] = 'HIT' if hit else 'MISS'
+        apply_browser_cache(response, TIMELINE_CACHE_TTL)
+        return response
 
 
 class BandViewSet(viewsets.ModelViewSet):
@@ -314,6 +310,13 @@ class BandViewSet(viewsets.ModelViewSet):
     queryset = Band.objects.all()
     serializer_class = BandSerializer
     permission_classes = [IsAuthenticated, ReadOnlyIfShareSession]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        allowed = get_request_scanner_ids(self.request)
+        if allowed is not None:
+            queryset = queryset.filter(scanner_id__in=allowed)
+        return queryset
 
 
 class ScanViewSet(viewsets.ModelViewSet):
@@ -325,6 +328,18 @@ class ScanViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         queryset = super().get_queryset()
+
+        # Scope to scanners this request may read (share sessions included);
+        # None means unrestricted (staff / legacy global share).
+        allowed = get_request_scanner_ids(self.request)
+        if allowed is not None:
+            queryset = queryset.filter(scanner_id__in=allowed)
+
+        # Read-only shares: bound to the recent window regardless of params, so
+        # deep scans stay login-only.
+        cap = get_request_max_history_seconds(self.request)
+        if cap is not None:
+            queryset = queryset.filter(timestamp__gte=timezone.now() - timedelta(seconds=cap))
 
         # Filter by scanner
         scanner_id = self.request.query_params.get('scanner')
@@ -344,21 +359,23 @@ class ScanViewSet(viewsets.ModelViewSet):
         # Time-based filtering
         hours = self.request.query_params.get('hours')
         if hours:
-            cutoff = timezone.now() - timedelta(hours=int(hours))
+            cutoff = timezone.now() - timedelta(hours=_parse_hours(hours))
             queryset = queryset.filter(timestamp__gte=cutoff)
 
         start_time = self.request.query_params.get('start')
-        if start_time:
-            from dateutil.parser import parse as parse_datetime
-            queryset = queryset.filter(timestamp__gte=parse_datetime(start_time))
-
         end_time = self.request.query_params.get('end')
-        if end_time:
+        if start_time or end_time:
             from dateutil.parser import parse as parse_datetime
-            queryset = queryset.filter(timestamp__lte=parse_datetime(end_time))
+            try:
+                if start_time:
+                    queryset = queryset.filter(timestamp__gte=parse_datetime(start_time))
+                if end_time:
+                    queryset = queryset.filter(timestamp__lte=parse_datetime(end_time))
+            except (ValueError, OverflowError, TypeError):
+                raise ValidationError('Invalid start/end timestamp')
 
         # Limit results (default 100)
-        limit = int(self.request.query_params.get('limit', 100))
+        limit = _parse_int(self.request.query_params.get('limit'), 100, minimum=1, maximum=5000)
         return queryset[:limit]
 
     def create(self, request, *args, **kwargs):
@@ -387,6 +404,11 @@ class ScanViewSet(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        # Enforce scanner scope (share sessions can only read granted scanners).
+        allowed = get_request_scanner_ids(request)
+        if allowed is not None and str(scanner_id) not in {str(s) for s in allowed}:
+            return Response({'detail': 'No scans found'}, status=status.HTTP_404_NOT_FOUND)
+
         from datetime import datetime, timezone as dt_timezone
 
         # Parse ISO timestamp - handle 'Z' suffix for UTC
@@ -396,57 +418,82 @@ class ScanViewSet(viewsets.ModelViewSet):
         except ValueError:
             # Fallback for other formats
             from dateutil.parser import parse as parse_datetime
-            target_time = parse_datetime(timestamp_str)
+            try:
+                target_time = parse_datetime(timestamp_str)
+            except (ValueError, OverflowError, TypeError):
+                return Response(
+                    {'error': 'Invalid time format'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
         # Ensure timezone-aware for comparison with Django timestamps
         if target_time.tzinfo is None:
             target_time = target_time.replace(tzinfo=dt_timezone.utc)
 
-        # Find closest raw scan
-        scan_qs = Scan.objects.filter(scanner_id=scanner_id)
-        if band_name:
-            scan_qs = scan_qs.filter(band__name=band_name)
+        # Read-only shares can't scrub past the live window (deep random-access
+        # queries stay login-only).
+        cap = get_request_max_history_seconds(request)
+        if cap is not None and target_time < timezone.now() - timedelta(seconds=cap):
+            return Response({'detail': 'No scans found'}, status=status.HTTP_404_NOT_FOUND)
 
-        before = scan_qs.filter(timestamp__lte=target_time).order_by('-timestamp').first()
-        after = scan_qs.filter(timestamp__gte=target_time).order_by('timestamp').first()
+        # Bucket the target time so scrubber requests within the same ~10 s
+        # window share a cache entry (raw-scan resolution is ~10 s anyway).
+        cache_key = f'at:{scanner_id}:{band_name or ""}:{bucket_epoch(target_time)}'
 
-        if before and after:
-            scan = before if (target_time - before.timestamp) <= (after.timestamp - target_time) else after
+        def compute():
+            # Find closest raw scan
+            scan_qs = Scan.objects.filter(scanner_id=scanner_id)
+            if band_name:
+                scan_qs = scan_qs.filter(band__name=band_name)
+
+            before = scan_qs.filter(timestamp__lte=target_time).order_by('-timestamp').first()
+            after = scan_qs.filter(timestamp__gte=target_time).order_by('timestamp').first()
+
+            if before and after:
+                scan = before if (target_time - before.timestamp) <= (after.timestamp - target_time) else after
+            else:
+                scan = before or after
+
+            scan_delta = abs(target_time - scan.timestamp) if scan else None
+
+            # Find closest ScanSummary (finest resolution available)
+            summary_qs = ScanSummary.objects.filter(scanner_id=scanner_id)
+            if band_name:
+                summary_qs = summary_qs.filter(band__name=band_name)
+
+            finest = summary_qs.order_by('bucket_seconds').values_list('bucket_seconds', flat=True).first()
+            if finest is not None:
+                summary_qs = summary_qs.filter(bucket_seconds=finest)
+
+            s_before = summary_qs.filter(bucket_start__lte=target_time).order_by('-bucket_start').first()
+            s_after = summary_qs.filter(bucket_start__gte=target_time).order_by('bucket_start').first()
+
+            if s_before and s_after:
+                summary = s_before if (target_time - s_before.bucket_start) <= (s_after.bucket_start - target_time) else s_after
+            else:
+                summary = s_before or s_after
+
+            summary_delta = abs(target_time - summary.bucket_start) if summary else None
+
+            # Return whichever is closer to target time (None = nothing found)
+            if scan and summary:
+                if scan_delta <= summary_delta:
+                    return ScanSerializer(scan).data
+                return ScanSummaryAsScanSerializer(summary).data
+            elif scan:
+                return ScanSerializer(scan).data
+            elif summary:
+                return ScanSummaryAsScanSerializer(summary).data
+            return None
+
+        data, hit = cached_or_compute(cache_key, AT_TIME_CACHE_TTL, compute)
+        if data is None:
+            response = Response({'detail': 'No scans found'}, status=status.HTTP_404_NOT_FOUND)
         else:
-            scan = before or after
-
-        scan_delta = abs(target_time - scan.timestamp) if scan else None
-
-        # Find closest ScanSummary (finest resolution available)
-        summary_qs = ScanSummary.objects.filter(scanner_id=scanner_id)
-        if band_name:
-            summary_qs = summary_qs.filter(band__name=band_name)
-
-        finest = summary_qs.order_by('bucket_seconds').values_list('bucket_seconds', flat=True).first()
-        if finest is not None:
-            summary_qs = summary_qs.filter(bucket_seconds=finest)
-
-        s_before = summary_qs.filter(bucket_start__lte=target_time).order_by('-bucket_start').first()
-        s_after = summary_qs.filter(bucket_start__gte=target_time).order_by('bucket_start').first()
-
-        if s_before and s_after:
-            summary = s_before if (target_time - s_before.bucket_start) <= (s_after.bucket_start - target_time) else s_after
-        else:
-            summary = s_before or s_after
-
-        summary_delta = abs(target_time - summary.bucket_start) if summary else None
-
-        # Return whichever is closer to target time
-        if scan and summary:
-            if scan_delta <= summary_delta:
-                return Response(ScanSerializer(scan).data)
-            return Response(ScanSummaryAsScanSerializer(summary).data)
-        elif scan:
-            return Response(ScanSerializer(scan).data)
-        elif summary:
-            return Response(ScanSummaryAsScanSerializer(summary).data)
-
-        return Response({'detail': 'No scans found'}, status=status.HTTP_404_NOT_FOUND)
+            response = Response(data)
+        response['X-Cache'] = 'HIT' if hit else 'MISS'
+        apply_browser_cache(response, AT_TIME_CACHE_TTL)
+        return response
 
 
 @api_view(['GET'])
@@ -470,13 +517,27 @@ def mqtt_credentials(request):
         from realtime.dynsec import get_dynsec_client, sync_user_roles
         dynsec = get_dynsec_client()
         access_id = request.session.get('access_id')
-        sync_user_roles(request.user, dynsec, access_id=access_id)
+        # Legacy ShareLink sessions are readonly with no access_id: unrestricted
+        # REST read, so grant the matching global read-only broker role.
+        global_read = bool(request.session.get('readonly')) and not access_id
+        sync_user_roles(request.user, dynsec, access_id=access_id, global_read=global_read)
     except Exception as e:
         logger.error(f"Dynsec sync failed for {request.user.username}: {e}")
 
     return Response({
         'username': str(creds.mqtt_id),
         'password': creds.auth_token,
+    })
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def api_version(request):
+    """Build metadata (git commit/ref), baked into the image at build time so a
+    running server reports exactly what's deployed."""
+    return Response({
+        'commit': os.getenv('GIT_SHA', 'unknown'),
+        'ref': os.getenv('GIT_REF', 'unknown'),
     })
 
 
@@ -505,6 +566,7 @@ def auth_user(request):
 
 @api_view(['POST'])
 @permission_classes([AllowAny])
+@throttle_classes([LoginRateThrottle])
 def auth_login(request):
     """Login with username and password."""
     username = request.data.get('username')
@@ -599,6 +661,77 @@ class ScannerGroupViewSet(viewsets.ModelViewSet):
         scanners = Scanner.objects.filter(id__in=scanner_ids)
         group.scanners.remove(*scanners)
         return Response({'status': 'released', 'count': scanners.count()})
+
+
+# ============== Monitored Frequencies ==============
+
+
+class MonitoredFrequencyViewSet(viewsets.ModelViewSet):
+    """CRUD for monitored frequencies (mic channels, IEMs, etc.).
+
+    Read: resolved per scanner via ``?scanner=<id>`` (direct + group + global),
+    or all for staff. Write: staff, or rw on a scanner the frequency is scoped
+    to (global freqs are staff-only); share sessions are read-only. Creating
+    with ``scanner`` scopes the new frequency to that scanner.
+    """
+
+    queryset = MonitoredFrequency.objects.all()
+    serializer_class = MonitoredFrequencySerializer
+    permission_classes = [IsAuthenticated, ReadOnlyIfShareSession, CanWriteMonitoredFrequency]
+
+    def get_queryset(self):
+        user = self.request.user
+        scanner_id = self.request.query_params.get('scanner')
+
+        if scanner_id:
+            # Frequencies resolved for one scanner (direct + group + global).
+            try:
+                scanner = Scanner.objects.get(pk=scanner_id)
+            except Scanner.DoesNotExist:
+                return MonitoredFrequency.objects.none()
+            allowed = get_request_scanner_ids(self.request)
+            if allowed is not None and scanner.id not in allowed:
+                return MonitoredFrequency.objects.none()
+            return get_monitored_frequencies_for_scanner(scanner)
+
+        if user.is_staff:
+            return MonitoredFrequency.objects.all()
+
+        allowed = get_request_scanner_ids(self.request)
+        if allowed is None:
+            return MonitoredFrequency.objects.all()
+        # Global frequencies + those scoped to accessible scanners.
+        return MonitoredFrequency.objects.filter(
+            Q(scanners__id__in=allowed) |
+            Q(scanners__isnull=True, groups__isnull=True)
+        ).distinct()
+
+    def perform_create(self, serializer):
+        scanner_id = self.request.data.get('scanner')
+        if not scanner_id:
+            raise ValidationError('scanner is required to create a monitored frequency')
+        try:
+            scanner = Scanner.objects.get(pk=scanner_id)
+        except Scanner.DoesNotExist:
+            raise ValidationError('Scanner not found')
+        if not (self.request.user.is_staff or scanner.id in get_rw_scanner_ids(self.request.user)):
+            raise PermissionDenied('Requires read/write access to this scanner')
+        freq = serializer.save()
+        freq.scanners.add(scanner)
+
+    @action(detail=False, methods=['get'])
+    def categories(self, request):
+        """Category labels for the editor's combobox: the predefined defaults
+        plus any label already in use (so custom ones like 'Public Safety'
+        surface for reuse without being hard-coded)."""
+        predefined = [c[0] for c in MonitoredFrequency.CATEGORY_CHOICES]
+        in_use = (
+            MonitoredFrequency.objects.exclude(category='')
+            .order_by()  # clear the model's default ordering so distinct dedupes on category alone
+            .values_list('category', flat=True)
+            .distinct()
+        )
+        return Response(sorted(set(predefined) | set(in_use)))
 
 
 # ============== Access Management ==============
@@ -702,6 +835,7 @@ from core.models import ShareLink
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
+@throttle_classes([ShareAuthRateThrottle])
 def share_token_auth(request, token):
     """Authenticate via share token and redirect to app.
 

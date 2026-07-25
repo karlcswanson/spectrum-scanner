@@ -50,22 +50,28 @@ type ScanLine struct {
 // ScannerStatus reports current scanner state
 type ScannerStatus struct {
 	ID          string  `json:"id"`
-	Name        string  `json:"name"`
-	Description string  `json:"description"`
+	Name        string  `json:"name"` // standalone display label (the device ID; identity is server-side)
 	Online      bool    `json:"online"`
 	Scanning    bool    `json:"scanning"`
 	CurrentBand *string `json:"current_band,omitempty"`
 }
 
 // MQTTConfig holds optional MQTT publishing settings
+// MQTTConfig is pure transport/connection config. Scanner identity
+// (name/location/description) lives at the top level of Config, not here.
 type MQTTConfig struct {
 	Enabled     bool   `json:"enabled" yaml:"enabled"`
-	Broker      string `json:"broker" yaml:"broker"`             // e.g., "tcp://localhost:1883"
+	Broker      string `json:"broker" yaml:"broker"`             // tcp:// | ssl:// | ws:// | wss:// (e.g. "wss://host/mqtt")
 	ID          string `json:"id" yaml:"id"`                     // Scanner UUID (from Django admin)
 	Token       string `json:"token" yaml:"token"`               // Auth token (from Django admin)
-	Name        string `json:"name" yaml:"name"`                 // Human-readable name
-	Location    string `json:"location" yaml:"location"`         // Physical location
 	TopicPrefix string `json:"topic_prefix" yaml:"topic_prefix"` // defaults to "spectrum"
+
+	// TLS options, used only for TLS-based broker schemes (wss/ssl/tls/mqtts).
+	// A valid public cert (Let's Encrypt via Caddy) needs neither. For a private
+	// CA (event appliance) set CAFile; TLSInsecure skips verification entirely
+	// (trusted LAN / self-signed only).
+	TLSInsecure bool   `json:"tls_insecure,omitempty" yaml:"tls_insecure,omitempty"`
+	CAFile      string `json:"ca_file,omitempty" yaml:"ca_file,omitempty"`
 }
 
 // WebConfig holds optional local web server settings
@@ -83,6 +89,10 @@ type CalibrationPoint struct {
 
 // Calibration holds calibration data for the scanner
 type Calibration struct {
+	// Serial identifies the physical unit this calibration was measured on
+	// (operator-supplied; provenance for comparing units and picking a default).
+	Serial string `json:"serial,omitempty" yaml:"serial,omitempty"`
+
 	// ReferenceDBm is the known power level of the calibration source
 	ReferenceDBm float64 `json:"reference_dbm" yaml:"reference_dbm"`
 
@@ -176,9 +186,9 @@ type BackendConfig struct {
 
 // Config holds scanner configuration
 type Config struct {
+	// DeviceID is the scanner's stable identity (UUID). Human-readable
+	// name/location/description live server-side on the Scanner model, not here.
 	DeviceID    string         `json:"device_id" yaml:"device_id"`
-	Name        string         `json:"name" yaml:"name"`
-	Description string         `json:"description" yaml:"description"`
 	Bands       []Band         `json:"bands" yaml:"bands"`
 	DwellTimeMs int            `json:"dwell_time_ms" yaml:"dwell_time_ms"`
 	Mode        string         `json:"mode" yaml:"mode"`                           // "Average" or "PeakDetect"

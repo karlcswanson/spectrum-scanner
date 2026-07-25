@@ -5,6 +5,7 @@ Jobs:
 - Per-scanner data rollup (every 5 minutes)
 - Scanner schedule sync (every 10 minutes)
 - DynSec full sync (every 10 minutes)
+- Expired-session cleanup (every 60 minutes)
 
 Usage:
     python manage.py scheduler
@@ -19,6 +20,10 @@ logger = logging.getLogger(__name__)
 
 ROLLUP_INTERVAL_MINUTES = 5
 SYNC_INTERVAL_MINUTES = 10
+CLEARSESSIONS_INTERVAL_MINUTES = 60
+# Just under the 10 s read-cache TTL so actively-viewed history/timeline keys
+# are always refreshed before they expire (viewers stay a cache HIT).
+WARM_INTERVAL_SECONDS = 8
 
 
 def run_rollup(scanner_id: str):
@@ -69,6 +74,38 @@ def sync_schedules(scheduler: BlockingScheduler):
                 args=[scanner_id],
                 replace_existing=True,
             )
+
+
+def run_clearsessions():
+    """Delete expired django_session rows.
+
+    Share-link visitors each create a session row; without cleanup the table
+    grows unbounded (especially under a public link + link-preview bots).
+    """
+    from django.core.management import call_command
+
+    try:
+        call_command("clearsessions")
+        logger.info("Cleared expired sessions")
+    except Exception as e:
+        logger.error(f"clearsessions failed: {e}")
+
+
+def run_warm_read_cache():
+    """Keep actively-viewed history/timeline cache keys warm.
+
+    Demand-driven: only (scanner, band, params) combos requested in the last
+    ~30 s are refreshed, so cost scales with concurrent viewership, not fleet
+    size. Idle scanners are warmed zero times. No-ops without Redis.
+    """
+    from api.cache import warm_read_cache
+
+    try:
+        refreshed = warm_read_cache()
+        if refreshed:
+            logger.debug(f"Warmed {refreshed} read-cache key(s)")
+    except Exception as e:
+        logger.error(f"Read-cache warm failed: {e}")
 
 
 def run_dynsec_sync():
@@ -124,6 +161,27 @@ class Command(BaseCommand):
             minutes=SYNC_INTERVAL_MINUTES,
             id="dynsec-sync",
             replace_existing=True,
+        )
+
+        # Periodic expired-session cleanup
+        scheduler.add_job(
+            run_clearsessions,
+            "interval",
+            minutes=CLEARSESSIONS_INTERVAL_MINUTES,
+            id="clearsessions",
+            replace_existing=True,
+        )
+
+        # Keep actively-viewed read-cache keys warm (public-demo scaling).
+        # coalesce + max_instances=1 so a slow cycle can't pile up.
+        scheduler.add_job(
+            run_warm_read_cache,
+            "interval",
+            seconds=WARM_INTERVAL_SECONDS,
+            id="warm-read-cache",
+            replace_existing=True,
+            coalesce=True,
+            max_instances=1,
         )
 
         self.stdout.write(

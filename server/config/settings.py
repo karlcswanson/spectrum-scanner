@@ -3,6 +3,7 @@ Django settings for Spectrum Server.
 """
 
 import os
+import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -14,6 +15,10 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = os.getenv('DJANGO_SECRET_KEY', 'dev-secret-key-change-in-production')
 
 DEBUG = os.getenv('DEBUG', 'false').lower() == 'true'
+
+# True while the Django test runner is active. Used to skip side effects that
+# reach external services (e.g. the dynsec MQTT sync fired on model save).
+TESTING = 'test' in sys.argv
 
 ALLOWED_HOSTS = os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1,server').split(',')
 
@@ -46,12 +51,18 @@ MIDDLEWARE = [
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
+# Optional analytics snippet. Injected into the admin <head> via the
+# admin/base_site.html override (api.context_processors.analytics_embed). Same
+# value as the frontend's ANALYTICS_EMBED (the Vue SPA injects it at container
+# startup), so one env var covers both the Django-admin and Vue sides.
+ANALYTICS_EMBED = os.getenv('ANALYTICS_EMBED', '')
+
 ROOT_URLCONF = 'config.urls'
 
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
+        'DIRS': [BASE_DIR / 'templates'],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
@@ -59,6 +70,7 @@ TEMPLATES = [
                 'django.template.context_processors.request',
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
+                'api.context_processors.analytics_embed',
             ],
         },
     },
@@ -87,6 +99,56 @@ if 'sqlite3' in _db_engine:
             'PRAGMA journal_mode=WAL;'
             'PRAGMA synchronous=NORMAL;'
         ),
+    }
+
+# Persistent DB connections in production (Postgres). Without this every request
+# opens and tears down a fresh connection — expensive under the demo's
+# concurrency and wasteful now that the read path is cached. CONN_HEALTH_CHECKS
+# revalidates a reused connection before use so a stale one can't 500 a request.
+#
+# Only when NOT DEBUG: production runs gunicorn with a *fixed* worker×thread
+# pool, so persistent connections stay bounded. The dev `runserver` spawns an
+# unbounded thread per request, and holding a connection per thread for
+# CONN_MAX_AGE seconds exhausts Postgres ("too many clients"). Dev/SQLite/tests
+# keep the default per-request connection.
+if 'postgresql' in _db_engine and not DEBUG:
+    DATABASES['default']['CONN_MAX_AGE'] = int(os.getenv('CONN_MAX_AGE', '60'))
+    DATABASES['default']['CONN_HEALTH_CHECKS'] = True
+
+# Safety net: cap how long any single query may run so a pathological one can't
+# peg Postgres and hang the whole box (dev + prod). Normal queries finish in
+# milliseconds; the rollup's largest batch is well under this. A timed-out
+# query just errors that one request/cycle. Tune via env if needed.
+if 'postgresql' in _db_engine:
+    DATABASES['default'].setdefault('OPTIONS', {})
+    DATABASES['default']['OPTIONS']['options'] = (
+        f"-c statement_timeout={os.getenv('DB_STATEMENT_TIMEOUT_MS', '30000')}"
+    )
+
+# Cache — Redis (dev + prod) backs the read-API response cache and the
+# single-flight locks that collapse a stampede of identical /history requests
+# into one DB query. Falls back to per-process local memory when REDIS_URL is
+# unset (tests, or a bare `manage.py runserver` without the compose stack);
+# LocMem has no cross-process lock, so single-flight degrades to per-process
+# there — fine for a single worker. IGNORE_EXCEPTIONS keeps the API serving
+# straight from Postgres if Redis is down, so the cache is a speedup, never a
+# hard dependency.
+REDIS_URL = os.getenv('REDIS_URL')
+if REDIS_URL:
+    CACHES = {
+        'default': {
+            'BACKEND': 'django_redis.cache.RedisCache',
+            'LOCATION': REDIS_URL,
+            'OPTIONS': {
+                'CLIENT_CLASS': 'django_redis.client.DefaultClient',
+                'IGNORE_EXCEPTIONS': True,
+            },
+        }
+    }
+    DJANGO_REDIS_LOG_IGNORED_EXCEPTIONS = True
+else:
+    CACHES = {
+        'default': {'BACKEND': 'django.core.cache.backends.locmem.LocMemCache'},
     }
 
 # Password validation
@@ -121,6 +183,18 @@ REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
         'rest_framework.authentication.SessionAuthentication',
     ],
+    # Per-visitor API cap. Share-link visitors all authenticate as one
+    # demo_viewer user, so a user-keyed throttle would lump them together;
+    # SessionOrIPRateThrottle keys on the session/IP instead. Login and
+    # share-token endpoints get stricter IP-keyed throttles applied per-view.
+    'DEFAULT_THROTTLE_CLASSES': [
+        'api.throttles.SessionOrIPRateThrottle',
+    ],
+    'DEFAULT_THROTTLE_RATES': {
+        'session': '120/min',
+        'login': '10/min',
+        'share_auth': '20/min',
+    },
 }
 
 # CORS - allow frontend dev server
@@ -141,6 +215,16 @@ CSRF_TRUSTED_ORIGINS = os.getenv(
     'http://localhost:5173,http://localhost:5174,http://localhost:3000,http://127.0.0.1:5173,http://127.0.0.1:5174'
 ).split(',')
 
+# In production, TLS is terminated at Caddy and Django is reached over http on
+# the internal network. Trust the proxy's scheme header and mark cookies Secure
+# so they aren't sent over plain http. (Caddy already does the http->https
+# redirect and can set HSTS, so those aren't duplicated here.) Left off in DEBUG
+# so local http dev keeps working.
+if not DEBUG:
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+
 # MQTT settings
 MQTT_BROKER_HOST = os.getenv('MQTT_BROKER_HOST', 'localhost')
 MQTT_BROKER_PORT = int(os.getenv('MQTT_BROKER_PORT', 1883))
@@ -149,6 +233,10 @@ MQTT_TOPIC_PREFIX = os.getenv('MQTT_TOPIC_PREFIX', 'spectrum')
 # MQTT bridge service credentials (subscribe-only internal service)
 MQTT_BRIDGE_USERNAME = os.getenv('MQTT_BRIDGE_USERNAME', '')
 MQTT_BRIDGE_PASSWORD = os.getenv('MQTT_BRIDGE_PASSWORD', '')
+# Read-only $SYS metrics user (optional — dynsec provisions it only when the
+# password is set; must match observability/.env's MQTT_MONITOR_PASSWORD).
+MQTT_MONITOR_USERNAME = os.getenv('MQTT_MONITOR_USERNAME', 'monitor')
+MQTT_MONITOR_PASSWORD = os.getenv('MQTT_MONITOR_PASSWORD', '')
 # MQTT Dynamic Security admin credentials (for provisioning clients/roles)
 MQTT_DYNSEC_USERNAME = os.getenv('MOSQUITTO_DYNSEC_USERNAME', 'admin')
 MQTT_DYNSEC_PASSWORD = os.getenv('MOSQUITTO_DYNSEC_PASSWORD', '')

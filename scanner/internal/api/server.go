@@ -63,6 +63,7 @@ func (s *Server) GetServerStatus() interface{} {
 
 func (s *Server) setupRoutes() {
 	// API routes
+	s.mux.HandleFunc("GET /api/version", s.handleGetVersion)
 	s.mux.HandleFunc("GET /api/status", s.handleGetStatus)
 	s.mux.HandleFunc("GET /api/config", s.handleGetConfig)
 	s.mux.HandleFunc("PUT /api/config", s.handlePutConfig)

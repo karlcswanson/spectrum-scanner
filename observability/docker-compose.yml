@@ -1,0 +1,36 @@
+# Observability worker — one Telegraf container that ships host + docker +
+# broker ($SYS) metrics to VictoriaMetrics (InfluxDB line protocol). Run it on
+# the SAME host as the server stack:
+#
+#   cp .env.example .env      # then fill in your VM endpoint + monitor creds
+#   docker compose -f observability/docker-compose.yml up -d
+#
+# Config is env-driven (.env + telegraf.conf); no secrets or hostnames are baked
+# into the checked-in files. See README.md.
+services:
+  telegraf:
+    image: telegraf:1.30-alpine
+    restart: unless-stopped
+    # Needs group access to docker.sock; set DOCKER_GID to the host docker group
+    # (getent group docker | cut -d: -f3).
+    user: "telegraf:${DOCKER_GID:-999}"
+    env_file: .env
+    environment:
+      # Point the host inputs at the mounted host filesystem.
+      - HOST_PROC=/hostfs/proc
+      - HOST_SYS=/hostfs/sys
+      - HOST_ETC=/hostfs/etc
+      - HOST_MOUNT_PREFIX=/hostfs
+    volumes:
+      - ./telegraf.conf:/etc/telegraf/telegraf.conf:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /:/hostfs:ro
+
+# Join the server stack's docker network so telegraf reaches the broker and
+# Caddy's internal metrics by name (mosquitto:1883, caddy:2020) — nothing is
+# published to the host for this. The server stack must be up first; override the
+# network name via SERVER_NETWORK if your compose project isn't "server".
+networks:
+  default:
+    name: ${SERVER_NETWORK:-server_default}
+    external: true

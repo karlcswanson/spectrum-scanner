@@ -2,6 +2,7 @@
 
 from rest_framework import serializers
 from core.models import Scanner, Band, Scan, ScanSummary, ScannerGroup, MonitoredFrequency, Access
+from core.decimation import decimate_power
 
 
 class BandSerializer(serializers.ModelSerializer):
@@ -50,6 +51,9 @@ class ScannerSerializer(serializers.ModelSerializer):
 
 
 class ScanSerializer(serializers.ModelSerializer):
+    # Full resolution AND full precision: live view, at_time (scrub-settle),
+    # and export all go through here and must stay untouched. Only the decimated
+    # scrubber-preview serializers below reduce points/precision.
     scanner_id = serializers.UUIDField(source='scanner.id', read_only=True)
     scanner_name = serializers.CharField(source='scanner.name', read_only=True)
     band_name = serializers.CharField(source='band.name', read_only=True, allow_null=True)
@@ -109,21 +113,7 @@ class DecimatedScanSummarySerializer(serializers.ModelSerializer):
         ]
 
     def get_power(self, obj):
-        if not obj.peak_power:
-            return []
-        target_points = 1920
-        original = obj.peak_power
-        if len(original) <= target_points:
-            return original
-        factor = len(original) / target_points
-        result = []
-        for i in range(target_points):
-            start = int(i * factor)
-            end = int((i + 1) * factor)
-            chunk = original[start:end]
-            if chunk:
-                result.append(max(chunk))
-        return result
+        return decimate_power(obj.peak_power)
 
 
 class ScannerGroupSerializer(serializers.ModelSerializer):
@@ -154,6 +144,10 @@ class ScannerGroupDetailSerializer(ScannerGroupSerializer):
 
 class MonitoredFrequencySerializer(serializers.ModelSerializer):
     frequency_mhz = serializers.FloatField(read_only=True)
+    # Free-text category (predefined + custom). The model's `choices` are only
+    # admin suggestions; the API accepts any label so users can add their own
+    # (e.g. "Public Safety") without a migration.
+    category = serializers.CharField(max_length=50, required=False, allow_blank=True)
 
     class Meta:
         model = MonitoredFrequency
@@ -192,28 +186,7 @@ class DecimatedScanSerializer(serializers.ModelSerializer):
 
     def get_power(self, obj):
         """Decimate power array to ~1920 points using max-pooling."""
-        if not obj.power:
-            return []
-
-        target_points = 1920
-        original = obj.power
-
-        if len(original) <= target_points:
-            return original
-
-        # Calculate decimation factor
-        factor = len(original) / target_points
-        result = []
-
-        for i in range(target_points):
-            start = int(i * factor)
-            end = int((i + 1) * factor)
-            # Use max value in each bin to preserve peaks
-            chunk = original[start:end]
-            if chunk:
-                result.append(max(chunk))
-
-        return result
+        return decimate_power(obj.power)
 
 
 class ScanCreateSerializer(serializers.Serializer):

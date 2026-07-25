@@ -1,7 +1,30 @@
 # Production Caddyfile for Spectrum Scanner
-# Handles TLS/HTTPS automatically via Let's Encrypt
+# HTTPS via Let's Encrypt (public) or a self-signed internal CA (LAN) — see
+# SITE_TLS in .env.
+
+{
+    # Serve the correct cert to clients that connect by bare IP. An IP connection
+    # sends no SNI, so without this Caddy can't select a cert and aborts the TLS
+    # handshake (browsers show ERR_SSL_PROTOCOL_ERROR). Fall back to DOMAIN as the
+    # server name; harmless for hostname/public access, where real SNI is sent.
+    default_sni {$DOMAIN:localhost}
+
+    # Enable Prometheus metrics collection. Exposed only on the internal :2020
+    # listener below — never on a public port; scraped by the observability worker.
+    servers {
+        metrics
+    }
+}
 
 {$DOMAIN:localhost} {
+    # TLS mode is env-driven so ONE Caddyfile serves both deployments:
+    #   public  → SITE_TLS empty        → automatic Let's Encrypt
+    #   LAN     → SITE_TLS="tls internal" → Caddy's self-signed local CA
+    {$SITE_TLS:}
+
+    # Compress responses (the scan/history JSON payloads gzip/zstd very well).
+    encode zstd gzip
+
     # API routes to Django backend
     handle /api/* {
         reverse_proxy server:8000
@@ -52,4 +75,11 @@
         X-Frame-Options DENY
         Referrer-Policy strict-origin-when-cross-origin
     }
+}
+
+# Internal Prometheus metrics endpoint. Bound to :2020 inside the container and
+# NOT published to any host port — reachable only on the docker network as
+# caddy:2020, scraped by the observability/ Telegraf worker.
+:2020 {
+    metrics /metrics
 }

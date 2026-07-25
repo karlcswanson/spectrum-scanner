@@ -137,25 +137,42 @@ class Scanner(models.Model):
         if dry_run:
             return len(scans)
 
-        # Group by (band_id, bucket_start)
+        # Group by (band_id, bucket_start), keeping each scan's geometry so the
+        # emitted summary's hz/step matches the arrays actually aggregated.
         buckets = {}
         for _id, band_id, ts, hz_lo, hz_hi, step_hz, power in scans:
             bucket_start = align_to_bucket(ts, bucket_seconds)
             key = (band_id, bucket_start)
-            if key not in buckets:
-                buckets[key] = {
-                    'hz_lo': hz_lo, 'hz_hi': hz_hi, 'step_hz': step_hz,
-                    'power_arrays': [], 'count': 0,
-                }
-            buckets[key]['power_arrays'].append(power)
-            buckets[key]['count'] += 1
+            buckets.setdefault(key, []).append((power, hz_lo, hz_hi, step_hz))
+
+        from core.retention import uniform_length_subset
 
         rolled = 0
         with transaction.atomic():
-            for (band_id, bucket_start), data in buckets.items():
-                power_arrays = [p for p in data['power_arrays'] if p]
+            for (band_id, bucket_start), entries in buckets.items():
+                entries = [e for e in entries if e[0]]  # non-empty power
+                if not entries:
+                    continue
+
+                # Truncate near-equal sweeps to a common bin grid; drop only
+                # drastically-short (failed/reconfigured) sweeps.
+                power_arrays, dropped, target = uniform_length_subset(
+                    [e[0] for e in entries]
+                )
                 if not power_arrays:
                     continue
+                if dropped:
+                    logger.warning(
+                        "rollup %s band %s %s: dropped %d short sweep(s); kept %d "
+                        "at length %d",
+                        self.id, band_id, bucket_start.isoformat(),
+                        dropped, len(power_arrays), target,
+                    )
+
+                # Geometry from a kept sweep at the common length, so the stored
+                # hz/step match the aggregated array length.
+                geom = next((e for e in entries if len(e[0]) == target), entries[0])
+                _, hz_lo, hz_hi, step_hz = geom
 
                 ScanSummary.objects.update_or_create(
                     scanner=self,
@@ -163,12 +180,12 @@ class Scanner(models.Model):
                     bucket_start=bucket_start,
                     bucket_seconds=bucket_seconds,
                     defaults={
-                        'hz_lo': data['hz_lo'],
-                        'hz_hi': data['hz_hi'],
-                        'step_hz': data['step_hz'],
+                        'hz_lo': hz_lo,
+                        'hz_hi': hz_hi,
+                        'step_hz': step_hz,
                         'peak_power': elementwise_max(power_arrays),
                         'avg_power': elementwise_mean(power_arrays),
-                        'scan_count': data['count'],
+                        'scan_count': len(power_arrays),
                     },
                 )
                 rolled += 1
@@ -201,17 +218,35 @@ class Scanner(models.Model):
                 buckets[key] = []
             buckets[key].append(s)
 
+        from core.retention import uniform_length_subset
+
         rolled = 0
         with transaction.atomic():
             for (band_id, bucket_start), items in buckets.items():
-                peak_arrays = [s.peak_power for s in items if s.peak_power]
+                items = [s for s in items if s.peak_power]
+                if not items:
+                    continue
+
+                # Truncate near-equal summaries to a common grid; drop only
+                # drastically-short ones. peak_power and avg_power of a summary
+                # share a length, so weighted_mean() below stays consistent.
+                peak_arrays, dropped, target = uniform_length_subset(
+                    [s.peak_power for s in items]
+                )
                 if not peak_arrays:
                     continue
+                if dropped:
+                    logger.warning(
+                        "rollup %s band %s %s: dropped %d short summary(ies); "
+                        "kept %d at length %d",
+                        self.id, band_id, bucket_start.isoformat(),
+                        dropped, len(peak_arrays), target,
+                    )
 
                 peak = elementwise_max(peak_arrays)
                 avg, total_count = weighted_mean(items)
 
-                ref = items[0]
+                ref = next((s for s in items if len(s.peak_power) == target), items[0])
                 ScanSummary.objects.update_or_create(
                     scanner=self,
                     band_id=band_id,

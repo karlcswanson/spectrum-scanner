@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -12,6 +13,7 @@ import (
 	"scanner/internal/config"
 	"scanner/internal/models"
 	"scanner/internal/runner"
+	"scanner/internal/version"
 )
 
 func main() {
@@ -23,7 +25,15 @@ func main() {
 	flag.StringVar(&configOpts.BackendAddr, "addr", "", "Backend address (IP or URL, overrides config)")
 	flag.StringVar(&configOpts.ConfigFile, "config", "", "Config file path (optional)")
 	flag.BoolVar(&noStore, "no-store", false, "Disable local scan history storage")
+	var showVersion bool
+	flag.BoolVar(&showVersion, "version", false, "Print version and exit")
 	flag.Parse()
+
+	if showVersion {
+		fmt.Println("spectrum-scanner", version.String())
+		return
+	}
+	log.Printf("spectrum-scanner %s", version.String())
 
 	// Load config with options (handles env vars and applies overrides)
 	cfg, configPath, err := config.LoadWithOptions(configOpts)
@@ -36,19 +46,13 @@ func main() {
 		log.Println("Using default configuration")
 	}
 
-	// Environment variable overrides for identity
+	// Environment variable override for identity (name/location/description are
+	// managed server-side on the Scanner model, keyed by this ID).
 	if id := os.Getenv("SCANNER_ID"); id != "" {
 		cfg.DeviceID = id
 	}
-	if name := os.Getenv("SCANNER_NAME"); name != "" {
-		cfg.Name = name
-	}
-	if desc := os.Getenv("SCANNER_DESCRIPTION"); desc != "" {
-		cfg.Description = desc
-	}
 
-	log.Printf("Spectrum Scanner: %s (%s)", cfg.Name, cfg.DeviceID)
-	log.Printf("  Description: %s", cfg.Description)
+	log.Printf("Spectrum Scanner: %s", cfg.DeviceID)
 	log.Printf("  Dwell time: %d ms", cfg.DwellTimeMs)
 	log.Printf("  Bands configured: %d", len(cfg.Bands))
 	for _, band := range cfg.Bands {
@@ -105,6 +109,14 @@ func main() {
 	r.Engine.SetConfigChangeCallback(func(cfg *models.Config) {
 		server.WSHub().BroadcastConfig(cfg)
 	})
+
+	// Persist remote band edits (over MQTT) back to the config file so they
+	// survive a restart.
+	if configPath != "" {
+		r.Engine.SetConfigSaveFunc(func() error {
+			return config.SaveToFile(configPath, cfg)
+		})
+	}
 
 	log.Printf("Starting HTTP server on %s", configOpts.ListenAddr)
 	log.Printf("API endpoints:")
