@@ -1,8 +1,5 @@
 # Spectrum Scanner
 
-![Built with Claude](https://img.shields.io/badge/Built_with-Claude-D97757?style=for-the-badge&logo=claude&logoColor=white)
-
-
 Multi-band RF spectrum monitor for frequency coordination.
 
 ## Features
@@ -149,6 +146,9 @@ Only **UHF** is enabled by default. The canonical list lives in
 `SpectrumScanner/Models/Models.swift` `Band.defaultBands`); keep
 `scanner/config.yaml.example`, the scanner's `config.go` defaults, the calibrate tool,
 and `frontend/src/constants.js` `DEFAULT_BANDS` in sync with it.
+
+
+![Built with Claude](https://img.shields.io/badge/Built_with-Claude-D97757?style=for-the-badge&logo=claude&logoColor=white)
 
 ## License
 

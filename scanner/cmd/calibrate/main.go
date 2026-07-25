@@ -151,7 +151,7 @@ func main() {
 	tinysaPort := flag.String("tinysa", "/dev/tty.usbmodem4001", "tinySA serial port")
 	plutoURL := flag.String("pluto", "https://192.168.2.1", "Pluto maia-httpd URL")
 	outputFile := flag.String("output", "calibration.yaml", "Output YAML file (paste into config.yaml)")
-	jsonFile := flag.String("json", "calibration_standalone.json", "Output JSON file (for iOS client handoff)")
+	jsonFile := flag.String("json", "calibration.json", "Output JSON file (for iOS client handoff)")
 	serial := flag.String("serial", "", "Physical unit tag for this run (e.g. Pluto serial). Recommended when comparing multiple units.")
 	outDir := flag.String("outdir", "calibrations", "Directory that per-unit output folders are created under (used when -serial is set).")
 	level := flag.Float64("level", DefaultLevelDBm, "tinySA output level in dBm (whole numbers; the device truncates fractions)")
@@ -181,7 +181,7 @@ func main() {
 			*outputFile = filepath.Join(unitDir, "calibration.yaml")
 		}
 		if !setFlags["json"] {
-			*jsonFile = filepath.Join(unitDir, "calibration_standalone.json")
+			*jsonFile = filepath.Join(unitDir, "calibration.json")
 		}
 	} else {
 		log.Printf("WARNING: no -serial given; outputs won't be unit-tagged. Pass -serial <id> to compare multiple units.")

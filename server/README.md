@@ -77,6 +77,8 @@ Services:
 - `server` - Django dev server (port 8000)
 - `mosquitto` - MQTT broker (port 1883, WebSocket 9001)
 - `mqtt-bridge` - Saves MQTT data to database, runs rollup
+- `redis` - Response cache + single-flight locks for the read API
+- `scheduler` - Per-scanner rollup + periodic dynsec sync (APScheduler)
 - `frontend` - Vue dev server (port 5174)
 
 ### Docker Production Deployment
