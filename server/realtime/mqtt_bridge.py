@@ -15,6 +15,7 @@ from datetime import datetime
 
 import paho.mqtt.client as mqtt
 from django.conf import settings
+from django.db import close_old_connections
 from django.utils import timezone
 
 from core.decimation import decimate_power
@@ -87,6 +88,10 @@ class MQTTBridge:
 
     def on_message(self, client, userdata, msg):
         """Called when a message is received from MQTT."""
+        # Long-lived process with no request cycle to recycle DB connections;
+        # refresh stale/closed ones (e.g. after a Postgres restart) before the
+        # ORM writes in handle_scan/handle_status/handle_config.
+        close_old_connections()
         try:
             topic_parts = msg.topic.split('/')
             # Expected: spectrum/scanners/{scanner_id}/{message_type}

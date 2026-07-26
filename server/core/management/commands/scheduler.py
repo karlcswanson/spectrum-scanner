@@ -15,6 +15,7 @@ import logging
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 from django.core.management.base import BaseCommand
+from django.db import close_old_connections
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,10 @@ def run_rollup(scanner_id: str):
     """Run rollup for a single scanner."""
     from core.models import Scanner
 
+    # No request cycle here to recycle DB connections, so a Postgres restart or
+    # idle drop leaves a dead connection that fails every subsequent run. Refresh
+    # stale/closed connections before touching the ORM.
+    close_old_connections()
     try:
         scanner = Scanner.objects.get(id=scanner_id)
     except Scanner.DoesNotExist:
@@ -45,6 +50,7 @@ def sync_schedules(scheduler: BlockingScheduler):
     """Add/remove rollup schedules to match current Scanner table."""
     from core.models import Scanner
 
+    close_old_connections()
     scanner_ids = set(
         str(sid) for sid in Scanner.objects.values_list("id", flat=True)
     )
@@ -84,6 +90,7 @@ def run_clearsessions():
     """
     from django.core.management import call_command
 
+    close_old_connections()
     try:
         call_command("clearsessions")
         logger.info("Cleared expired sessions")
@@ -100,6 +107,7 @@ def run_warm_read_cache():
     """
     from api.cache import warm_read_cache
 
+    close_old_connections()
     try:
         refreshed = warm_read_cache()
         if refreshed:
@@ -112,6 +120,7 @@ def run_dynsec_sync():
     """Full idempotent sync of dynsec state with Django DB."""
     from realtime.dynsec import DynSecClient, full_sync
 
+    close_old_connections()
     dynsec = DynSecClient()
     try:
         full_sync(dynsec)
