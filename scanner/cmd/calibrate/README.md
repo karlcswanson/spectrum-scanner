@@ -1,6 +1,6 @@
 # Pluto Calibration Tool
 
-Calibrates the ADALM-Pluto spectrum scanner using a tinySA Ultra as a reference signal source.
+This tool creates a calibration table for the ADALM-Pluto using the TinySA as a signal generator.
 
 ## Overview
 
@@ -9,14 +9,13 @@ bands by:
 1. Setting the tinySA Ultra to output a known signal level
 2. Sweeping each band, tuning the Pluto to every step and measuring received power
 3. Averaging any frequencies shared between adjacent bands and sorting the result
-4. Writing calibration data as **YAML** (paste into `config.yaml`) and **JSON**
-   (for the iOS client, byte-compatible with the server's REST endpoint)
+4. Writing calibration data as YAML and JSON
 
 ## Requirements
 
-- ADALM-Pluto running maia-httpd
-- tinySA Ultra connected via USB
-- Direct RF connection between tinySA output and Pluto input (use appropriate attenuator if needed)
+- ADALM-Pluto running Maia SDR
+- TinySA Ultra connected via USB
+- Direct RF connection between tinySA output and Pluto input
 
 ## Usage
 
@@ -153,39 +152,4 @@ calibration:
       measured_dbm: -27.5
     - frequency_mhz: 480
       measured_dbm: -27.8
-    # ... paste remaining points from calibration.yaml
 ```
-
-Or keep calibration in a separate file and reference it (if supported).
-
-## How Calibration is Applied
-
-The scanner computes a correction factor for each frequency:
-
-```
-correction = reference_dbm - measured_dbm
-```
-
-For frequencies between calibration points, linear interpolation is used.
-
-Example:
-- Reference: -28 dBm
-- Measured at 470 MHz: -27.5 dBm
-- Correction: -28 - (-27.5) = -0.5 dB
-- Scanner subtracts 0.5 dB from readings at 470 MHz
-
-## Troubleshooting
-
-### No signal detected
-- Check RF cable connection
-- Verify tinySA is in output mode
-- Try higher reference level (-20 dBm)
-
-### Readings vary wildly
-- Add attenuator if signal is too strong
-- Reduce Pluto gain
-- Check for interference
-
-### Non-linear response
-- Reduce gain to 30 dB
-- Use lower reference level (-38 dBm)

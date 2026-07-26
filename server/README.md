@@ -86,9 +86,6 @@ Services:
 The production setup uses Caddy for reverse proxy, with HTTPS via Let's Encrypt
 (public) or a self-signed internal CA (LAN) — see [SSL/HTTPS](#sslhttps).
 
-> **Starting from a bare machine?** See [`../deploy/`](../deploy/) for VM
-> provisioning (cloud-init, Proxmox) and **`deploy/bootstrap.sh`**, which
-> automates the `.env` + secrets + `up` steps below in one command.
 
 #### Quick Start
 

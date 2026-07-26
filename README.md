@@ -141,12 +141,6 @@ docker compose -f docker-compose.prod.yml up -d --build
 | CBRS | 3550 - 3700 MHz | Private LTE / 5G (venues) |
 | WiFi 5 | 5150 - 5850 MHz | WiFi (UNII-1..4)   |
 
-Only **UHF** is enabled by default. The canonical list lives in
-[`common/bands.json`](common/bands.json) (mirroring iOS
-`SpectrumScanner/Models/Models.swift` `Band.defaultBands`); keep
-`scanner/config.yaml.example`, the scanner's `config.go` defaults, the calibrate tool,
-and `frontend/src/constants.js` `DEFAULT_BANDS` in sync with it.
-
 
 ![Built with Claude](https://img.shields.io/badge/Built_with-Claude-D97757?style=for-the-badge&logo=claude&logoColor=white)
 
