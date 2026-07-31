@@ -78,6 +78,9 @@ config.yaml
 # Editor / backup scratch files
 *.bak
 
+# Deploy verification script output
+/deploy-check.log
+
 # iOS local code signing (contains user's Apple Developer Team ID)
 ios/Signing.xcconfig
 
