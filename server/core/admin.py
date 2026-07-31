@@ -270,7 +270,7 @@ class AccessAdmin(admin.ModelAdmin):
             'fields': ('label', 'permission', 'is_active')
         }),
         ('Principal (set exactly one)', {
-            'fields': ('user', 'token'),
+            'fields': ('user', 'group', 'token'),
         }),
         ('Scope (set exactly one)', {
             'fields': ('scanner_group', 'scanner'),
@@ -291,6 +291,8 @@ class AccessAdmin(admin.ModelAdmin):
     def who_display(self, obj):
         if obj.user:
             return obj.user.username
+        if obj.group_id:
+            return f"group:{obj.group.name}"
         if obj.token:
             return f"token:{obj.token[:12]}..."
         return "—"

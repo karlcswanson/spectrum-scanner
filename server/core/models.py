@@ -560,13 +560,21 @@ class Access(models.Model):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
 
-    # Who — exactly one of these is set
+    # Who — exactly one of these is set (a user, a Django group, or a token)
     user = models.ForeignKey(
         'auth.User',
         on_delete=models.CASCADE,
         null=True,
         blank=True,
         related_name='access_grants'
+    )
+    group = models.ForeignKey(
+        'auth.Group',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='access_grants',
+        help_text="Grant to every member of this Django group (e.g. SSO users)",
     )
     token = models.CharField(
         max_length=64,
@@ -615,8 +623,9 @@ class Access(models.Model):
         constraints = [
             models.CheckConstraint(
                 condition=(
-                    models.Q(user__isnull=False, token__isnull=True) |
-                    models.Q(user__isnull=True, token__isnull=False)
+                    models.Q(user__isnull=False, token__isnull=True, group__isnull=True) |
+                    models.Q(user__isnull=True, token__isnull=False, group__isnull=True) |
+                    models.Q(user__isnull=True, token__isnull=True, group__isnull=False)
                 ),
                 name='access_exactly_one_principal',
             ),
@@ -630,7 +639,12 @@ class Access(models.Model):
         ]
 
     def __str__(self):
-        who = self.user.username if self.user else f"token:{self.token[:12]}..."
+        if self.user:
+            who = self.user.username
+        elif self.group_id:
+            who = f"group:{self.group.name}"
+        else:
+            who = f"token:{self.token[:12]}..."
         what = self.scanner_group.name if self.scanner_group else str(self.scanner)
         return f"{who} -> {what} ({self.get_permission_display()})"
 

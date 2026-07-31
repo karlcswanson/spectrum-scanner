@@ -110,6 +110,52 @@ def _do_group_clear_sync():
                 logger.error(f'DynSec: failed to sync {creds.user.username} after clear: {e}')
 
 
+def _do_access_group_sync(group_id):
+    """Re-sync broker roles for every member of a Django auth Group.
+
+    A group-principal Access grant applies to all users in the group (see
+    permissions.get_active_grants), so creating/revoking such a grant must
+    resync each member's dynsec roles.  Only users with MQTT credentials have
+    a broker client to update.
+    """
+    from django.contrib.auth.models import Group
+    from core.models import UserMQTTCredentials
+    from realtime.dynsec import sync_user_roles
+    dynsec = _get_dynsec()
+
+    try:
+        group = Group.objects.get(pk=group_id)
+    except Group.DoesNotExist:
+        return
+
+    member_ids = set(group.user_set.values_list('pk', flat=True))
+    for creds in UserMQTTCredentials.objects.filter(
+        user_id__in=member_ids,
+    ).select_related('user'):
+        try:
+            sync_user_roles(creds.user, dynsec)
+            logger.info(f'DynSec: synced {creds.user.username} after group grant change')
+        except Exception as e:
+            logger.error(f'DynSec: failed to sync {creds.user.username} after group grant change: {e}')
+
+
+def _do_all_creds_sync():
+    """Re-sync every user with a broker client.
+
+    Fallback for a User.groups clear on the group side, where the removed
+    member PKs aren't available from the m2m signal.
+    """
+    from core.models import UserMQTTCredentials
+    from realtime.dynsec import sync_user_roles
+    dynsec = _get_dynsec()
+
+    for creds in UserMQTTCredentials.objects.select_related('user').all():
+        try:
+            sync_user_roles(creds.user, dynsec)
+        except Exception as e:
+            logger.error(f'DynSec: failed to sync {creds.user.username}: {e}')
+
+
 # ── Signal handlers (dispatch to background) ──
 
 def on_scanner_save(sender, instance, created, **kwargs):
@@ -127,15 +173,17 @@ def on_scanner_delete(sender, instance, **kwargs):
 
 
 def on_access_save(sender, instance, **kwargs):
-    if not instance.user_id:
-        return
-    _dispatch(_do_user_sync, instance.user_id)
+    if instance.user_id:
+        _dispatch(_do_user_sync, instance.user_id)
+    elif instance.group_id:
+        _dispatch(_do_access_group_sync, instance.group_id)
 
 
 def on_access_delete(sender, instance, **kwargs):
-    if not instance.user_id:
-        return
-    _dispatch(_do_user_sync, instance.user_id)
+    if instance.user_id:
+        _dispatch(_do_user_sync, instance.user_id)
+    elif instance.group_id:
+        _dispatch(_do_access_group_sync, instance.group_id)
 
 
 def on_user_save(sender, instance, **kwargs):
@@ -167,6 +215,33 @@ def on_scanner_groups_changed(sender, instance, action, pk_set, reverse, **kwarg
         _dispatch(_do_group_change, group_ids, scanner_ids)
 
 
+def on_user_groups_changed(sender, instance, action, pk_set, reverse, **kwargs):
+    """Resync broker roles when a user's Django-group membership changes.
+
+    Group-principal Access grants are inherited via auth-group membership, so
+    adding/removing a user from a group must update that user's dynsec roles.
+    """
+    if action not in ('post_add', 'post_remove', 'post_clear'):
+        return
+
+    from core.models import UserMQTTCredentials
+
+    if reverse:
+        # instance is a Group; pk_set is the affected User PKs (None on clear).
+        if action == 'post_clear' or pk_set is None:
+            _dispatch(_do_all_creds_sync)
+            return
+        user_ids = pk_set
+    else:
+        # instance is a User; membership changed for this user regardless of
+        # action (pk_set is None on clear, but the user is still `instance`).
+        user_ids = {instance.pk}
+
+    for uid in user_ids:
+        if UserMQTTCredentials.objects.filter(user_id=uid).exists():
+            _dispatch(_do_user_sync, uid)
+
+
 def connect_signals():
     """Connect all dynsec signals. Called from AppConfig.ready()."""
     from django.contrib.auth.models import User
@@ -179,4 +254,8 @@ def connect_signals():
     m2m_changed.connect(
         on_scanner_groups_changed,
         sender=Scanner.scanner_groups.through,
+    )
+    m2m_changed.connect(
+        on_user_groups_changed,
+        sender=User.groups.through,
     )

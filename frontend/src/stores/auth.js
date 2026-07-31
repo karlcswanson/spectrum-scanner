@@ -19,6 +19,13 @@ export const useAuthStore = defineStore('auth', () => {
   const user = ref(null)
   const loading = ref(true)
   const error = ref(null)
+  // Whether the server has enterprise SSO (OIDC) enabled — drives the optional
+  // SSO login button. Reported by /api/auth/user/ regardless of login state.
+  // Defaults off/neutral so nothing shows unless the backend opts in.
+  const ssoEnabled = ref(false)
+  const ssoLabel = ref('Sign in with SSO')
+  const ssoBrand = ref('generic')  // 'microsoft' renders the branded button
+  const ssoLoginUrl = ref('')      // /oauth/login/<backend>/ from the server
 
   const isAuthenticated = computed(() => !!user.value)
   const isStaff = computed(() => user.value?.is_staff || false)
@@ -33,6 +40,10 @@ export const useAuthStore = defineStore('auth', () => {
         credentials: 'include',
       })
       const data = await response.json()
+      ssoEnabled.value = !!data.sso_enabled
+      if (data.sso_label) ssoLabel.value = data.sso_label
+      if (data.sso_brand) ssoBrand.value = data.sso_brand
+      if (data.sso_login_url) ssoLoginUrl.value = data.sso_login_url
       if (data.id) {
         user.value = data
       } else {
@@ -106,6 +117,10 @@ export const useAuthStore = defineStore('auth', () => {
     user,
     loading,
     error,
+    ssoEnabled,
+    ssoLabel,
+    ssoBrand,
+    ssoLoginUrl,
     isAuthenticated,
     isStaff,
     isReadonly,
