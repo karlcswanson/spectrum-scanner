@@ -71,8 +71,8 @@ async function handleExport(bandName) {
       // Error handled by native dialog
     }
   } else {
-    // Browser download
-    store.downloadCSV(bandName, store.config?.device_id)
+    // Browser download (filename is band + timestamp; no identity)
+    store.downloadCSV(bandName)
   }
 }
 
@@ -129,9 +129,6 @@ async function toggleWebServer() {
         <div class="flex items-center gap-4">
           <img src="/logo.png" alt="Spectrum Scanner" class="h-8 w-8" />
           <h1 class="text-xl font-bold text-white">Spectrum Scanner</h1>
-          <span v-if="store.config?.device_id" class="text-gray-400 font-mono text-sm">
-            {{ store.config.device_id.slice(0, 8) }}
-          </span>
         </div>
 
         <div class="flex items-center gap-4">
@@ -223,13 +220,19 @@ async function toggleWebServer() {
         </div>
 
         <!-- Scanner settings -->
-        <ScannerSettings
-          v-if="settingsTab === 'scanner'"
-          :bands="store.bands"
-          :settings="store.settings"
-          @update:gain="handleUpdateGain"
-          @toggle-band="handleToggleBand"
-        />
+        <template v-if="settingsTab === 'scanner'">
+          <!-- Device info -->
+          <div class="mb-6">
+            <h4 class="text-sm font-medium text-gray-300 mb-3">Asset Tag</h4>
+            <p class="text-sm text-gray-400 font-mono">{{ store.config?.asset_tag || '—' }}</p>
+          </div>
+          <ScannerSettings
+            :bands="store.bands"
+            :settings="store.settings"
+            @update:gain="handleUpdateGain"
+            @toggle-band="handleToggleBand"
+          />
+        </template>
 
         <!-- Server mode settings -->
         <div v-if="settingsTab === 'server'" class="space-y-6">

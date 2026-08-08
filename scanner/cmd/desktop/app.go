@@ -98,7 +98,7 @@ func (a *App) startup(ctx context.Context) {
 		log.Printf("Using default configuration")
 	}
 
-	log.Printf("Desktop app started - %s", a.config.DeviceID)
+	log.Printf("Desktop app started (asset tag: %q)", a.config.AssetTag)
 
 	// Start MQTT and web server independently of Pluto connection
 	// These should run even if the tuner isn't available

@@ -32,6 +32,17 @@ class Scanner(models.Model):
     scanner_type = models.CharField(max_length=20, choices=SCANNER_TYPES, default='pluto')
     location = models.CharField(max_length=200, blank=True)
     description = models.TextField(blank=True)
+
+    # Device-reported asset tag / barcode (optional). Mirrored from the scanner's
+    # config message when present; a join key to external systems. Device-owned
+    # — read-only in admin, never edited here.
+    asset_tag = models.CharField(max_length=200, blank=True, db_index=True)
+
+    # Free-form metadata (schemaless, server-owned, edited centrally). Keys are
+    # deployment-specific; the app never interprets them — the UI just renders
+    # whatever key/values are present.
+    metadata = models.JSONField(default=dict, blank=True)
+
     retention_policy = models.CharField(
         max_length=200, blank=True, default='',
         help_text='Graphite-style retention policy override (e.g. "1s:24h,1m:7d,5m:30d,1h:1y"). Empty = use global default.'

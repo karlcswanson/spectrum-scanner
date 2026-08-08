@@ -46,13 +46,7 @@ func main() {
 		log.Println("Using default configuration")
 	}
 
-	// Environment variable override for identity (name/location/description are
-	// managed server-side on the Scanner model, keyed by this ID).
-	if id := os.Getenv("SCANNER_ID"); id != "" {
-		cfg.DeviceID = id
-	}
-
-	log.Printf("Spectrum Scanner: %s", cfg.DeviceID)
+	log.Printf("Spectrum Scanner (asset tag: %q)", cfg.AssetTag)
 	log.Printf("  Dwell time: %d ms", cfg.DwellTimeMs)
 	log.Printf("  Bands configured: %d", len(cfg.Bands))
 	for _, band := range cfg.Bands {

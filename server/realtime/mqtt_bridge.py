@@ -163,6 +163,11 @@ class MQTTBridge:
                 scanner.name = payload.get('name', scanner_id[:8])
             if not scanner.location:
                 scanner.location = payload.get('location', '')
+            # Mirror the device-reported asset tag (optional). Device-owned, so
+            # it always reflects the latest reported value; absent = leave as-is.
+            asset_tag = payload.get('asset_tag')
+            if asset_tag is not None:
+                scanner.asset_tag = asset_tag
             scanner.save()
 
             # Sync bands from config

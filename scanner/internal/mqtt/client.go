@@ -72,6 +72,7 @@ type StatusMessage struct {
 type ConfigMessage struct {
 	ID       string       `json:"id"`
 	Type     string       `json:"type"`
+	AssetTag string       `json:"asset_tag,omitempty"` // optional device-reported label
 	Bands    []BandConfig `json:"bands"`
 	Settings Settings     `json:"settings"`
 }
@@ -103,10 +104,11 @@ func NewClient(mqttConfig *models.MQTTConfig, scannerConfig *models.Config) (*Cl
 		topicPrefix = "spectrum"
 	}
 
-	// Use ID from MQTT config, fall back to auto-generated DeviceID
+	// Identity is the server-assigned scanner UUID (from Django admin). Without
+	// it there is no matching broker credential, so connecting is pointless.
 	scannerID := mqttConfig.ID
 	if scannerID == "" {
-		scannerID = scannerConfig.DeviceID
+		return nil, fmt.Errorf("MQTT config requires a scanner id (from Django admin)")
 	}
 
 	clientID := fmt.Sprintf("pluto-%s", scannerID)
@@ -327,9 +329,10 @@ func (c *Client) PublishConfig() {
 	// Identity (name/location/description) is owned by the server's Scanner
 	// model; the scanner reports only its UUID and the server labels it.
 	msg := ConfigMessage{
-		ID:    c.scannerID,
-		Type:  "pluto", // ADALM-Pluto scanner
-		Bands: bands,
+		ID:       c.scannerID,
+		Type:     "pluto", // ADALM-Pluto scanner
+		AssetTag: c.scannerConfig.AssetTag,
+		Bands:    bands,
 		Settings: Settings{
 			DwellTimeMs: c.scannerConfig.DwellTimeMs,
 			RxGain:      c.scannerConfig.RxGain,
