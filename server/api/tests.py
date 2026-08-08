@@ -7,19 +7,23 @@ These cover the security-review fixes: request-aware scanner scoping
 import json
 from datetime import timedelta
 
-from django.contrib.auth.models import User
+from django.contrib.auth.models import Group, User
 from django.core.cache import cache
+from django.db import IntegrityError, transaction
 from django.test import Client, RequestFactory, SimpleTestCase, TestCase
+from django.test import override_settings
 from django.utils import timezone
 
 from core.models import Access, Band, MonitoredFrequency, Scan, Scanner
+from api.auth.pipeline import assign_default_groups
 from api.cache import (
     bucket_epoch, cached_or_compute, history_cache_key, register_warm,
     warm_spec, WARM_PREFIX, _warm_sig, compute_timeline, _timeline_grain,
 )
 from api.permissions import (
-    HasScannerAccess, ReadOnlyIfShareSession, get_request_scanner_ids,
-    get_request_max_history_seconds, READONLY_MAX_HISTORY_SECONDS,
+    HasScannerAccess, ReadOnlyIfShareSession, get_active_grants,
+    get_request_scanner_ids, get_request_max_history_seconds,
+    READONLY_MAX_HISTORY_SECONDS,
 )
 from api.views import _parse_hours, _parse_int
 
@@ -516,3 +520,102 @@ class ParseHelpersTest(SimpleTestCase):
         self.assertEqual(_parse_int("99999", 100, minimum=1, maximum=5000), 5000)
         self.assertEqual(_parse_int("0", 100, minimum=1, maximum=5000), 1)
         self.assertEqual(_parse_int("50", 100, minimum=1, maximum=5000), 50)
+
+
+class GetActiveGrantsGroupTest(TestCase):
+    """The group-principal path in get_active_grants: a grant made to a Django
+    auth Group is inherited by every member (how auto-created SSO users pick up
+    baseline Access)."""
+
+    def setUp(self):
+        self.scanner = Scanner.objects.create(name="S1")
+        self.group = Group.objects.create(name="sso-users")
+
+    def test_member_sees_group_grant(self):
+        member = User.objects.create_user("member")
+        member.groups.add(self.group)
+        grant = Access.objects.create(group=self.group, scanner=self.scanner, permission="r")
+        self.assertIn(grant, get_active_grants(member))
+
+    def test_non_member_does_not_see_group_grant(self):
+        outsider = User.objects.create_user("outsider")
+        Access.objects.create(group=self.group, scanner=self.scanner, permission="r")
+        self.assertEqual(list(get_active_grants(outsider)), [])
+
+    def test_direct_and_group_grants_union(self):
+        member = User.objects.create_user("member")
+        member.groups.add(self.group)
+        s2 = Scanner.objects.create(name="S2")
+        direct = Access.objects.create(user=member, scanner=s2, permission="rw")
+        via_group = Access.objects.create(group=self.group, scanner=self.scanner, permission="r")
+        self.assertCountEqual(get_active_grants(member), [direct, via_group])
+
+    def test_inactive_group_grant_excluded(self):
+        member = User.objects.create_user("member")
+        member.groups.add(self.group)
+        Access.objects.create(
+            group=self.group, scanner=self.scanner, permission="r", is_active=False,
+        )
+        self.assertEqual(list(get_active_grants(member)), [])
+
+    def test_expired_group_grant_excluded(self):
+        member = User.objects.create_user("member")
+        member.groups.add(self.group)
+        Access.objects.create(
+            group=self.group, scanner=self.scanner, permission="r",
+            expires_at=timezone.now() - timedelta(hours=1),
+        )
+        self.assertEqual(list(get_active_grants(member)), [])
+
+    def test_anonymous_user_gets_none(self):
+        from django.contrib.auth.models import AnonymousUser
+        self.assertEqual(list(get_active_grants(AnonymousUser())), [])
+
+
+class AccessPrincipalConstraintTest(TestCase):
+    """Exactly-one-of user/group/token must hold at the DB level."""
+
+    def setUp(self):
+        self.scanner = Scanner.objects.create(name="S1")
+        self.group = Group.objects.create(name="sso-users")
+        self.user = User.objects.create_user("u1")
+
+    def test_group_only_is_allowed(self):
+        Access.objects.create(group=self.group, scanner=self.scanner, permission="r")
+
+    def test_user_plus_group_rejected(self):
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                Access.objects.create(
+                    user=self.user, group=self.group,
+                    scanner=self.scanner, permission="r",
+                )
+
+    def test_no_principal_rejected(self):
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                Access.objects.create(scanner=self.scanner, permission="r")
+
+
+@override_settings(SSO_DEFAULT_GROUPS=["sso-users"])
+class AssignDefaultGroupsTest(TestCase):
+    """The SSO pipeline step that drops newly-created users into the local
+    baseline group(s)."""
+
+    def test_new_user_added_to_default_groups(self):
+        user = User.objects.create_user("new")
+        assign_default_groups(backend=None, user=user, response={}, is_new=True)
+        self.assertTrue(user.groups.filter(name="sso-users").exists())
+        # Group is auto-created if missing.
+        self.assertTrue(Group.objects.filter(name="sso-users").exists())
+
+    def test_existing_user_not_touched(self):
+        user = User.objects.create_user("returning")
+        assign_default_groups(backend=None, user=user, response={}, is_new=False)
+        self.assertFalse(user.groups.exists())
+
+    @override_settings(SSO_DEFAULT_GROUPS=[])
+    def test_no_default_groups_is_noop(self):
+        user = User.objects.create_user("new")
+        assign_default_groups(backend=None, user=user, response={}, is_new=True)
+        self.assertFalse(user.groups.exists())

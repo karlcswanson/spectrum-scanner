@@ -8,9 +8,14 @@ from core.models import Access, Scanner
 
 
 def get_active_grants(user):
-    """Get active, non-expired access grants for a user."""
+    """Get active, non-expired access grants for a user — both grants made
+    directly to the user and grants made to any Django group they belong to
+    (e.g. the default group SSO users land in)."""
+    if not getattr(user, 'is_authenticated', False):
+        return Access.objects.none()
+    group_ids = user.groups.values_list('id', flat=True)
     return Access.objects.filter(
-        user=user,
+        Q(user=user) | Q(group_id__in=group_ids),
         is_active=True,
     ).filter(
         Q(expires_at__isnull=True) | Q(expires_at__gt=timezone.now())

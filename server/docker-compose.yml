@@ -96,7 +96,7 @@ services:
     depends_on:
       - mosquitto
       - server
-    command: python manage.py mqtt_bridge
+    command: uv run python manage.py mqtt_bridge
 
   # Scheduler (per-scanner rollup + periodic dynsec sync via APScheduler)
   scheduler:
