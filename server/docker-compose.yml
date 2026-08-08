@@ -58,6 +58,11 @@ services:
       - MOSQUITTO_DYNSEC_USERNAME=${MOSQUITTO_DYNSEC_USERNAME:-admin}
       - MOSQUITTO_DYNSEC_PASSWORD=${MOSQUITTO_DYNSEC_PASSWORD:-admin-secret-change-me}
       - REDIS_URL=${REDIS_URL:-redis://redis:6379/0}
+      # Branding (served to the SPA via /api/config/)
+      - BRAND_NAME=${BRAND_NAME:-}
+      - BRAND_LOGO_URL=${BRAND_LOGO_URL:-}
+      - BRAND_ACCENT=${BRAND_ACCENT:-}
+      - BRAND_TITLE=${BRAND_TITLE:-}
     volumes:
       - .:/app
       - ./data:/app/data

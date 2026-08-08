@@ -544,6 +544,19 @@ def api_version(request):
 
 @api_view(['GET'])
 @permission_classes([AllowAny])
+def api_config(request):
+    """Public bootstrap config the SPA reads on load (NetBox-style: Django
+    settings are the source of truth). Branding fields are optional; unset ones
+    are empty strings and the frontend falls back to the default Micboard
+    Spectrum identity. A natural home for future feature flags / version too."""
+    from django.conf import settings
+    return Response({
+        'branding': settings.BRANDING,
+    })
+
+
+@api_view(['GET'])
+@permission_classes([AllowAny])
 def auth_user(request):
     """Get current authenticated user info.
 

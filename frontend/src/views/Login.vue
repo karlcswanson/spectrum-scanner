@@ -2,6 +2,7 @@
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../stores/auth'
+import { brand, project } from '../lib/brand'
 
 const router = useRouter()
 const auth = useAuthStore()
@@ -40,9 +41,9 @@ async function handleSubmit() {
   <div class="min-h-screen flex items-center justify-center bg-gray-900">
     <div class="max-w-md w-full space-y-8 p-8">
       <div class="text-center">
-        <img src="/logo.png" alt="Micboard" class="w-full mb-6" />
+        <img :src="brand.logoUrl" :alt="brand.logoAlt" class="w-full mb-6" />
         <h2 class="text-3xl font-bold text-white">
-          Spectrum Server
+          {{ brand.name }}
         </h2>
         <p class="mt-2 text-sm text-gray-400">
           Sign in to view spectrum data
@@ -122,6 +123,7 @@ async function handleSubmit() {
         <button
           type="submit"
           :disabled="submitting"
+          :style="(!auth.ssoEnabled && brand.accent) ? { backgroundColor: brand.accent } : {}"
           class="w-full flex justify-center py-2 px-4 rounded-md shadow-sm text-sm font-medium focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
           :class="auth.ssoEnabled
             ? 'border border-gray-600 text-gray-200 bg-gray-800 hover:bg-gray-700'
@@ -131,6 +133,17 @@ async function handleSubmit() {
           <span v-else>Sign in</span>
         </button>
       </form>
+
+      <a
+        :href="project.github"
+        target="_blank"
+        rel="noopener noreferrer"
+        class="flex items-center justify-center gap-1.5 text-xs text-gray-600 hover:text-gray-300"
+      >
+        <span>Powered by</span>
+        <img src="/logo.png" alt="" class="h-4" />
+        <span>{{ project.name }}</span>
+      </a>
     </div>
   </div>
 </template>

@@ -3,6 +3,8 @@ import { watch } from 'vue'
 import { RouterView, useRoute, useRouter } from 'vue-router'
 import { useScannersStore } from './stores/scanners'
 import { useAuthStore } from './stores/auth'
+import { brand } from './lib/brand'
+import AppFooter from './components/AppFooter.vue'
 
 const store = useScannersStore()
 const auth = useAuthStore()
@@ -28,12 +30,16 @@ async function handleLogout() {
 <template>
   <div class="min-h-screen">
     <!-- Only show header on non-login pages -->
-    <header v-if="route.path !== '/login'" class="bg-gray-800 border-b border-gray-700">
+    <header
+      v-if="route.path !== '/login'"
+      class="bg-gray-800 border-b border-gray-700"
+      :style="brand.accent ? { borderBottomColor: brand.accent } : {}"
+    >
       <div class="w-full px-2 py-2 sm:px-4 sm:py-4">
         <div class="flex items-center justify-between gap-2">
           <router-link to="/" class="flex items-center gap-2 sm:gap-3 min-w-0">
-            <img src="/logo.png" alt="Micboard" class="h-7 sm:h-8" />
-            <span class="text-base sm:text-xl font-bold text-white truncate">Spectrum Server</span>
+            <img :src="brand.logoUrl" :alt="brand.logoAlt" class="h-7 sm:h-8" />
+            <span class="text-base sm:text-xl font-bold text-white truncate">{{ brand.name }}</span>
           </router-link>
           <div class="flex items-center gap-2 sm:gap-4">
             <nav class="hidden sm:flex space-x-4">
@@ -62,5 +68,8 @@ async function handleLogout() {
     <main :class="route.path !== '/login' ? 'w-full px-2 py-3 sm:px-4 sm:py-6' : ''">
       <RouterView />
     </main>
+
+    <!-- Footer flows at the end of the page (not pinned); hidden on login -->
+    <AppFooter v-if="route.path !== '/login'" />
   </div>
 </template>

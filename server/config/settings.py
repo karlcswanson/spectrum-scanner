@@ -57,6 +57,17 @@ MIDDLEWARE = [
 # startup), so one env var covers both the Django-admin and Vue sides.
 ANALYTICS_EMBED = os.getenv('ANALYTICS_EMBED', '')
 
+# Branding (NetBox-style: config lives here in Django
+# settings, the server is the single source of truth). Surfaced to the Vue SPA
+# via the public /api/config/ endpoint (api.views.api_config). All fields
+# optional. See docs/branding.md.
+BRANDING = {
+    'name': os.getenv('BRAND_NAME', ''),        # header / login display name
+    'logo_url': os.getenv('BRAND_LOGO_URL', ''),  # header + login logo (URL or same-origin path)
+    'accent': os.getenv('BRAND_ACCENT', ''),    # CSS colour: header accent + primary button
+    'title': os.getenv('BRAND_TITLE', ''),      # browser tab title (verbatim override; default in index.html)
+}
+
 ROOT_URLCONF = 'config.urls'
 
 TEMPLATES = [

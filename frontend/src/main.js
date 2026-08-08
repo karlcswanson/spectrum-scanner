@@ -12,6 +12,7 @@ import Login from './views/Login.vue'
 
 // Stores
 import { useAuthStore } from './stores/auth'
+import { loadConfig } from './lib/brand'
 
 const routes = [
   { path: '/', component: Dashboard, meta: { requiresAuth: true } },
@@ -49,4 +50,7 @@ router.beforeEach(async (to, from, next) => {
   }
 })
 
-app.mount('#app')
+// Load branding before first paint so the login/header never flash the default
+// identity, then mount. loadConfig never rejects and is bounded by its own
+// timeout, so a slow/dead server can't hang us — .finally mounts regardless.
+loadConfig().finally(() => app.mount('#app'))
