@@ -34,6 +34,15 @@ const allBands = computed(() => {
   return bands.sort((a, b) => (Number(a.start_hz) || 0) - (Number(b.start_hz) || 0))
 })
 
+// Free-form metadata (server-owned key/values); rendered generically in a hover
+// table. Keys are deployment-defined — the UI never interprets them.
+const metadataEntries = computed(() => Object.entries(props.scanner?.metadata || {}))
+function formatMetaValue(v) {
+  if (v === null || v === undefined) return ''
+  if (typeof v === 'object') return JSON.stringify(v)
+  return String(v)
+}
+
 // Status helpers
 const statusColor = computed(() => {
   if (!props.scanner.online) return 'bg-red-500'
@@ -79,7 +88,7 @@ watch(settings, (newSettings) => {
 </script>
 
 <template>
-  <div class="bg-gray-800 rounded-lg overflow-hidden">
+  <div class="bg-gray-800 rounded-lg">
     <!-- Main header bar -->
     <div class="px-3 py-2 sm:p-4 flex flex-wrap items-center justify-between gap-2">
       <div class="flex items-center gap-2 sm:gap-4 min-w-0">
@@ -93,6 +102,38 @@ watch(settings, (newSettings) => {
         <span v-if="scanner.location" class="text-gray-400 text-xs sm:text-sm hidden sm:inline">
           {{ scanner.location }}
         </span>
+        <!-- Asset tag (device-reported, optional) -->
+        <span
+          v-if="scanner.asset_tag"
+          class="px-1.5 py-0.5 rounded bg-gray-700 text-gray-300 font-mono text-xs shrink-0"
+          title="Asset tag"
+        >
+          {{ scanner.asset_tag }}
+        </span>
+        <!-- Metadata hover table (optional, generic key/values) -->
+        <div v-if="metadataEntries.length" class="relative group shrink-0">
+          <button
+            type="button"
+            class="p-1 rounded text-gray-400 hover:text-gray-200 hover:bg-gray-700 transition-colors"
+            aria-label="Scanner metadata"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          </button>
+          <div
+            class="absolute left-0 top-full mt-1 z-50 hidden group-hover:block min-w-[12rem] max-w-xs bg-gray-900 border border-gray-700 rounded-lg shadow-lg p-3"
+          >
+            <table class="text-xs w-full">
+              <tbody>
+                <tr v-for="[key, value] in metadataEntries" :key="key" class="align-top">
+                  <td class="pr-3 py-0.5 text-gray-400 whitespace-nowrap font-medium">{{ key }}</td>
+                  <td class="py-0.5 text-gray-200 break-words">{{ formatMetaValue(value) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
         <!-- Status badge -->
         <div class="flex items-center gap-1.5">
           <span class="w-2 h-2 rounded-full shrink-0" :class="statusColor"></span>
@@ -140,7 +181,7 @@ watch(settings, (newSettings) => {
     </div>
 
     <!-- Collapsible settings panel -->
-    <div v-if="showSettings && canWrite" class="border-t border-gray-700 px-3 py-3 sm:p-4 bg-gray-850">
+    <div v-if="showSettings && canWrite" class="border-t border-gray-700 px-3 py-3 sm:p-4 bg-gray-850 rounded-b-lg">
       <div class="grid md:grid-cols-2 gap-4 sm:gap-6">
         <!-- Bands section -->
         <div>

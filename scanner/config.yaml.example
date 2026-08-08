@@ -1,6 +1,11 @@
 # Spectrum Scanner Configuration
 # Copy this to config.yaml and customize for your setup
 
+# Optional device-reported asset tag / barcode. Sent to the server when set and
+# shown in the UI. Identity is the server-assigned scanner id (see mqtt.id below),
+# not this. Can also be set via the SCANNER_ASSET_TAG env var.
+# asset_tag: "SN-000123"
+
 # Auto-start scanning when the scanner boots
 auto_start: true
 

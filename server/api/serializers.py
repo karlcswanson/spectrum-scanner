@@ -23,10 +23,13 @@ class ScannerSerializer(serializers.ModelSerializer):
         model = Scanner
         fields = [
             'id', 'name', 'scanner_type', 'location', 'description',
+            'asset_tag', 'metadata',
             'online', 'scanning', 'current_band', 'last_seen',
             'bands', 'scanner_groups', 'user_permission', 'created_at', 'updated_at'
         ]
-        read_only_fields = ['online', 'scanning', 'current_band', 'last_seen', 'bands', 'scanner_groups', 'created_at', 'updated_at']
+        # asset_tag is device-reported (mirrored from the config message), so it
+        # is read-only here; metadata is server-owned and editable.
+        read_only_fields = ['asset_tag', 'online', 'scanning', 'current_band', 'last_seen', 'bands', 'scanner_groups', 'created_at', 'updated_at']
 
     def get_user_permission(self, obj):
         """Return the current user's permission level for this scanner."""
