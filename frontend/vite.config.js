@@ -30,6 +30,15 @@ const mainConfig = {
         target: `http://${backendHost}:8000`,
         changeOrigin: true,
       },
+      // Enterprise SSO (python-social-auth) login/callback — forwarded to
+      // Django. Keep the browser's original Host (changeOrigin: false): psa
+      // builds the OAuth redirect_uri from the request Host, and it must match
+      // this dev server's address (e.g. localhost:5174), not the internal
+      // `server:8000`. No-op unless the backend enables SSO.
+      '/oauth': {
+        target: `http://${backendHost}:8000`,
+        changeOrigin: false,
+      },
       '/ws': {
         target: `ws://${backendHost}:8000`,
         ws: true,

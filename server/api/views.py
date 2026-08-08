@@ -3,6 +3,7 @@
 import logging
 import os
 from datetime import timedelta
+from django.conf import settings
 from django.utils import timezone
 from rest_framework import viewsets, status
 from rest_framework.decorators import action, api_view, permission_classes, throttle_classes
@@ -565,6 +566,17 @@ def auth_user(request):
     # Ensure CSRF cookie is set
     get_token(request)
 
+    # SSO button state — lets the SPA decide whether/how to render the login
+    # button. Same values the admin login template gets via the `sso` context
+    # processor, so both surfaces theme from one set of SSO_* settings.
+    _sso_backend = getattr(settings, 'SSO_BACKEND_NAME', '') if settings.SSO_ENABLED else ''
+    sso = {
+        'sso_enabled': settings.SSO_ENABLED,
+        'sso_label': getattr(settings, 'SSO_BUTTON_LABEL', 'Sign in with SSO'),
+        'sso_brand': getattr(settings, 'SSO_PROVIDER_BRAND', 'generic'),
+        'sso_login_url': f'/oauth/login/{_sso_backend}/' if _sso_backend else '',
+    }
+
     if request.user.is_authenticated:
         return Response({
             'id': request.user.id,
@@ -573,8 +585,9 @@ def auth_user(request):
             'is_staff': request.user.is_staff,
             'readonly': request.session.get('readonly', False),
             'share_label': request.session.get('share_label'),
+            **sso,
         })
-    return Response({'user': None}, status=status.HTTP_200_OK)
+    return Response({'user': None, **sso}, status=status.HTTP_200_OK)
 
 
 @api_view(['POST'])

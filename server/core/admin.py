@@ -16,10 +16,10 @@ class BandInline(admin.TabularInline):
 
 @admin.register(Scanner)
 class ScannerAdmin(admin.ModelAdmin):
-    list_display = ['name', 'short_id', 'scanner_type', 'location', 'enabled', 'online', 'scanning', 'last_seen']
+    list_display = ['name', 'short_id', 'asset_tag', 'scanner_type', 'location', 'enabled', 'online', 'scanning', 'last_seen']
     list_filter = ['scanner_type', 'enabled', 'online', 'scanning']
-    search_fields = ['id', 'name', 'location']
-    readonly_fields = ['id', 'online', 'scanning', 'current_band', 'last_seen', 'created_at', 'updated_at', 'credentials_display']
+    search_fields = ['id', 'name', 'location', 'asset_tag']
+    readonly_fields = ['id', 'asset_tag', 'online', 'scanning', 'current_band', 'last_seen', 'created_at', 'updated_at', 'credentials_display']
     inlines = [BandInline]
     filter_horizontal = ['scanner_groups']
     actions = ['regenerate_tokens']
@@ -28,6 +28,10 @@ class ScannerAdmin(admin.ModelAdmin):
     fieldsets = (
         (None, {
             'fields': ('name', 'scanner_type', 'location', 'description')
+        }),
+        ('Asset tag & metadata', {
+            'fields': ('asset_tag', 'metadata'),
+            'description': 'asset_tag is device-reported (read-only). metadata is free-form key/values — keys are yours to define.'
         }),
         ('Groups', {
             'fields': ('scanner_groups',),
@@ -270,7 +274,7 @@ class AccessAdmin(admin.ModelAdmin):
             'fields': ('label', 'permission', 'is_active')
         }),
         ('Principal (set exactly one)', {
-            'fields': ('user', 'token'),
+            'fields': ('user', 'group', 'token'),
         }),
         ('Scope (set exactly one)', {
             'fields': ('scanner_group', 'scanner'),
@@ -291,6 +295,8 @@ class AccessAdmin(admin.ModelAdmin):
     def who_display(self, obj):
         if obj.user:
             return obj.user.username
+        if obj.group_id:
+            return f"group:{obj.group.name}"
         if obj.token:
             return f"token:{obj.token[:12]}..."
         return "—"

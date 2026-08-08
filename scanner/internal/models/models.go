@@ -186,9 +186,10 @@ type BackendConfig struct {
 
 // Config holds scanner configuration
 type Config struct {
-	// DeviceID is the scanner's stable identity (UUID). Human-readable
-	// name/location/description live server-side on the Scanner model, not here.
-	DeviceID    string         `json:"device_id" yaml:"device_id"`
+	// AssetTag is an optional device-reported label (barcode / asset tag). Sent
+	// to the server when set. Identity is the server-assigned MQTT id (see
+	// MQTTConfig.ID); name/location/description live server-side, not here.
+	AssetTag    string         `json:"asset_tag,omitempty" yaml:"asset_tag,omitempty"`
 	Bands       []Band         `json:"bands" yaml:"bands"`
 	DwellTimeMs int            `json:"dwell_time_ms" yaml:"dwell_time_ms"`
 	Mode        string         `json:"mode" yaml:"mode"`                           // "Average" or "PeakDetect"

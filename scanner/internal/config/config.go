@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/google/uuid"
 	"gopkg.in/yaml.v3"
 
 	"scanner/internal/models"
@@ -15,7 +14,6 @@ import (
 // DefaultConfig returns sensible defaults for live production RF scanning
 func DefaultConfig() *models.Config {
 	return &models.Config{
-		DeviceID:    uuid.New().String(),
 		DwellTimeMs: 50,
 		Mode:        "Average",
 		RxGain:      30,       // 30 dB provides linear response
@@ -62,11 +60,6 @@ func LoadFromFile(path string) (*models.Config, error) {
 
 	// Convert MHz to Hz if needed
 	cfg.NormalizeBands()
-
-	// Generate device ID if not set
-	if cfg.DeviceID == "" {
-		cfg.DeviceID = uuid.New().String()
-	}
 
 	return cfg, nil
 }
@@ -238,5 +231,45 @@ func LoadWithOptions(opts Options) (*models.Config, string, error) {
 	// Apply overrides
 	opts.ApplyToConfig(cfg)
 
+	// Config-level SCANNER_* env overrides (asset tag, MQTT identity/creds) so a
+	// container (e.g. Balena) can be described entirely by env vars, no file.
+	ApplyEnvOverrides(cfg)
+
 	return cfg, path, nil
+}
+
+// ApplyEnvOverrides applies config-level SCANNER_* environment overrides onto a
+// loaded config. This lets a containerized scanner (e.g. a Balena fleet device)
+// be described entirely by env vars with no config file on disk. Identity is the
+// server-assigned MQTT id (SCANNER_MQTT_ID from Django admin); name/location/
+// description live server-side on the Scanner model.
+func ApplyEnvOverrides(cfg *models.Config) {
+	if v := os.Getenv("SCANNER_ASSET_TAG"); v != "" {
+		cfg.AssetTag = v
+	}
+
+	broker := os.Getenv("SCANNER_MQTT_URL")
+	id := os.Getenv("SCANNER_MQTT_ID")
+	token := os.Getenv("SCANNER_MQTT_TOKEN")
+	prefix := os.Getenv("SCANNER_MQTT_PREFIX")
+	if broker == "" && id == "" && token == "" && prefix == "" {
+		return
+	}
+	// Any MQTT env implies the scanner should publish; create the section on the
+	// fly when there's no config file (the Balena case).
+	if cfg.MQTT == nil {
+		cfg.MQTT = &models.MQTTConfig{Enabled: true}
+	}
+	if broker != "" {
+		cfg.MQTT.Broker = broker
+	}
+	if id != "" {
+		cfg.MQTT.ID = id
+	}
+	if token != "" {
+		cfg.MQTT.Token = token
+	}
+	if prefix != "" {
+		cfg.MQTT.TopicPrefix = prefix
+	}
 }

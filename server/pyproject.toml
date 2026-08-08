@@ -16,4 +16,9 @@ dependencies = [
     "numpy>=2.0",
     "apscheduler>=3.10,<4",
     "django-redis>=5.4",
+    # Enterprise SSO (optional, off by default — see docs/sso.md). Only active
+    # when SSO_ENABLED=true; ships in the image so a deployer can flip it on
+    # without rebuilding. Named per-provider backends (Okta/Entra/Google) come
+    # from the bundled social-auth-core.
+    "social-auth-app-django>=5.4",
 ]

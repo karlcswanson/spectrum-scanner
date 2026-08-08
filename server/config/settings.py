@@ -82,6 +82,7 @@ TEMPLATES = [
                 'django.contrib.auth.context_processors.auth',
                 'django.contrib.messages.context_processors.messages',
                 'api.context_processors.analytics_embed',
+                'api.context_processors.sso',
             ],
         },
     },
@@ -235,6 +236,87 @@ if not DEBUG:
     SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
+
+# ---- Authentication backends / enterprise SSO (python-social-auth) -------
+# Shipped default: plain Django auth (username/password + the share-link flow).
+# ModelBackend is the only backend, so nothing changes unless a deployer opts
+# in. Setting SSO_ENABLED=true adds a single corporate identity provider —
+# Okta, Microsoft Entra, or Google Workspace — selected by dotted path
+# (NetBox-style), as an *additional* login path. ModelBackend stays last so
+# admin/superuser and share-link login keep working (an IdP outage can't lock
+# you out of /admin). social_django is only installed when enabled, so a
+# disabled deployment gets no new tables. Real tenant/client values live in the
+# gitignored .env — never commit them. Full setup: docs/sso.md.
+import importlib
+
+SSO_ENABLED = os.getenv('SSO_ENABLED', 'false').lower() == 'true'
+
+AUTHENTICATION_BACKENDS = ['django.contrib.auth.backends.ModelBackend']
+
+if SSO_ENABLED:
+    INSTALLED_APPS += ['social_django']
+
+    # Backend selected by dotted path (like NetBox's REMOTE_AUTH_BACKEND), e.g.
+    #   social_core.backends.azuread_tenant.AzureADV2TenantOAuth2   (Entra, v2)
+    #   social_core.backends.okta_openidconnect.OktaOpenIdConnect   (Okta)
+    #   social_core.backends.google.GoogleOAuth2                    (Google)
+    SSO_BACKEND = os.getenv('SSO_BACKEND', '')
+    AUTHENTICATION_BACKENDS = [SSO_BACKEND, 'django.contrib.auth.backends.ModelBackend']
+
+    # Resolve the backend's URL name (used in /oauth/login/<name>/ and by the
+    # login button). Read from the backend class's `name` attribute.
+    _mod, _cls = SSO_BACKEND.rsplit('.', 1)
+    SSO_BACKEND_NAME = getattr(importlib.import_module(_mod), _cls).name
+
+    # Import every SOCIAL_AUTH_* var straight from the environment (the same way
+    # NetBox imports them from configuration.py). Deployers set the provider's
+    # own SOCIAL_AUTH_<BACKEND>_KEY/SECRET/... in .env — see docs/sso.md.
+    for _k, _v in os.environ.items():
+        if _k.startswith('SOCIAL_AUTH_'):
+            globals()[_k] = _v
+
+    SOCIAL_AUTH_JSONFIELD_ENABLED = True  # JSONB extra_data on Postgres
+    # TLS terminates at Caddy; build callback URLs as https in production.
+    if not DEBUG:
+        SOCIAL_AUTH_REDIRECT_IS_HTTPS = True
+
+    # Where the provider returns the browser after login/logout.
+    LOGIN_REDIRECT_URL = os.getenv('SSO_LOGIN_REDIRECT_URL', '/')
+    LOGOUT_REDIRECT_URL = os.getenv('SSO_LOGOUT_REDIRECT_URL', '/')
+
+    # Auth pipeline: psa default, but keep `auth_allowed` (domain gate via the
+    # backend's WHITELISTED_DOMAINS) and add our step that puts new users in the
+    # local default groups. No IdP group sync — authorization is the app's
+    # Access model.
+    SOCIAL_AUTH_PIPELINE = (
+        'social_core.pipeline.social_auth.social_details',
+        'social_core.pipeline.social_auth.social_uid',
+        'social_core.pipeline.social_auth.auth_allowed',
+        'social_core.pipeline.social_auth.social_user',
+        'social_core.pipeline.user.get_username',
+        'social_core.pipeline.user.create_user',
+        'social_core.pipeline.social_auth.associate_user',
+        'api.auth.pipeline.assign_default_groups',
+        'social_core.pipeline.social_auth.load_extra_data',
+        'social_core.pipeline.user.user_details',
+    )
+
+    # New SSO users are added to these LOCAL Django groups on first login for
+    # baseline access (managed in the app, not synced from the IdP). The groups'
+    # access comes from Access grants assigned to them.
+    SSO_DEFAULT_GROUPS = [
+        g.strip() for g in os.getenv('SSO_DEFAULT_GROUPS', '').split(',') if g.strip()
+    ]
+
+    # Login-button presentation (SPA + admin). SSO_PROVIDER_BRAND=microsoft
+    # renders the branded "Sign in with Microsoft" button; any other value = a
+    # neutral button showing SSO_BUTTON_LABEL. One setting themes both surfaces.
+    SSO_PROVIDER_BRAND = os.getenv('SSO_PROVIDER_BRAND', 'generic')
+    _default_sso_label = (
+        'Sign in with Microsoft' if SSO_PROVIDER_BRAND == 'microsoft'
+        else 'Sign in with SSO'
+    )
+    SSO_BUTTON_LABEL = os.getenv('SSO_BUTTON_LABEL', _default_sso_label)
 
 # MQTT settings
 MQTT_BROKER_HOST = os.getenv('MQTT_BROKER_HOST', 'localhost')

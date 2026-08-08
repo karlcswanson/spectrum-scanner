@@ -78,6 +78,9 @@ config.yaml
 # Editor / backup scratch files
 *.bak
 
+# Deploy verification script output
+/deploy-check.log
+
 # iOS local code signing (contains user's Apple Developer Team ID)
 ios/Signing.xcconfig
 
@@ -124,3 +127,4 @@ ios/SpectrumScanner/**/demo_scans.tmp.json
 # Swift package resolution cache (committed alongside project.yml is fine,
 # but DerivedData duplicates are not)
 **/Package.resolved.lock
+.ref-local/

@@ -1,0 +1,33 @@
+{% extends "admin/login.html" %}
+{% comment %}
+Adds an enterprise-SSO button above the standard admin login form. Wired in via
+`admin.site.login_template` (config/urls.py) only when SSO_ENABLED. `sso_enabled`
+/ `sso_label` / `sso_brand` / `sso_login_url` come from api.context_processors.sso.
+The python-social-auth login view is POST-only (anti-login-CSRF), so this is a
+form, not a link. An SSO user can only reach the admin if they are is_staff.
+{% endcomment %}
+{% block content %}
+  {% if sso_enabled %}
+  <div class="sso-login" style="margin-bottom:16px;">
+    <form method="post" action="{{ sso_login_url }}" style="margin:0;">
+      {% csrf_token %}
+      <input type="hidden" name="next" value="{% url 'admin:index' %}">
+      <button type="submit"
+              class="button"
+              style="display:flex;align-items:center;justify-content:center;gap:8px;width:100%;box-sizing:border-box;padding:10px;cursor:pointer;{% if sso_brand == 'microsoft' %}background:#fff;color:#5e5e5e;border:1px solid #8c8c8c;{% endif %}">
+        {% if sso_brand == 'microsoft' %}
+        <svg width="18" height="18" viewBox="0 0 21 21" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <rect x="1" y="1" width="9" height="9" fill="#f25022"/>
+          <rect x="11" y="1" width="9" height="9" fill="#7fba00"/>
+          <rect x="1" y="11" width="9" height="9" fill="#00a4ef"/>
+          <rect x="11" y="11" width="9" height="9" fill="#ffb900"/>
+        </svg>
+        {% endif %}
+        <span>{{ sso_label }}</span>
+      </button>
+    </form>
+    <p class="help" style="text-align:center;margin-top:10px;">or use a local account</p>
+  </div>
+  {% endif %}
+  {{ block.super }}
+{% endblock %}

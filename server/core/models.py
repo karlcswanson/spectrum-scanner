@@ -32,6 +32,17 @@ class Scanner(models.Model):
     scanner_type = models.CharField(max_length=20, choices=SCANNER_TYPES, default='pluto')
     location = models.CharField(max_length=200, blank=True)
     description = models.TextField(blank=True)
+
+    # Device-reported asset tag / barcode (optional). Mirrored from the scanner's
+    # config message when present; a join key to external systems. Device-owned
+    # — read-only in admin, never edited here.
+    asset_tag = models.CharField(max_length=200, blank=True, db_index=True)
+
+    # Free-form metadata (schemaless, server-owned, edited centrally). Keys are
+    # deployment-specific; the app never interprets them — the UI just renders
+    # whatever key/values are present.
+    metadata = models.JSONField(default=dict, blank=True)
+
     retention_policy = models.CharField(
         max_length=200, blank=True, default='',
         help_text='Graphite-style retention policy override (e.g. "1s:24h,1m:7d,5m:30d,1h:1y"). Empty = use global default.'
@@ -560,13 +571,21 @@ class Access(models.Model):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
 
-    # Who — exactly one of these is set
+    # Who — exactly one of these is set (a user, a Django group, or a token)
     user = models.ForeignKey(
         'auth.User',
         on_delete=models.CASCADE,
         null=True,
         blank=True,
         related_name='access_grants'
+    )
+    group = models.ForeignKey(
+        'auth.Group',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='access_grants',
+        help_text="Grant to every member of this Django group (e.g. SSO users)",
     )
     token = models.CharField(
         max_length=64,
@@ -615,8 +634,9 @@ class Access(models.Model):
         constraints = [
             models.CheckConstraint(
                 condition=(
-                    models.Q(user__isnull=False, token__isnull=True) |
-                    models.Q(user__isnull=True, token__isnull=False)
+                    models.Q(user__isnull=False, token__isnull=True, group__isnull=True) |
+                    models.Q(user__isnull=True, token__isnull=False, group__isnull=True) |
+                    models.Q(user__isnull=True, token__isnull=True, group__isnull=False)
                 ),
                 name='access_exactly_one_principal',
             ),
@@ -630,7 +650,12 @@ class Access(models.Model):
         ]
 
     def __str__(self):
-        who = self.user.username if self.user else f"token:{self.token[:12]}..."
+        if self.user:
+            who = self.user.username
+        elif self.group_id:
+            who = f"group:{self.group.name}"
+        else:
+            who = f"token:{self.token[:12]}..."
         what = self.scanner_group.name if self.scanner_group else str(self.scanner)
         return f"{who} -> {what} ({self.get_permission_display()})"
 

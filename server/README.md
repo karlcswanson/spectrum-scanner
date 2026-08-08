@@ -26,6 +26,14 @@ Central server for aggregating and visualizing spectrum scan data from multiple 
 - `Access` - User/token permission grants for scanners and groups
 - `SiteSettings` - Global key-value configuration (e.g. retention policy)
 
+## Authentication
+
+Local Django accounts (username/password) plus read-only share links work out of
+the box. Optional **enterprise SSO** (Microsoft Entra, Okta, or any OpenID
+Connect provider) can be enabled as an additional login path — off by default,
+no impact on the default install. Setup, `SSO_*` / `SOCIAL_AUTH_*` variables, and
+the Entra walkthrough live in [`../docs/sso.md`](../docs/sso.md).
+
 ## MQTT Topics
 
 Scanners publish to:

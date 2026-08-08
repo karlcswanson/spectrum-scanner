@@ -56,9 +56,15 @@ func (s *Server) handleGetStatus(w http.ResponseWriter, r *http.Request) {
 		scanning = s.engine.IsRunning()
 	}
 
+	// Standalone has no server-assigned identity; label with the optional asset
+	// tag when set, otherwise a generic name. (name/location live server-side.)
+	label := s.config.AssetTag
+	if label == "" {
+		label = "Spectrum Scanner"
+	}
 	status := models.ScannerStatus{
-		ID:          s.config.DeviceID,
-		Name:        s.config.DeviceID, // identity (name/location) is server-side; label with the ID here
+		ID:          s.config.AssetTag,
+		Name:        label,
 		Online:      s.engine != nil,
 		Scanning:    scanning,
 		CurrentBand: currentBand,
@@ -104,7 +110,7 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	// Persist to disk if callback set
 	s.saveConfig()
 
-	log.Printf("Configuration updated: %s", s.config.DeviceID)
+	log.Printf("Configuration updated (asset tag: %q)", s.config.AssetTag)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(s.config)

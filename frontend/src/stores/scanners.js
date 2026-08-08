@@ -263,6 +263,9 @@ export const useScannersStore = defineStore('scanners', () => {
       name: existing.name || scannerId,
       location: existing.location || '',
       description: existing.description || '',
+      // asset_tag is device-reported (optional) and rides the config message;
+      // metadata is server-owned and only arrives via REST, so preserve it.
+      asset_tag: data.asset_tag ?? existing.asset_tag ?? '',
       bands: data.bands || [],
       settings: data.settings || {},
       online: true,

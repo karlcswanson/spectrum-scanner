@@ -326,8 +326,6 @@ func (e *Engine) runLoop(ctx context.Context) {
 				continue
 			}
 
-			// Set scanner ID and band name
-			scan.ID = config.DeviceID
 			scan.Band = band.Name
 
 			e.broadcast(scan, band.Name)
@@ -361,7 +359,6 @@ func (e *Engine) ScanOnce(ctx context.Context, band models.Band) (models.ScanLin
 		return models.ScanLine{}, err
 	}
 
-	scan.ID = config.DeviceID
 	return scan, nil
 }
 

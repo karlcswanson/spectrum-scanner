@@ -47,6 +47,25 @@ class ComputeDesiredRolesTest(TestCase):
         Access.objects.create(user=u, scanner=self.s1, permission="rw")
         self.assertEqual(compute_desired_roles(u), {f"scanner-{self.s1.id}-rw"})
 
+    def test_group_grant_gives_member_scanner_role(self):
+        # A grant to a Django auth Group is inherited by every member (the model
+        # SSO users land in). The broker scope must mirror that.
+        from django.contrib.auth.models import Group
+        grp = Group.objects.create(name="sso-users")
+        member = User.objects.create_user("member")
+        member.groups.add(grp)
+        Access.objects.create(group=grp, scanner=self.s1, permission="r")
+        self.assertEqual(compute_desired_roles(member), {f"scanner-{self.s1.id}-read"})
+
+    def test_group_grant_not_seen_by_non_member(self):
+        # IDOR guarantee for the group principal: a user not in the group gets
+        # none of the group's roles.
+        from django.contrib.auth.models import Group
+        grp = Group.objects.create(name="sso-users")
+        Access.objects.create(group=grp, scanner=self.s1, permission="rw")
+        outsider = User.objects.create_user("outsider")
+        self.assertEqual(compute_desired_roles(outsider), set())
+
     def test_plain_user_gets_nothing(self):
         u = User.objects.create_user("nobody")
         self.assertEqual(compute_desired_roles(u), set())
