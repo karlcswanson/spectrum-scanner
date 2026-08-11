@@ -27,7 +27,7 @@ from .permissions import (
     ReadOnlyIfShareSession, HasScannerAccess, HasScannerGroupAccess,
     IsStaffOrReadOnly, get_accessible_group_ids,
     get_request_scanner_ids, get_request_max_history_seconds,
-    CanWriteMonitoredFrequency, get_rw_scanner_ids,
+    CanWriteMonitoredFrequency, get_rw_scanner_ids, request_reads_all,
 )
 from .cache import (
     cached_or_compute, bucket_epoch, register_warm, apply_browser_cache,
@@ -646,8 +646,9 @@ class ScannerGroupViewSet(viewsets.ModelViewSet):
         queryset = super().get_queryset()
         user = self.request.user
 
-        # Non-staff users only see groups they have access to
-        if not user.is_staff:
+        # Non-staff users only see groups they have access to — unless the
+        # read-all baseline is on, where any authenticated login sees all groups.
+        if not user.is_staff and not request_reads_all(self.request):
             accessible_ids = get_accessible_group_ids(user)
             queryset = queryset.filter(id__in=accessible_ids)
 

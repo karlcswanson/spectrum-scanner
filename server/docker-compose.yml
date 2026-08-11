@@ -83,6 +83,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    # Persists scans to Postgres — if it dies, history silently stops. Auto-heal.
+    restart: unless-stopped
     environment:
       - MQTT_BROKER_HOST=${MQTT_BROKER_HOST:-mosquitto}
       - DB_ENGINE=django.db.backends.postgresql
@@ -108,6 +110,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    # Rollups/retention/cache-warming — auto-heal so they don't silently stop.
+    restart: unless-stopped
     environment:
       - DB_ENGINE=django.db.backends.postgresql
       - DB_NAME=${DB_NAME:-spectrum}

@@ -7,6 +7,25 @@ from rest_framework.permissions import BasePermission, SAFE_METHODS
 from core.models import Access, Scanner
 
 
+def request_reads_all(request):
+    """True when a request should get read access to everything.
+
+    Keyed on Django's standard ``view_scanner`` model permission (carried by the
+    default group every user joins — see core/signals.py). Applies to a real
+    authenticated login (SSO or local) that is NOT a share-link session. Staff are
+    already unrestricted; share sessions stay scoped to their access_id; anonymous
+    requests get nothing. Writes are unaffected — they still require an rw grant
+    (or staff). Remove ``view_scanner`` from the default group to turn this off.
+    """
+    user = getattr(request, 'user', None)
+    if not getattr(user, 'is_authenticated', False):
+        return False
+    session = getattr(request, 'session', {}) or {}
+    if session.get('access_id') or session.get('readonly'):
+        return False  # share session — keep it scoped to its access_id
+    return user.has_perm('core.view_scanner')
+
+
 def get_active_grants(user):
     """Get active, non-expired access grants for a user — both grants made
     directly to the user and grants made to any Django group they belong to
@@ -131,6 +150,10 @@ def get_request_scanner_ids(request):
     if getattr(user, 'is_staff', False):
         return None
 
+    # Read-all baseline: any authenticated non-share login reads every scanner.
+    if request_reads_all(request):
+        return None
+
     ids = set(get_accessible_scanner_ids(user))
 
     access_id = request.session.get('access_id')
@@ -223,7 +246,7 @@ class HasScannerGroupAccess(BasePermission):
         grants = get_active_grants(request.user).filter(scanner_group=obj)
 
         if request.method in SAFE_METHODS:
-            return grants.exists()
+            return request_reads_all(request) or grants.exists()
 
         return grants.filter(permission='rw').exists()
 

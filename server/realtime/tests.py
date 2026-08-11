@@ -16,6 +16,13 @@ class ComputeDesiredRolesTest(TestCase):
         self.s1 = Scanner.objects.create(name="S1")
         self.s2 = Scanner.objects.create(name="S2")
 
+    def _scoped_user(self, name):
+        # A user WITHOUT the read-all baseline (removed from the default Viewers
+        # group), so only the Access-grant -> role mapping applies.
+        u = User.objects.create_user(name)
+        u.groups.clear()
+        return u
+
     def test_staff_gets_all_scanners(self):
         staff = User.objects.create_user("staff", is_staff=True)
         self.assertEqual(compute_desired_roles(staff), {"staff-all-scanners"})
@@ -29,12 +36,21 @@ class ComputeDesiredRolesTest(TestCase):
             {"read-all-scanners"},
         )
 
+    def test_view_scanner_baseline_gets_read_all(self):
+        # A real login in the default Viewers group (view_scanner) subscribes to
+        # every scanner — the broker mirror of the REST read-all baseline.
+        u = User.objects.create_user("reader")
+        self.assertTrue(u.groups.filter(name="Viewers").exists())
+        self.assertEqual(compute_desired_roles(u), {"read-all-scanners"})
+
     def test_user_grant_gets_scanner_read_role(self):
-        u = User.objects.create_user("u1")
+        u = self._scoped_user("u1")
         Access.objects.create(user=u, scanner=self.s1, permission="r")
         self.assertEqual(compute_desired_roles(u), {f"scanner-{self.s1.id}-read"})
 
     def test_scoped_share_access_id_gets_only_its_scanner(self):
+        # Even though demo is in the default group, a share session (access_id)
+        # stays scoped to its granted scanner — not read-all.
         demo = User.objects.create_user("demo_viewer")
         access = Access.objects.create(token="tok", scanner=self.s2, permission="r")
         roles = compute_desired_roles(demo, access_id=str(access.id))
@@ -43,7 +59,7 @@ class ComputeDesiredRolesTest(TestCase):
         self.assertNotIn(f"scanner-{self.s1.id}-read", roles)
 
     def test_rw_grant_gets_rw_role(self):
-        u = User.objects.create_user("writer")
+        u = self._scoped_user("writer")
         Access.objects.create(user=u, scanner=self.s1, permission="rw")
         self.assertEqual(compute_desired_roles(u), {f"scanner-{self.s1.id}-rw"})
 
@@ -52,7 +68,7 @@ class ComputeDesiredRolesTest(TestCase):
         # SSO users land in). The broker scope must mirror that.
         from django.contrib.auth.models import Group
         grp = Group.objects.create(name="sso-users")
-        member = User.objects.create_user("member")
+        member = self._scoped_user("member")
         member.groups.add(grp)
         Access.objects.create(group=grp, scanner=self.s1, permission="r")
         self.assertEqual(compute_desired_roles(member), {f"scanner-{self.s1.id}-read"})
@@ -63,9 +79,9 @@ class ComputeDesiredRolesTest(TestCase):
         from django.contrib.auth.models import Group
         grp = Group.objects.create(name="sso-users")
         Access.objects.create(group=grp, scanner=self.s1, permission="rw")
-        outsider = User.objects.create_user("outsider")
+        outsider = self._scoped_user("outsider")
         self.assertEqual(compute_desired_roles(outsider), set())
 
     def test_plain_user_gets_nothing(self):
-        u = User.objects.create_user("nobody")
+        u = self._scoped_user("nobody")
         self.assertEqual(compute_desired_roles(u), set())

@@ -42,16 +42,36 @@ class GetRequestScannerIdsTest(TestCase):
         req.session = session or {}
         return req
 
+    def _scoped_user(self, name):
+        # A user WITHOUT the read-all baseline (removed from the default group),
+        # so object-level Access scoping applies.
+        u = User.objects.create_user(name)
+        u.groups.clear()
+        return u
+
     def test_staff_unrestricted(self):
         staff = User.objects.create_user("staff", is_staff=True)
         self.assertIsNone(get_request_scanner_ids(self._req(staff)))
 
-    def test_user_grant_scopes_to_granted_scanner(self):
-        u = User.objects.create_user("u1")
+    def test_new_user_gets_read_all_baseline(self):
+        # A newly-created user auto-joins the default group (which carries
+        # view_scanner), so it reads every scanner. End-to-end: the post_migrate
+        # group setup + the post_save enrollment + the has_perm check.
+        u = User.objects.create_user("reader")
+        self.assertTrue(u.groups.filter(name="Viewers").exists())
+        self.assertIsNone(get_request_scanner_ids(self._req(u)))
+
+    def test_user_grant_scopes_when_no_baseline(self):
+        u = self._scoped_user("u1")
         Access.objects.create(user=u, scanner=self.s1, permission="r")
         self.assertEqual(get_request_scanner_ids(self._req(u)), {self.s1.id})
 
+    def test_no_baseline_no_grants_sees_nothing(self):
+        u = self._scoped_user("nobody")
+        self.assertEqual(get_request_scanner_ids(self._req(u)), set())
+
     def test_share_access_id_scopes_to_grant(self):
+        # A share session stays scoped even though demo is in the default group.
         demo = User.objects.create_user("demo_viewer")
         access = Access.objects.create(token="tok-share", scanner=self.s2, permission="r")
         req = self._req(demo, {"access_id": str(access.id), "readonly": True})
@@ -65,17 +85,13 @@ class GetRequestScannerIdsTest(TestCase):
         demo = User.objects.create_user("demo_viewer")
         self.assertIsNone(get_request_scanner_ids(self._req(demo, {"readonly": True})))
 
-    def test_plain_user_without_grants_sees_nothing(self):
-        u = User.objects.create_user("nobody")
-        self.assertEqual(get_request_scanner_ids(self._req(u)), set())
-
     def test_inactive_share_grant_excluded(self):
         demo = User.objects.create_user("demo_viewer")
         access = Access.objects.create(
             token="tok-dead", scanner=self.s2, permission="r", is_active=False
         )
         req = self._req(demo, {"access_id": str(access.id)})
-        # is_active=False -> not found by the active-only lookup -> empty.
+        # is_active=False -> not found; share session stays scoped -> empty.
         self.assertEqual(get_request_scanner_ids(req), set())
 
 
@@ -597,7 +613,10 @@ class AccessPrincipalConstraintTest(TestCase):
                 Access.objects.create(scanner=self.scanner, permission="r")
 
 
-@override_settings(SSO_DEFAULT_GROUPS=["sso-users"])
+# DEFAULT_USER_GROUP="" disables the baseline auto-enroll signal so these tests
+# exercise the SSO pipeline step in isolation (otherwise every created user is in
+# the Viewers group and "no groups" assertions can't hold).
+@override_settings(SSO_DEFAULT_GROUPS=["sso-users"], DEFAULT_USER_GROUP="")
 class AssignDefaultGroupsTest(TestCase):
     """The SSO pipeline step that drops newly-created users into the local
     baseline group(s)."""
