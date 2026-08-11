@@ -8,6 +8,7 @@ import SpectrogramChart from './SpectrogramChart.vue'
 import TimeScrubber from './TimeScrubber.vue'
 import FrequencyTimePlot from './FrequencyTimePlot.vue'
 import MonitoredFrequencyEditor from './MonitoredFrequencyEditor.vue'
+import ExportWizard from './ExportWizard.vue'
 
 const props = defineProps({
   scannerId: {
@@ -82,6 +83,7 @@ const scrubberLockHours = computed(() => (auth.isReadonly ? SCRUBBER_HOURS : nul
 
 const chartRef = ref(null)
 const spectrogramRef = ref(null)
+const showExport = ref(false)
 
 const soloed = computed(() => store.isSoloed(props.scannerId, props.band.name))
 
@@ -407,33 +409,10 @@ const traces = computed(() => {
   return result
 })
 
+// Open the export wizard (trace type, bands, live preview). It reuses the band
+// view's currently-selected time range for Peak/Average.
 function exportCSV() {
-  const scan = activeScan.value
-  if (!scan) return
-
-  // Generate CSV from the currently displayed scan
-  let csv = 'Frequency (MHz),Power (dBm)\n'
-  const startMHz = scan.hz_lo / 1e6
-  const stepMHz = scan.step / 1e6
-
-  for (let i = 0; i < scan.power.length; i++) {
-    const freq = startMHz + (i * stepMHz)
-    csv += `${freq.toFixed(6)},${scan.power[i].toFixed(2)}\n`
-  }
-
-  const blob = new Blob([csv], { type: 'text/csv' })
-  const url = URL.createObjectURL(blob)
-
-  const scannerName = props.scannerName || props.scannerId
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
-  const filename = `${scannerName.replace(/\s+/g, '-')}_${props.band.name.replace(/\s+/g, '-')}_${timestamp}.csv`
-
-  const a = document.createElement('a')
-  a.href = url
-  a.download = filename
-  a.click()
-
-  URL.revokeObjectURL(url)
+  showExport.value = true
 }
 
 function resetPeakHold() {
@@ -633,16 +612,23 @@ watch(() => props.band.name, async () => {
 
         <button
           @click="exportCSV"
-          :disabled="!activeScan"
-          class="px-3 py-1.5 rounded text-xs font-semibold transition-colors"
-          :class="activeScan
-            ? 'bg-green-500 hover:bg-green-600 text-black'
-            : 'bg-gray-600 text-gray-400 cursor-not-allowed'"
+          class="px-3 py-1.5 rounded text-xs font-semibold transition-colors bg-green-500 hover:bg-green-600 text-black"
         >
           Export
         </button>
       </div>
     </div>
+
+    <ExportWizard
+      :scanner-id="scannerId"
+      :scanner-name="scannerName"
+      :open="showExport"
+      :initial-band="band.name"
+      :active-scan="activeScan"
+      :is-live="isLive"
+      :time-range="currentTimeRange"
+      @close="showExport = false"
+    />
 
     <D3SpectrumChart
       ref="chartRef"

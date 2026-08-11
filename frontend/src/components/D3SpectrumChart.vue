@@ -61,6 +61,12 @@ const props = defineProps({
     type: Array,
     default: () => [],
   },
+  // Hide the dBm Y axis and shrink the left margin — used when several charts are
+  // placed side by side (multi-band preview) and only the first needs the axis.
+  hideYAxis: {
+    type: Boolean,
+    default: false,
+  },
 })
 
 const emit = defineEmits(['zoom', 'cursor-move', 'freq-pin'])
@@ -273,7 +279,7 @@ function buildChartStructure() {
     top: isNarrow ? 15 : 20,
     right: isNarrow ? 15 : 50,
     bottom: isNarrow ? 35 : 50,
-    left: isNarrow ? 35 : 55,
+    left: props.hideYAxis ? 8 : (isNarrow ? 35 : 55),
   }
   const plotWidth = width - margin.left - margin.right
   const plotHeight = height - margin.top - margin.bottom
@@ -382,21 +388,23 @@ function buildChartStructure() {
 
   drawXAxis(xAxisGroup, channelGroup, xScale, plotWidth, startMHz, stopMHz, atscChannels, wifi24Channels, dectChannels, isUHF, isWifi24, isDECT)
 
-  // Y-axis
-  const yAxisGroup = chart.append('g')
+  // Y-axis (skipped when hidden — for side-by-side multi-band charts)
   const axisFontSize = isNarrow ? '8px' : '10px'
-  const yTickStep = isNarrow ? 30 : dbStep
-  yAxisGroup.call(d3.axisLeft(yScale).tickValues(d3.range(minDb, maxDb + 1, yTickStep)).tickFormat(d => `${d}`))
-  yAxisGroup.selectAll('text').attr('fill', '#666').style('font-size', axisFontSize)
-  yAxisGroup.selectAll('line').attr('stroke', '#666')
-  yAxisGroup.select('.domain').attr('stroke', '#666')
+  if (!props.hideYAxis) {
+    const yAxisGroup = chart.append('g')
+    const yTickStep = isNarrow ? 30 : dbStep
+    yAxisGroup.call(d3.axisLeft(yScale).tickValues(d3.range(minDb, maxDb + 1, yTickStep)).tickFormat(d => `${d}`))
+    yAxisGroup.selectAll('text').attr('fill', '#666').style('font-size', axisFontSize)
+    yAxisGroup.selectAll('line').attr('stroke', '#666')
+    yAxisGroup.select('.domain').attr('stroke', '#666')
 
-  // Axis labels
-  chart.append('text')
-    .attr('transform', 'rotate(-90)')
-    .attr('x', -plotHeight / 2).attr('y', isNarrow ? -25 : -40)
-    .attr('text-anchor', 'middle').attr('fill', '#666')
-    .style('font-size', axisFontSize).text('dBm')
+    // Y-axis label
+    chart.append('text')
+      .attr('transform', 'rotate(-90)')
+      .attr('x', -plotHeight / 2).attr('y', isNarrow ? -25 : -40)
+      .attr('text-anchor', 'middle').attr('fill', '#666')
+      .style('font-size', axisFontSize).text('dBm')
+  }
 
   chart.append('text')
     .attr('x', plotWidth / 2).attr('y', plotHeight + (isNarrow ? 28 : 42))
