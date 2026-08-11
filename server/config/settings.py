@@ -247,6 +247,14 @@ if not DEBUG:
 # you out of /admin). social_django is only installed when enabled, so a
 # disabled deployment gets no new tables. Real tenant/client values live in the
 # gitignored .env — never commit them. Full setup: docs/sso.md.
+# Baseline access: newly-created users (SSO or local) are auto-added to this
+# Django group, which grants read of everything via the standard `view_scanner`
+# permission. To disable the read-all baseline, remove `view_scanner` from the
+# group in the admin (auditable, revocable) — or set this empty to stop
+# auto-adding new users. Writes still require an rw Access grant or staff; share
+# links stay scoped. Applies with or without SSO. See core/signals.py.
+DEFAULT_USER_GROUP = os.getenv('DEFAULT_USER_GROUP', 'Viewers')
+
 import importlib
 
 SSO_ENABLED = os.getenv('SSO_ENABLED', 'false').lower() == 'true'

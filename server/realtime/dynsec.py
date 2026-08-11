@@ -438,6 +438,12 @@ def compute_desired_roles(user, access_id: str | None = None,
         return {'read-all-scanners'}
 
     desired_roles = set()
+    # Read-all baseline: a real login (not a share/token session) holding the
+    # view_scanner permission (the Viewers group) subscribes to every scanner —
+    # the broker-side mirror of the REST read-all baseline. Share sessions
+    # (access_id set) stay scoped, so they don't get this.
+    if access_id is None and user.has_perm('core.view_scanner'):
+        desired_roles.add('read-all-scanners')
     for grant in get_active_grants(user):
         _add_grant_roles(grant, desired_roles)
 
