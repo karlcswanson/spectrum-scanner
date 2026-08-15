@@ -14,8 +14,10 @@ import (
 	"log"
 	"math"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -152,8 +154,8 @@ func main() {
 	plutoURL := flag.String("pluto", "https://192.168.2.1", "Pluto maia-httpd URL")
 	outputFile := flag.String("output", "calibration.yaml", "Output YAML file (paste into config.yaml)")
 	jsonFile := flag.String("json", "calibration.json", "Output JSON file (for iOS client handoff)")
-	serial := flag.String("serial", "", "Physical unit tag for this run (e.g. Pluto serial). Recommended when comparing multiple units.")
-	outDir := flag.String("outdir", "calibrations", "Directory that per-unit output folders are created under (used when -serial is set).")
+	serial := flag.String("serial", "", "Physical unit tag. If omitted, the Pluto's hardware serial is read from its on-board web page and used to name the output file.")
+	outDir := flag.String("outdir", "", "Optional directory to write the output files into (default: current directory).")
 	level := flag.Float64("level", DefaultLevelDBm, "tinySA output level in dBm (whole numbers; the device truncates fractions)")
 	pad := flag.Float64("pad", DefaultPadDB, "Inline attenuator between tinySA and Pluto, in dB. The recorded reference is level-pad.")
 	rxGain := flag.Float64("gain", DefaultGainDB, "RX gain to use during calibration")
@@ -168,23 +170,34 @@ func main() {
 	setFlags := map[string]bool{}
 	flag.Visit(func(f *flag.Flag) { setFlags[f.Name] = true })
 
-	// When a unit is tagged, isolate its outputs under calibrations/<serial>/ so
-	// runs on different units sit side by side for the comparison step (and don't
-	// overwrite each other). Only redirect the default filenames — an explicit
-	// -output/-json still wins.
-	if *serial != "" {
-		unitDir := filepath.Join(*outDir, sanitizeSerial(*serial))
-		if err := os.MkdirAll(unitDir, 0755); err != nil {
-			log.Fatalf("Failed to create output dir %s: %v", unitDir, err)
+	// Resolve the unit serial: an explicit -serial wins; otherwise read the
+	// Pluto's hardware serial off its on-board web page so runs are auto-tagged
+	// per unit.
+	unitSerial := *serial
+	if unitSerial == "" {
+		if s, err := fetchPlutoSerial(*plutoURL); err == nil {
+			unitSerial = s
+			log.Printf("Auto-detected Pluto serial: %s", s)
+		} else {
+			log.Printf("WARNING: could not read Pluto serial (%v); output won't be unit-tagged. Pass -serial <id> to tag manually.", err)
+		}
+	}
+
+	// Default output filenames embed the serial: calibration-<serial>.yaml/.json.
+	// An explicit -output/-json still wins.
+	if unitSerial != "" {
+		tag := sanitizeSerial(unitSerial)
+		if *outDir != "" {
+			if err := os.MkdirAll(*outDir, 0755); err != nil {
+				log.Fatalf("Failed to create output dir %s: %v", *outDir, err)
+			}
 		}
 		if !setFlags["output"] {
-			*outputFile = filepath.Join(unitDir, "calibration.yaml")
+			*outputFile = filepath.Join(*outDir, fmt.Sprintf("calibration-%s.yaml", tag))
 		}
 		if !setFlags["json"] {
-			*jsonFile = filepath.Join(unitDir, "calibration.json")
+			*jsonFile = filepath.Join(*outDir, fmt.Sprintf("calibration-%s.json", tag))
 		}
-	} else {
-		log.Printf("WARNING: no -serial given; outputs won't be unit-tagged. Pass -serial <id> to compare multiple units.")
 	}
 
 	// The tinySA drives all of these from its low-output RF/LOW port; bands above
@@ -201,8 +214,8 @@ func main() {
 	referenceDBm := *level - *pad
 
 	log.Printf("Calibration Tool")
-	if *serial != "" {
-		log.Printf("  Unit serial: %s", *serial)
+	if unitSerial != "" {
+		log.Printf("  Unit serial: %s", unitSerial)
 	}
 	log.Printf("  tinySA: %s", *tinysaPort)
 	log.Printf("  Pluto: %s", *plutoURL)
@@ -325,7 +338,7 @@ func main() {
 	// Build calibration struct. Field tags match models.Calibration, so the JSON
 	// is byte-compatible with what the server's REST endpoint serves to iOS.
 	cal := Calibration{
-		Serial:       *serial,
+		Serial:       unitSerial,
 		ReferenceDBm: referenceDBm,
 		RxGain:       *rxGain,
 		Timestamp:    time.Now(),
@@ -357,8 +370,42 @@ func main() {
 	fmt.Println(string(yamlData))
 }
 
-// sanitizeSerial makes an operator-supplied serial safe to use as a directory
-// name (keeps alnum, dash, underscore, dot; collapses everything else to '_').
+// snRe pulls the ADALM-Pluto hardware serial out of the on-board docs page's
+// "Register your PlutoSDR" link (…/ADALM-PLUTO?sn=<serial>&…). The maia-httpd
+// API does not expose the serial, so the docs page is the source over HTTP.
+var snRe = regexp.MustCompile(`[?&]sn=([0-9A-Fa-f]{8,})`)
+
+// fetchPlutoSerial reads the Pluto's hardware serial from its on-board web page.
+// The page is served over http on the same host as the (https) maia API, so we
+// derive the host from the maia URL and try http then https.
+func fetchPlutoSerial(plutoURL string) (string, error) {
+	u, err := url.Parse(plutoURL)
+	if err != nil || u.Host == "" {
+		return "", fmt.Errorf("invalid pluto URL %q", plutoURL)
+	}
+	client := &http.Client{
+		Timeout:   6 * time.Second,
+		Transport: &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}},
+	}
+	var lastErr error
+	for _, scheme := range []string{"http", "https"} {
+		resp, err := client.Get(scheme + "://" + u.Host + "/index.html")
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		resp.Body.Close()
+		if m := snRe.FindSubmatch(body); m != nil {
+			return string(m[1]), nil
+		}
+		lastErr = fmt.Errorf("serial not found on %s page", scheme)
+	}
+	return "", lastErr
+}
+
+// sanitizeSerial makes a serial safe to use in a filename (keeps alnum, dash,
+// underscore, dot; collapses everything else to '_').
 func sanitizeSerial(s string) string {
 	var b strings.Builder
 	for _, r := range s {

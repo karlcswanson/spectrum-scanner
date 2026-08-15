@@ -40,6 +40,13 @@
         reverse_proxy server:8000
     }
 
+    # SSO (python-social-auth): /oauth/login/<backend>/ + /oauth/complete/<backend>/.
+    # Must reach Django — the login POST and the IdP callback both live here. If
+    # this falls through to the SPA file_server below, the login POST 405s.
+    handle /oauth/* {
+        reverse_proxy server:8000
+    }
+
     # MQTT WebSocket proxy
     handle /mqtt {
         reverse_proxy mosquitto:9001 {
